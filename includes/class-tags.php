@@ -10,6 +10,8 @@
  * Required tags (see Setup page):
  *   - dues-paid       "Dues Paid"        — paid/active member
  *   - trustees        "Trustees"         — has paid the trustee fee
+ *   - senior-trustee  "Senior Trustee"   — senior trustee (rolls up under Trustees)
+ *   - past-president  "Past President"   — past president (rolls up under Trustees)
  *   - paid-by-check   "Paid by Check"    — payment method override
  *   - paid-by-invoice "Paid by Invoice"  — payment method override
  */
@@ -17,6 +19,8 @@ class MyNJILGA_Tags {
 
     const SLUG_DUES_PAID       = 'dues-paid';
     const SLUG_TRUSTEES        = 'trustees';
+    const SLUG_SENIOR_TRUSTEE  = 'senior-trustee';
+    const SLUG_PAST_PRESIDENT  = 'past-president';
     const SLUG_PAID_BY_CHECK   = 'paid-by-check';
     const SLUG_PAID_BY_INVOICE = 'paid-by-invoice';
 
@@ -26,8 +30,21 @@ class MyNJILGA_Tags {
     const DEFINITIONS = [
         self::SLUG_DUES_PAID       => [ 'slug' => self::SLUG_DUES_PAID,       'title' => 'Dues Paid',       'required' => true  ],
         self::SLUG_TRUSTEES        => [ 'slug' => self::SLUG_TRUSTEES,        'title' => 'Trustees',        'required' => true  ],
+        self::SLUG_SENIOR_TRUSTEE  => [ 'slug' => self::SLUG_SENIOR_TRUSTEE,  'title' => 'Senior Trustee',  'required' => false ],
+        self::SLUG_PAST_PRESIDENT  => [ 'slug' => self::SLUG_PAST_PRESIDENT,  'title' => 'Past President',  'required' => false ],
         self::SLUG_PAID_BY_CHECK   => [ 'slug' => self::SLUG_PAID_BY_CHECK,   'title' => 'Paid by Check',   'required' => false ],
         self::SLUG_PAID_BY_INVOICE => [ 'slug' => self::SLUG_PAID_BY_INVOICE, 'title' => 'Paid by Invoice', 'required' => false ],
+    ];
+
+    /**
+     * Slugs that qualify a contact as a trustee (any role). Used both for
+     * the trustees report filter and for the boolean "Trustee?" column on
+     * the Active Members report.
+     */
+    const TRUSTEE_SLUGS = [
+        self::SLUG_PAST_PRESIDENT,
+        self::SLUG_SENIOR_TRUSTEE,
+        self::SLUG_TRUSTEES,
     ];
 
     /** @var array<string,int|null>|null */
@@ -95,10 +112,37 @@ class MyNJILGA_Tags {
     }
 
     /**
+     * True if the subscriber carries any of the trustee-family tags
+     * (Trustees, Senior Trustee, Past President).
+     *
      * @param \FluentCrm\App\Models\Subscriber $subscriber
      */
     public static function is_trustee( $subscriber ): bool {
-        return self::has_tag( $subscriber, self::SLUG_TRUSTEES );
+        foreach ( self::TRUSTEE_SLUGS as $slug ) {
+            if ( self::has_tag( $subscriber, $slug ) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns the most distinguished trustee role label, or "" if none.
+     * Priority: Past President > Senior Trustee > Trustee.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $subscriber
+     */
+    public static function trustee_status( $subscriber ): string {
+        if ( self::has_tag( $subscriber, self::SLUG_PAST_PRESIDENT ) ) {
+            return 'Past President';
+        }
+        if ( self::has_tag( $subscriber, self::SLUG_SENIOR_TRUSTEE ) ) {
+            return 'Senior Trustee';
+        }
+        if ( self::has_tag( $subscriber, self::SLUG_TRUSTEES ) ) {
+            return 'Trustee';
+        }
+        return '';
     }
 
     /**
