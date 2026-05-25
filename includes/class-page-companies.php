@@ -69,7 +69,8 @@ class MyNJILGA_Page_Companies {
                         $first = false;
                     }
                     printf(
-                        '<td>%s</td><td>%s</td></tr>',
+                        '<td><a href="%s">%s</a></td><td>%s</td></tr>',
+                        esc_url( $m['url'] ),
                         esc_html( $m['name'] ),
                         $m['is_paid']
                             ? '<strong style="color:#1d6f42">Paid</strong>'
