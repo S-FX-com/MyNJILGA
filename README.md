@@ -1,97 +1,93 @@
-# NJILGA Membership Report Plugin
+# My NJILGA
 
-A WordPress plugin that generates a formatted **Member Dues Report** from FluentCRM data — structured to mirror the existing `2026_Member_Dues_Report.xlsx`.
-
-The plugin reads FluentCRM and Paid Memberships Pro **directly from the local WordPress install** — no REST API, no API keys, no credentials.
+A WordPress plugin that gives NJILGA admins a one-stop dashboard for member status, trustees, and company rollups — all driven by FluentCRM tags on the local WordPress install. No REST API, no credentials.
 
 ---
 
 ## Installation
 
-1. Copy the `njilga-membership-report/` folder into `/wp-content/plugins/`
+1. Copy this folder into `/wp-content/plugins/`
 2. Run `composer install` inside the plugin folder (requires PHP 7.4+ and Composer)
-3. Activate the plugin in **WordPress Admin → Plugins**
+3. Activate **My NJILGA** in **WordPress Admin → Plugins**
 4. Make sure **FluentCRM** is also active on the same site
-5. Navigate to **Tools → Membership Report** to view and export the report
+5. Open **My NJILGA → Setup** to verify or create the required tags
 
 ---
 
-## How It Reads Data
+## Menu
 
-**FluentCRM (local PHP API):**
-- Tags via `FluentCrm\App\Models\Tag::all()` — resolves dues-* slugs to IDs.
-- Contacts via `FluentCrm\App\Models\Subscriber::filterByTags([id])->where('status','subscribed')->get()`.
-- Custom fields per contact via `$subscriber->custom_fields()` — used to read the **Firm** column (`company_name`) and the dues_* fallback values.
+The plugin registers a top-level **My NJILGA** menu with five sub-pages:
 
-**Paid Memberships Pro (direct DB):**
-- `wp_pmpro_memberships_users` — locates the active membership (`status='active'`).
-- `wp_pmpro_membership_levels` — `initial_payment` is treated as the expected dues for the report year.
-- `wp_pmpro_membership_orders` — sums `total` where `status='success'` and `YEAR(timestamp)` matches the current year. This becomes `amount_paid`.
-
-`open_balance = max(0, initial_payment − amount_paid)` and status is derived (`Paid` / `Partial` / `Unpaid`). Contacts without a linked WP user, or without an active PMPro membership, fall back to the FluentCRM dues_* custom fields. The active source is shown on the Tools → Membership Report page.
-
----
-
-## Required FluentCRM Tags (Membership Tiers)
-
-Create these exact tag **slugs** in **FluentCRM → Tags**. The title can be anything; the slug must match exactly:
-
-| Tag Slug | Report Section |
+| Page | What it shows |
 |---|---|
-| `dues-1-4-year` | 1-4 Year Admission |
-| `dues-1st-member` | 1st Member of Firm |
-| `dues-2-5-member` | 2-5 Member of Firm |
-| `dues-6-plus-member` | 6+ Member of Firm |
-| `dues-past-president-active` | Past President Active |
-| `dues-past-president-inactive` | Past President Inactive |
-| `dues-senior-trustee-active` | Senior Trustee Active |
-| `dues-senior-trustee-inactive` | Senior Trustee Inactive |
-| `dues-subscription` | Subscription $125 |
-| `dues-trustee-1st` | Trustee – 1st Member of Firm |
-| `dues-trustee-2-5` | Trustee – 2-5 Member of Firm |
-
-Tags that don't exist yet will render as empty sections — no errors.
+| **Dashboard** | Summary counts (paid members, trustees, companies with paid members), bucket distribution, and the Excel download. |
+| **Active Members** | Every contact carrying the **Dues Paid** tag, with their firm, trustee flag, and payment method. |
+| **Trustees** | Every contact carrying the **Trustees** tag, plus whether they've also paid dues. |
+| **Companies** | All FluentCRM Companies, grouped into **1 / 2–5 / 6+ Paid Members** buckets, with members listed underneath. |
+| **Setup** | Detects whether the required tags exist and offers a one-click button to create any that are missing. |
 
 ---
 
-## Required FluentCRM Custom Fields
+## How status is determined
 
-Add these under **FluentCRM → Settings → Custom Fields**:
+| Concept | Source |
+|---|---|
+| Paid / Active member | Contact has the **Dues Paid** tag |
+| Trustee | Contact has the **Trustees** tag |
+| Payment method = Check | Contact has the **Paid by Check** tag |
+| Payment method = Invoice | Contact has the **Paid by Invoice** tag |
+| Payment method = Credit Card | Default when neither Check nor Invoice tag is present |
+| Firm | The FluentCRM **Company** entity linked to the contact (fall back: `company_name` custom field text) |
 
-| Field Slug | Type | Options | Purpose |
-|---|---|---|---|
-| `company_name` | Text | — | The **Firm** column on the report. FluentCRM has no built-in `company_name` property on the Contact schema — it must be a custom field. |
-| `dues_status` | Single Select | Paid, Unpaid, Partial | Fallback only — used when a contact is not linked to a WordPress user / has no PMPro membership. |
-| `dues_open_balance` | Number | — | Fallback only — see above. |
-| `dues_amount_paid` | Number | — | Fallback only — see above. |
-
-When PMPro is the source for a member, the dues_* custom fields are ignored.
+The Setup page looks up each required tag by **slug** first, then by exact **title** as a fallback, so a manually-created tag with a non-default slug still matches.
 
 ---
 
-## Report Output
+## Required FluentCRM tags
 
-The exported `.xlsx` mirrors the existing dues report:
-- Grouped by membership tier (same order as the original)
-- Running **Invoiced Total** column per row
-- **Subtotals** per tier: Open Balance, Amount Paid, Qty
-- **Grand totals** row
-- **Summary block**: Total / Paid / Unpaid / Partial / $0 member counts
-- Status cells color-coded: green (Paid), red (Unpaid), orange (Partial)
+| Slug | Title | Required? |
+|---|---|---|
+| `dues-paid` | Dues Paid | Yes |
+| `trustees` | Trustees | Yes |
+| `paid-by-check` | Paid by Check | Optional |
+| `paid-by-invoice` | Paid by Invoice | Optional |
+
+The Setup page can create any of these for you in one click via the FluentCRM Tags API.
+
+---
+
+## Required FluentCRM module
+
+For the Companies report to populate, the **FluentCRM Companies module** must be enabled (FluentCRM → Settings → Modules). Contacts must be linked to their company via FluentCRM's primary-company assignment.
+
+---
+
+## Excel export
+
+The **Download Excel Report** button on the Dashboard streams a single workbook with three sheets:
+
+1. **Active Members** — Member, Firm, Trustee?, Payment Method
+2. **Trustees** — Trustee, Firm, Dues Paid?, Payment Method
+3. **Companies** — sectioned by paid-member bucket; each row lists a member with Paid/Unpaid status
 
 ---
 
 ## File Structure
 
 ```
-njilga-membership-report/
-├── njilga-membership-report.php     ← Plugin bootstrap
+my-njilga/
+├── njilga-membership-report.php         ← Plugin bootstrap + admin-post hooks
 ├── includes/
-│   ├── class-report-data.php        ← FluentCRM reader + grouping
-│   ├── class-pmpro-data.php         ← PMPro payment data lookup
-│   ├── class-report-xlsx.php        ← Excel generation (PhpSpreadsheet)
-│   └── class-admin-page.php         ← Tools page UI
-├── composer.json                    ← Declares PhpSpreadsheet dependency
+│   ├── class-admin-menu.php             ← Top-level menu + sub-pages
+│   ├── class-tags.php                   ← Tag resolution + per-subscriber helpers
+│   ├── class-members-data.php           ← Builds the three datasets
+│   ├── class-page-dashboard.php
+│   ├── class-page-members.php
+│   ├── class-page-trustees.php
+│   ├── class-page-companies.php
+│   ├── class-page-setup.php
+│   └── class-report-xlsx.php            ← PhpSpreadsheet workbook builder
+├── composer.json                        ← Declares PhpSpreadsheet
 └── README.md
 ```
 
@@ -100,8 +96,8 @@ njilga-membership-report/
 ## Setup with Claude Code
 
 ```bash
-cd wp-content/plugins/njilga-membership-report
+cd wp-content/plugins/my-njilga
 composer install
 ```
 
-That's it. No build step.
+No build step.
