@@ -35,8 +35,8 @@ A WordPress plugin that generates a formatted **Member Dues Report** from Fluent
 3. Click **Save Credentials**
 
 The plugin calls:
-- `GET /wp-json/fluent-crm/v2/tags?all_tags=true` — to resolve tag slugs → IDs
-- `GET /wp-json/fluent-crm/v2/subscribers?tags[]=<id>&custom_fields=true&per_page=100&page=N` — to fetch contacts per tier
+- `GET /wp-json/fluent-crm/v2/tags?all_tags=true` — to resolve tag slugs → IDs (reads the flat `all_tags` array, not the paginated `tags.data`)
+- `GET /wp-json/fluent-crm/v2/subscribers?tags[]=<id>&statuses[]=subscribed&with[]=subscriber.custom_values&per_page=100&page=N` — to fetch contacts per tier with custom field values embedded
 
 ---
 
@@ -66,22 +66,38 @@ Tags that don't exist yet will render as empty sections — no errors.
 
 Add these under **FluentCRM → Settings → Custom Fields**:
 
-| Field Slug | Type | Options |
-|---|---|---|
-| `dues_status` | Single Select | Paid, Unpaid, Partial |
-| `dues_open_balance` | Number | — |
-| `dues_amount_paid` | Number | — |
+| Field Slug | Type | Options | Purpose |
+|---|---|---|---|
+| `company_name` | Text | — | The **Firm** column on the report. FluentCRM has no built-in `company_name` property on the Contact schema — it must be a custom field. |
+| `dues_status` | Single Select | Paid, Unpaid, Partial | Fallback only — used when a contact is not linked to a WordPress user / has no PMPro membership. |
+| `dues_open_balance` | Number | — | Fallback only — see above. |
+| `dues_amount_paid` | Number | — | Fallback only — see above. |
 
-Per the FluentCRM API, these come back on each contact as:
+Per the FluentCRM API, these come back on each contact (when `with[]=subscriber.custom_values` is passed) as:
 ```json
 "custom_values": {
+  "company_name": "Acme & Associates",
   "dues_status": "Paid",
   "dues_open_balance": "0",
   "dues_amount_paid": "125"
 }
 ```
 
-The `company_name` field (the **Firm** column) is a standard FluentCRM contact field — no custom field needed.
+## Paid Memberships Pro Integration
+
+When PMPro is installed on the same WordPress site, the plugin overrides
+the FluentCRM dues custom fields with live data from the PMPro tables for
+any FluentCRM contact that is linked to a WordPress user:
+
+- `wp_pmpro_memberships_users` — locates the active membership (`status='active'`).
+- `wp_pmpro_membership_levels` — `initial_payment` is treated as the expected dues for the report year.
+- `wp_pmpro_membership_orders` — sums `total` where `status='success'` and `YEAR(timestamp)` matches the current year. This becomes `amount_paid`.
+
+`open_balance = max(0, initial_payment − amount_paid)` and status is
+derived (`Paid` / `Partial` / `Unpaid`). Contacts without a linked WP
+user, or without an active PMPro membership, fall back to the FluentCRM
+dues custom fields above. The active source is shown on the Tools →
+Membership Report page.
 
 ---
 
