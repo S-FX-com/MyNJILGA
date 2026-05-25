@@ -1,0 +1,20 @@
+{
+    "name": "njilga/membership-report",
+    "description": "Generates a Member Dues Report Excel file from FluentCRM data.",
+    "type": "wordpress-plugin",
+    "require": {
+        "phpoffice/phpspreadsheet": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "NJILGA\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "allow-plugins": {
+            "composer/installers": true
+        }
+    },
+    "minimum-stability": "stable"
+}
