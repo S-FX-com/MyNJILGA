@@ -15,6 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'NJILGA_REPORT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'NJILGA_REPORT_URL', plugin_dir_url( __FILE__ ) );
 
+require_once NJILGA_REPORT_DIR . 'includes/class-pmpro-data.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-data.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-xlsx.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-admin-page.php';

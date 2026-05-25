@@ -1,17 +1,30 @@
 <?php
 /**
- * Fetches and groups member data from FluentCRM via the REST API.
+ * Fetches and groups member data from FluentCRM via the REST API, then
+ * enriches per-member payment numbers from Paid Memberships Pro tables
+ * when a contact is linked to a WordPress user.
  *
  * Uses wp_remote_get() internally so this works as a WordPress plugin.
- * Auth credentials are stored in wp-config.php or wp_options (see README).
+ * Auth credentials are stored in wp_options (see README).
  *
- * Key API facts (from FluentCRM developer docs):
+ * Key FluentCRM API facts (from the developer OpenAPI specs):
+ *
  *  - List contacts:  GET /wp-json/fluent-crm/v2/subscribers
- *      ?tags[]=<id>&custom_fields=true&per_page=100&page=N
+ *      Documented filters: tags[]=<id>&statuses[]=subscribed
+ *      To embed custom field values on each row, pass:
+ *          with[]=subscriber.custom_values
  *      Response: { subscribers: { data: [...], last_page: N } }
- *      Each contact has:  custom_values: { slug: value }  (flat object)
+ *      Each contact carries custom_values: { slug: value } when requested.
+ *
  *  - List all tags:  GET /wp-json/fluent-crm/v2/tags?all_tags=true
- *      Response: { tags: { data: [ { id, slug, title }, ... ] } }
+ *      Response: { tags: { data: [...paginated 15/page...],
+ *                          all_tags: [ { id, slug, title }, ... ] }
+ *      With all_tags=true we MUST read $response['all_tags']; the
+ *      tags.data array is only the first page.
+ *
+ * Notes on Contact schema:
+ *   - There is no built-in company_name property. The "Firm" field comes
+ *     from a FluentCRM custom field named `company_name` (see README).
  */
 class NJILGA_Report_Data {
 
@@ -33,12 +46,13 @@ class NJILGA_Report_Data {
     ];
 
     /**
-     * Custom field slugs expected on each contact.
-     * Values come back in contact.custom_values as a flat { slug: value } object.
+     * FluentCRM custom field slugs used as a fallback when a contact has
+     * no linked WordPress user (and therefore no PMPro record).
      */
-    const CF_STATUS        = 'dues_status';        // "Paid" | "Unpaid" | "Partial"
-    const CF_OPEN_BALANCE  = 'dues_open_balance';  // numeric string
-    const CF_AMOUNT_PAID   = 'dues_amount_paid';   // numeric string
+    const CF_COMPANY_NAME = 'company_name';
+    const CF_STATUS       = 'dues_status';
+    const CF_OPEN_BALANCE = 'dues_open_balance';
+    const CF_AMOUNT_PAID  = 'dues_amount_paid';
 
     // -------------------------------------------------------------------------
     // Public interface
@@ -53,18 +67,17 @@ class NJILGA_Report_Data {
             return $tag_map;
         }
 
+        $year    = (int) date( 'Y' );
         $tiers   = [];
         $summary = [ 'total' => 0, 'paid' => 0, 'unpaid' => 0, 'partial' => 0, 'zero' => 0 ];
 
         foreach ( self::TIER_MAP as $slug => $label ) {
             if ( ! isset( $tag_map[ $slug ] ) ) {
-                // Tag doesn't exist in FluentCRM yet — include empty section.
                 $tiers[ $label ] = [ 'members' => [], 'totals' => self::compute_totals( [] ) ];
                 continue;
             }
 
-            $tag_id  = $tag_map[ $slug ];
-            $members = self::fetch_members_for_tag( $tag_id );
+            $members = self::fetch_members_for_tag( $tag_map[ $slug ], $year );
             if ( is_wp_error( $members ) ) {
                 return $members;
             }
@@ -80,22 +93,25 @@ class NJILGA_Report_Data {
         }
 
         return [
-            'year'    => (int) date( 'Y' ),
-            'title'   => 'New Jersey Institute of Local Government Attorneys',
-            'tiers'   => $tiers,
-            'summary' => $summary,
+            'year'             => $year,
+            'title'            => 'New Jersey Institute of Local Government Attorneys',
+            'tiers'            => $tiers,
+            'summary'          => $summary,
+            'pmpro_available'  => NJILGA_PMPro_Data::is_available(),
         ];
     }
 
     // -------------------------------------------------------------------------
-    // API helpers
+    // FluentCRM API helpers
     // -------------------------------------------------------------------------
 
     /**
-     * Fetches all FluentCRM tags and returns [ slug => id ].
+     * Returns [ slug => id ] for every FluentCRM tag.
      *
-     * Endpoint: GET /wp-json/fluent-crm/v2/tags?all_tags=true
-     * Response:  { tags: { data: [ { id, slug, title } ] } }
+     * Endpoint: GET /tags?all_tags=true
+     * The `all_tags` query parameter triggers a flat top-level `all_tags`
+     * array that contains every tag — bypassing pagination on `tags.data`,
+     * which is the first 15 only.
      *
      * @return array|WP_Error
      */
@@ -105,40 +121,39 @@ class NJILGA_Report_Data {
             return $response;
         }
 
+        // Prefer the flat all_tags list (complete); fall back to tags.data
+        // for older FluentCRM versions that may not emit all_tags.
+        $rows = $response['all_tags'] ?? $response['tags']['data'] ?? [];
+
         $map = [];
-        foreach ( $response['tags']['data'] ?? [] as $tag ) {
-            $map[ $tag['slug'] ] = (int) $tag['id'];
+        foreach ( $rows as $tag ) {
+            if ( ! empty( $tag['slug'] ) && isset( $tag['id'] ) ) {
+                $map[ (string) $tag['slug'] ] = (int) $tag['id'];
+            }
         }
         return $map;
     }
 
     /**
-     * Fetches all contacts tagged with $tag_id (handles pagination).
+     * Fetches all subscribed contacts tagged with $tag_id (handles pagination)
+     * and enriches each with PMPro payment data when a linked WP user exists.
      *
-     * Endpoint: GET /wp-json/fluent-crm/v2/subscribers
-     *   ?tags[]=<id>&custom_fields=true&per_page=100&page=N&sort_by=company_name&sort_type=ASC
-     *
-     * Response: { subscribers: { data: [...contact...], last_page: N } }
-     *
-     * Each contact has:
-     *   first_name, last_name, company_name,
-     *   custom_values: { dues_status, dues_open_balance, dues_amount_paid }
-     *
-     * @return array|WP_Error  Array of member rows.
+     * @return array|WP_Error
      */
-    private static function fetch_members_for_tag( int $tag_id ) {
-        $members    = [];
-        $page       = 1;
-        $last_page  = 1;
+    private static function fetch_members_for_tag( int $tag_id, int $year ) {
+        $members   = [];
+        $page      = 1;
+        $last_page = 1;
 
         do {
             $response = self::api_get( '/subscribers', [
-                'tags[]'        => $tag_id,
-                'custom_fields' => 'true',
-                'sort_by'       => 'company_name',
-                'sort_type'     => 'ASC',
-                'per_page'      => 100,
-                'page'          => $page,
+                'tags[]'       => $tag_id,
+                'statuses[]'   => 'subscribed',
+                'with[]'       => 'subscriber.custom_values',
+                'sort_by'      => 'last_name',
+                'sort_type'    => 'ASC',
+                'per_page'     => 100,
+                'page'         => $page,
             ] );
 
             if ( is_wp_error( $response ) ) {
@@ -148,27 +163,15 @@ class NJILGA_Report_Data {
             $last_page = (int) ( $response['subscribers']['last_page'] ?? 1 );
 
             foreach ( $response['subscribers']['data'] ?? [] as $contact ) {
-                // custom_values is a flat { slug: value } object per API docs.
-                $cv     = (array) ( $contact['custom_values'] ?? [] );
-                $status = $cv[ self::CF_STATUS ]       ?? 'Unpaid';
-                $open   = (float) ( $cv[ self::CF_OPEN_BALANCE ] ?? 0 );
-                $paid   = (float) ( $cv[ self::CF_AMOUNT_PAID ]  ?? 0 );
-
-                $members[] = [
-                    'firm'         => $contact['company_name'] ?? '',
-                    'member'       => trim( ( $contact['first_name'] ?? '' ) . ' ' . ( $contact['last_name'] ?? '' ) ),
-                    'status'       => $status,
-                    'open_balance' => $open,
-                    'amount_paid'  => $paid,
-                    'qty'          => 1,
-                ];
+                $members[] = self::build_member_row( $contact, $year );
             }
 
             $page++;
         } while ( $page <= $last_page );
 
-        // Build running invoiced total column.
-        $running = 0;
+        // Running invoiced total column, sorted by firm for display.
+        usort( $members, static fn( $a, $b ) => strcasecmp( $a['firm'], $b['firm'] ) );
+        $running = 0.0;
         foreach ( $members as &$m ) {
             $running           += $m['open_balance'] + $m['amount_paid'];
             $m['invoiced_total'] = $running;
@@ -179,13 +182,55 @@ class NJILGA_Report_Data {
     }
 
     /**
-     * Wraps wp_remote_get() with auth headers from saved options.
-     *
-     * Credentials are set once via the admin page and stored with:
-     *   update_option( 'njilga_fcrm_api_user', $username );
-     *   update_option( 'njilga_fcrm_api_pass', $app_password );
-     *   update_option( 'njilga_fcrm_base_url', 'https://yoursite.com' );
-     *
+     * Builds one report row from a FluentCRM contact, layering PMPro data on
+     * top of (or substituting for) the FluentCRM custom field values.
+     */
+    private static function build_member_row( array $contact, int $year ): array {
+        $cv = (array) ( $contact['custom_values'] ?? [] );
+
+        // Firm: prefer the documented `company_name` custom field; the
+        // built-in Contact schema has no direct company_name property.
+        $firm = (string) ( $cv[ self::CF_COMPANY_NAME ] ?? '' );
+
+        $member = trim(
+            ( $contact['first_name'] ?? '' ) . ' ' . ( $contact['last_name'] ?? '' )
+        );
+
+        // FluentCRM fallback values.
+        $status = (string) ( $cv[ self::CF_STATUS ]        ?? '' );
+        $open   = (float)  ( $cv[ self::CF_OPEN_BALANCE ]  ?? 0 );
+        $paid   = (float)  ( $cv[ self::CF_AMOUNT_PAID ]   ?? 0 );
+        $source = 'fluentcrm';
+
+        // PMPro override when the contact is linked to a WordPress user.
+        $user_id = (int) ( $contact['user_id'] ?? 0 );
+        if ( $user_id > 0 ) {
+            $pm = NJILGA_PMPro_Data::for_user( $user_id, $year );
+            if ( $pm ) {
+                $status = $pm['status'];
+                $open   = $pm['open_balance'];
+                $paid   = $pm['amount_paid'];
+                $source = 'pmpro';
+            }
+        }
+
+        if ( $status === '' ) {
+            // No status anywhere — distinguish "no data" from "unpaid".
+            $status = ( $open == 0 && $paid == 0 ) ? '$0' : 'Unpaid';
+        }
+
+        return [
+            'firm'         => $firm,
+            'member'       => $member,
+            'status'       => $status,
+            'open_balance' => $open,
+            'amount_paid'  => $paid,
+            'qty'          => 1,
+            'source'       => $source,
+        ];
+    }
+
+    /**
      * @return array|WP_Error  Decoded JSON body as array.
      */
     private static function api_get( string $endpoint, array $params = [] ) {

@@ -100,6 +100,14 @@ class NJILGA_Admin_Page {
                     <span style="color:orange">Partial: <?php echo esc_html( $data['summary']['partial'] ); ?></span> /
                     $0: <?php echo esc_html( $data['summary']['zero'] ); ?>
                 </p>
+                <p style="color:#555;font-size:12px">
+                    Payment data source:
+                    <?php if ( ! empty( $data['pmpro_available'] ) ) : ?>
+                        <strong>Paid Memberships Pro</strong> (with FluentCRM custom-field fallback for contacts not linked to a WP user).
+                    <?php else : ?>
+                        <strong>FluentCRM custom fields</strong> &mdash; PMPro tables not detected.
+                    <?php endif; ?>
+                </p>
 
                 <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
                     <input type="hidden" name="action" value="njilga_export_report">
