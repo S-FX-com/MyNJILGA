@@ -26,7 +26,7 @@ class MyNJILGA_Members_Data {
     // -------------------------------------------------------------------------
 
     /**
-     * @return array<int,array{member:string,firm:string,is_trustee:bool,payment_method:string,subscriber_id:int}>
+     * @return array<int,array{member:string,member_url:string,firm:string,is_trustee:bool,payment_method:string,subscriber_id:int}>
      */
     public static function get_active_members(): array {
         $dues_paid_id = MyNJILGA_Tags::id_for( MyNJILGA_Tags::SLUG_DUES_PAID );
@@ -42,7 +42,8 @@ class MyNJILGA_Members_Data {
         foreach ( $subs as $sub ) {
             $rows[] = [
                 'subscriber_id'  => (int) $sub->id,
-                'member'         => self::full_name( $sub ),
+                'member'         => self::display_name( $sub ),
+                'member_url'     => self::contact_admin_url( $sub ),
                 'firm'           => self::firm_for( $sub ),
                 'is_trustee'     => MyNJILGA_Tags::is_trustee( $sub ),
                 'payment_method' => MyNJILGA_Tags::payment_method( $sub ),
@@ -54,7 +55,7 @@ class MyNJILGA_Members_Data {
     }
 
     /**
-     * @return array<int,array{member:string,firm:string,is_paid:bool,payment_method:string,subscriber_id:int}>
+     * @return array<int,array{member:string,member_url:string,firm:string,is_paid:bool,payment_method:string,subscriber_id:int}>
      */
     public static function get_trustees(): array {
         $trustees_id = MyNJILGA_Tags::id_for( MyNJILGA_Tags::SLUG_TRUSTEES );
@@ -70,7 +71,8 @@ class MyNJILGA_Members_Data {
         foreach ( $subs as $sub ) {
             $rows[] = [
                 'subscriber_id'  => (int) $sub->id,
-                'member'         => self::full_name( $sub ),
+                'member'         => self::display_name( $sub ),
+                'member_url'     => self::contact_admin_url( $sub ),
                 'firm'           => self::firm_for( $sub ),
                 'is_paid'        => MyNJILGA_Tags::is_paid( $sub ),
                 'payment_method' => MyNJILGA_Tags::payment_method( $sub ),
@@ -116,7 +118,8 @@ class MyNJILGA_Members_Data {
                 $is_paid   = MyNJILGA_Tags::is_paid( $sub );
                 $paid     += $is_paid ? 1 : 0;
                 $members[] = [
-                    'name'    => self::full_name( $sub ),
+                    'name'    => self::display_name( $sub ),
+                    'url'     => self::contact_admin_url( $sub ),
                     'is_paid' => $is_paid,
                 ];
             }
@@ -170,6 +173,32 @@ class MyNJILGA_Members_Data {
      */
     private static function full_name( $sub ): string {
         return trim( ( $sub->first_name ?? '' ) . ' ' . ( $sub->last_name ?? '' ) );
+    }
+
+    /**
+     * Always returns something printable: full name → email → "(contact #ID)".
+     * Keeps every row identifiable instead of leaving a blank Member cell.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $sub
+     */
+    private static function display_name( $sub ): string {
+        $name = self::full_name( $sub );
+        if ( $name !== '' ) {
+            return $name;
+        }
+        if ( ! empty( $sub->email ) ) {
+            return (string) $sub->email;
+        }
+        return '(contact #' . (int) $sub->id . ')';
+    }
+
+    /**
+     * Link to the FluentCRM contact admin screen.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $sub
+     */
+    private static function contact_admin_url( $sub ): string {
+        return admin_url( 'admin.php?page=fluentcrm-admin#/subscribers/' . (int) $sub->id );
     }
 
     /**

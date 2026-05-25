@@ -38,7 +38,8 @@ class MyNJILGA_Page_Trustees {
 
         foreach ( $rows as $r ) {
             printf(
-                '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                '<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                esc_url( $r['member_url'] ),
                 esc_html( $r['member'] ),
                 esc_html( $r['firm'] ),
                 $r['is_paid']
