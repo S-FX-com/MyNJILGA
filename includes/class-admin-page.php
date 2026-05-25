@@ -2,10 +2,12 @@
 /**
  * Admin page: Tools → Membership Report
  *
+ * Reads FluentCRM and Paid Memberships Pro directly from the local
+ * WordPress install — no API credentials required.
+ *
  * Provides:
- *  1. A settings form to save FluentCRM API credentials.
- *  2. A live preview table of the current report data.
- *  3. A download button to export the full .xlsx report.
+ *  1. A live preview table of the current report data.
+ *  2. A download button to export the full .xlsx report.
  */
 class NJILGA_Admin_Page {
 
@@ -24,71 +26,17 @@ class NJILGA_Admin_Page {
             wp_die( 'Access denied.' );
         }
 
-        // Handle credential save.
-        if ( isset( $_POST['njilga_save_credentials'] ) ) {
-            check_admin_referer( 'njilga_save_credentials' );
-            update_option( 'njilga_fcrm_base_url',  sanitize_url( $_POST['fcrm_base_url'] ?? '' ) );
-            update_option( 'njilga_fcrm_api_user',  sanitize_text_field( $_POST['fcrm_api_user'] ?? '' ) );
-            if ( ! empty( $_POST['fcrm_api_pass'] ) ) {
-                update_option( 'njilga_fcrm_api_pass', sanitize_text_field( $_POST['fcrm_api_pass'] ) );
-            }
-            echo '<div class="notice notice-success"><p>Credentials saved.</p></div>';
-        }
-
-        $base_url   = get_option( 'njilga_fcrm_base_url', home_url() );
-        $api_user   = get_option( 'njilga_fcrm_api_user', '' );
-        $has_pass   = (bool) get_option( 'njilga_fcrm_api_pass', '' );
-
-        // Only load report data if credentials exist.
-        $data     = null;
+        $data     = NJILGA_Report_Data::get();
         $data_err = null;
-        if ( $api_user && $has_pass ) {
-            $data = NJILGA_Report_Data::get();
-            if ( is_wp_error( $data ) ) {
-                $data_err = $data->get_error_message();
-                $data     = null;
-            }
+        if ( is_wp_error( $data ) ) {
+            $data_err = $data->get_error_message();
+            $data     = null;
         }
         ?>
         <div class="wrap">
             <h1>NJILGA Membership Report</h1>
 
-            <h2>FluentCRM API Credentials</h2>
-            <p>
-                Create a dedicated FluentCRM Manager account at
-                <strong>FluentCRM → Settings → Managers</strong>, then generate
-                an API key at <strong>FluentCRM → Settings → Rest API</strong>.
-            </p>
-
-            <form method="post">
-                <?php wp_nonce_field( 'njilga_save_credentials' ); ?>
-                <table class="form-table">
-                    <tr>
-                        <th>Site URL</th>
-                        <td><input type="url" name="fcrm_base_url" value="<?php echo esc_attr( $base_url ); ?>" class="regular-text"></td>
-                    </tr>
-                    <tr>
-                        <th>API Username</th>
-                        <td><input type="text" name="fcrm_api_user" value="<?php echo esc_attr( $api_user ); ?>" class="regular-text" autocomplete="off"></td>
-                    </tr>
-                    <tr>
-                        <th>Application Password</th>
-                        <td>
-                            <input type="password" name="fcrm_api_pass" value="" class="regular-text" autocomplete="new-password"
-                                   placeholder="<?php echo $has_pass ? '(saved — leave blank to keep)' : 'Enter app password'; ?>">
-                        </td>
-                    </tr>
-                </table>
-                <input type="hidden" name="njilga_save_credentials" value="1">
-                <?php submit_button( 'Save Credentials', 'secondary' ); ?>
-            </form>
-
-            <hr>
-
-            <?php if ( ! $api_user || ! $has_pass ) : ?>
-                <p class="notice notice-warning" style="padding:8px">Enter credentials above to load the report.</p>
-
-            <?php elseif ( $data_err ) : ?>
+            <?php if ( $data_err ) : ?>
                 <div class="notice notice-error"><p><?php echo esc_html( $data_err ); ?></p></div>
 
             <?php else : ?>
@@ -101,7 +49,7 @@ class NJILGA_Admin_Page {
                     $0: <?php echo esc_html( $data['summary']['zero'] ); ?>
                 </p>
                 <p style="color:#555;font-size:12px">
-                    Payment data source:
+                    Reading FluentCRM directly from this WordPress install. Payment data source:
                     <?php if ( ! empty( $data['pmpro_available'] ) ) : ?>
                         <strong>Paid Memberships Pro</strong> (with FluentCRM custom-field fallback for contacts not linked to a WP user).
                     <?php else : ?>
@@ -112,7 +60,7 @@ class NJILGA_Admin_Page {
                 <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
                     <input type="hidden" name="action" value="njilga_export_report">
                     <?php wp_nonce_field( 'njilga_export_report' ); ?>
-                    <?php submit_button( '⬇ Download Excel Report (.xlsx)', 'primary', 'submit', false ); ?>
+                    <?php submit_button( 'Download Excel Report (.xlsx)', 'primary', 'submit', false ); ?>
                 </form>
 
                 <hr>
