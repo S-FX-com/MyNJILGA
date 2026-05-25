@@ -15,6 +15,28 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'NJILGA_REPORT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'NJILGA_REPORT_URL', plugin_dir_url( __FILE__ ) );
 
+// Composer autoload powers the GitHub update checker on every request and
+// PhpSpreadsheet on the export request. Classmapped, so PhpSpreadsheet
+// itself isn't loaded until first use.
+$njilga_autoload = NJILGA_REPORT_DIR . 'vendor/autoload.php';
+if ( file_exists( $njilga_autoload ) ) {
+    require_once $njilga_autoload;
+}
+
+// GitHub-release-based update checks via yahnis-elsts/plugin-update-checker.
+// Cuts a new GitHub Release in s-fx-com/MyNJILGA → all installs offer the update.
+// For a private repo, define MY_NJILGA_GITHUB_TOKEN in wp-config.php with a PAT.
+if ( class_exists( '\\YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory' ) ) {
+    $njilga_updater = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+        'https://github.com/s-fx-com/MyNJILGA/',
+        __FILE__,
+        'my-njilga'
+    );
+    if ( defined( 'MY_NJILGA_GITHUB_TOKEN' ) && MY_NJILGA_GITHUB_TOKEN ) {
+        $njilga_updater->setAuthentication( MY_NJILGA_GITHUB_TOKEN );
+    }
+}
+
 require_once NJILGA_REPORT_DIR . 'includes/class-tags.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-members-data.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-xlsx.php';
@@ -37,11 +59,9 @@ add_action( 'admin_post_my_njilga_export', static function () {
     }
     check_admin_referer( 'my_njilga_export' );
 
-    $autoload = NJILGA_REPORT_DIR . 'vendor/autoload.php';
-    if ( ! file_exists( $autoload ) ) {
-        wp_die( 'PhpSpreadsheet not found. Run <code>composer install</code> in the plugin directory.' );
+    if ( ! class_exists( '\\PhpOffice\\PhpSpreadsheet\\Spreadsheet' ) ) {
+        wp_die( 'PhpSpreadsheet is not available. The plugin\'s vendor/ folder appears to be missing — reinstall the plugin or run <code>composer install</code> in the plugin directory.' );
     }
-    require_once $autoload;
 
     if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
         wp_die( 'FluentCRM is not active.' );

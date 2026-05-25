@@ -100,4 +100,27 @@ cd wp-content/plugins/my-njilga
 composer install
 ```
 
-No build step.
+No build step. The `vendor/` directory is committed, so reinstalling is only needed if you bump a dependency.
+
+---
+
+## Updates
+
+The plugin checks **`s-fx-com/MyNJILGA`** on GitHub for new **tagged releases** using [yahnis-elsts/plugin-update-checker](https://github.com/YahnisElsts/plugin-update-checker). Cut a release on GitHub whose tag matches the new `Version:` header (e.g. tag `v2.1.0` for `Version: 2.1.0`) and every site running the plugin will see an "Update available" prompt in **WordPress Admin → Plugins** within the normal WP transient window.
+
+### Private repo
+
+If the repository is private, add a GitHub Personal Access Token (with `repo` scope) to `wp-config.php`:
+
+```php
+define( 'MY_NJILGA_GITHUB_TOKEN', 'ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' );
+```
+
+The update checker uses it for both the version-check call and the zip download. Without the constant, only public-repo access is attempted.
+
+### Cutting a release
+
+1. Bump the `Version:` header in `njilga-membership-report.php`.
+2. Commit and push to `main`.
+3. On GitHub, **Releases → Draft a new release**, pick a tag like `v2.1.0`, publish.
+4. WordPress sites will pick it up on their next plugin-update cron run (force it with `?wp-admin/update-core.php` → "Check Again").

@@ -3,7 +3,8 @@
     "description": "Generates a Member Dues Report Excel file from FluentCRM data.",
     "type": "wordpress-plugin",
     "require": {
-        "phpoffice/phpspreadsheet": "^2.0"
+        "phpoffice/phpspreadsheet": "^2.0",
+        "yahnis-elsts/plugin-update-checker": "^5.6"
     },
     "autoload": {
         "psr-4": {
