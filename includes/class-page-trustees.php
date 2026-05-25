@@ -28,6 +28,8 @@ class MyNJILGA_Page_Trustees {
 
         printf( '<p style="color:#646970">%d trustee%s.</p>', count( $rows ), count( $rows ) === 1 ? '' : 's' );
 
+        MyNJILGA_Admin_Menu::render_csv_button( 'trustees', 'Download Trustees CSV' );
+
         echo '<table class="widefat striped"><thead><tr>
                 <th>Trustee</th><th>Firm</th><th>Dues Paid?</th><th>Payment Method</th>
               </tr></thead><tbody>';

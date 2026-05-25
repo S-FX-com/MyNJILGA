@@ -15,9 +15,31 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'NJILGA_REPORT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'NJILGA_REPORT_URL', plugin_dir_url( __FILE__ ) );
 
+// Composer autoload powers the GitHub update checker on every request and
+// PhpSpreadsheet on the export request. Classmapped, so PhpSpreadsheet
+// itself isn't loaded until first use.
+$njilga_autoload = NJILGA_REPORT_DIR . 'vendor/autoload.php';
+if ( file_exists( $njilga_autoload ) ) {
+    require_once $njilga_autoload;
+}
+
+// GitHub-release-based update checks via yahnis-elsts/plugin-update-checker.
+// Cuts a new GitHub Release in s-fx-com/MyNJILGA → all installs offer the update.
+// For a private repo, define MY_NJILGA_GITHUB_TOKEN in wp-config.php with a PAT.
+if ( class_exists( '\\YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory' ) ) {
+    $njilga_updater = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+        'https://github.com/s-fx-com/MyNJILGA/',
+        __FILE__,
+        'my-njilga'
+    );
+    if ( defined( 'MY_NJILGA_GITHUB_TOKEN' ) && MY_NJILGA_GITHUB_TOKEN ) {
+        $njilga_updater->setAuthentication( MY_NJILGA_GITHUB_TOKEN );
+    }
+}
+
 require_once NJILGA_REPORT_DIR . 'includes/class-tags.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-members-data.php';
-require_once NJILGA_REPORT_DIR . 'includes/class-report-xlsx.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-report-csv.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-admin-menu.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-dashboard.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-members.php';
@@ -30,22 +52,17 @@ add_action( 'admin_menu', [ 'MyNJILGA_Admin_Menu', 'register' ] );
 // Setup page: create a missing tag via the FluentCRM Tags API.
 add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_create_tag' ] );
 
-// Dashboard download: stream the three-sheet Excel workbook.
-add_action( 'admin_post_my_njilga_export', static function () {
+// Per-page CSV exports. ?type=members|trustees|companies determines the report.
+add_action( 'admin_post_my_njilga_export_csv', static function () {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_die( 'Access denied.' );
     }
-    check_admin_referer( 'my_njilga_export' );
-
-    $autoload = NJILGA_REPORT_DIR . 'vendor/autoload.php';
-    if ( ! file_exists( $autoload ) ) {
-        wp_die( 'PhpSpreadsheet not found. Run <code>composer install</code> in the plugin directory.' );
-    }
-    require_once $autoload;
+    check_admin_referer( 'my_njilga_export_csv' );
 
     if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
         wp_die( 'FluentCRM is not active.' );
     }
 
-    MyNJILGA_Report_Xlsx::stream();
+    $type = sanitize_key( $_REQUEST['type'] ?? '' );
+    MyNJILGA_Report_Csv::stream( $type );
 } );

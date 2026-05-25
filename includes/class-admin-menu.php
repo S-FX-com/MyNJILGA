@@ -48,4 +48,24 @@ class MyNJILGA_Admin_Menu {
     public static function url( string $slug ): string {
         return admin_url( 'admin.php?page=' . $slug );
     }
+
+    /**
+     * Emit a "Download CSV" form pointing at the export handler with the
+     * given report type ("members", "trustees", or "companies"). Each
+     * list page renders one of these above its table.
+     */
+    public static function render_csv_button( string $type, string $label = 'Download CSV' ): void {
+        printf(
+            '<form method="post" action="%s" style="margin:0 0 12px">
+                <input type="hidden" name="action" value="my_njilga_export_csv">
+                <input type="hidden" name="type" value="%s">
+                %s
+                <button type="submit" class="button">%s</button>
+             </form>',
+            esc_url( admin_url( 'admin-post.php' ) ),
+            esc_attr( $type ),
+            wp_nonce_field( 'my_njilga_export_csv', '_wpnonce', true, false ),
+            esc_html( $label )
+        );
+    }
 }

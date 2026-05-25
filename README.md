@@ -62,13 +62,17 @@ For the Companies report to populate, the **FluentCRM Companies module** must be
 
 ---
 
-## Excel export
+## CSV exports
 
-The **Download Excel Report** button on the Dashboard streams a single workbook with three sheets:
+Each list page has its own **Download CSV** button:
 
-1. **Active Members** — Member, Firm, Trustee?, Payment Method
-2. **Trustees** — Trustee, Firm, Dues Paid?, Payment Method
-3. **Companies** — sectioned by paid-member bucket; each row lists a member with Paid/Unpaid status
+| Page | CSV columns |
+|---|---|
+| Active Members | Member, Contact id, Firm, Trustee?, Payment Method |
+| Trustees | Trustee, Contact id, Firm, Dues Paid?, Payment Method |
+| Companies | Bucket, Company, Paid Members, Total Members, Member, Status (one row per member) |
+
+CSVs are UTF-8 with a BOM so accented firm names render correctly when opened directly in Excel. No PHP version or third-party library requirement — the export uses plain `fputcsv`.
 
 ---
 
@@ -86,8 +90,8 @@ my-njilga/
 │   ├── class-page-trustees.php
 │   ├── class-page-companies.php
 │   ├── class-page-setup.php
-│   └── class-report-xlsx.php            ← PhpSpreadsheet workbook builder
-├── composer.json                        ← Declares PhpSpreadsheet
+│   └── class-report-csv.php             ← fputcsv-based per-report streamer
+├── composer.json                        ← Declares the GitHub update checker
 └── README.md
 ```
 
@@ -100,4 +104,27 @@ cd wp-content/plugins/my-njilga
 composer install
 ```
 
-No build step.
+No build step. The `vendor/` directory is committed, so reinstalling is only needed if you bump a dependency.
+
+---
+
+## Updates
+
+The plugin checks **`s-fx-com/MyNJILGA`** on GitHub for new **tagged releases** using [yahnis-elsts/plugin-update-checker](https://github.com/YahnisElsts/plugin-update-checker). Cut a release on GitHub whose tag matches the new `Version:` header (e.g. tag `v2.1.0` for `Version: 2.1.0`) and every site running the plugin will see an "Update available" prompt in **WordPress Admin → Plugins** within the normal WP transient window.
+
+### Private repo
+
+If the repository is private, add a GitHub Personal Access Token (with `repo` scope) to `wp-config.php`:
+
+```php
+define( 'MY_NJILGA_GITHUB_TOKEN', 'ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' );
+```
+
+The update checker uses it for both the version-check call and the zip download. Without the constant, only public-repo access is attempted.
+
+### Cutting a release
+
+1. Bump the `Version:` header in `njilga-membership-report.php`.
+2. Commit and push to `main`.
+3. On GitHub, **Releases → Draft a new release**, pick a tag like `v2.1.0`, publish.
+4. WordPress sites will pick it up on their next plugin-update cron run (force it with `?wp-admin/update-core.php` → "Check Again").
