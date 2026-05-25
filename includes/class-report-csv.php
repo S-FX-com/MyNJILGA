@@ -29,14 +29,16 @@ class MyNJILGA_Report_Csv {
         $rows = MyNJILGA_Members_Data::get_active_members();
         $fh   = self::open( 'active-members' );
 
-        fputcsv( $fh, [ 'Member', 'Email contact id', 'Firm', 'Trustee?', 'Payment Method' ] );
+        fputcsv( $fh, [ 'First Name', 'Last Name', 'Email', 'Firm Name', 'Trustee', 'Payment Method', 'CRM ID' ] );
         foreach ( $rows as $r ) {
             fputcsv( $fh, [
-                $r['member'],
-                $r['subscriber_id'],
+                $r['first_name'],
+                $r['last_name'],
+                $r['email'],
                 $r['firm'],
-                $r['is_trustee'] ? 'Yes' : 'No',
+                $r['trustee_status'],
                 $r['payment_method'],
+                $r['subscriber_id'],
             ] );
         }
         fclose( $fh );
@@ -47,14 +49,16 @@ class MyNJILGA_Report_Csv {
         $rows = MyNJILGA_Members_Data::get_trustees();
         $fh   = self::open( 'trustees' );
 
-        fputcsv( $fh, [ 'Trustee', 'Contact id', 'Firm', 'Dues Paid?', 'Payment Method' ] );
+        fputcsv( $fh, [ 'First Name', 'Last Name', 'Email', 'Firm Name', 'Trustee', 'Payment Method', 'CRM ID' ] );
         foreach ( $rows as $r ) {
             fputcsv( $fh, [
-                $r['member'],
-                $r['subscriber_id'],
+                $r['first_name'],
+                $r['last_name'],
+                $r['email'],
                 $r['firm'],
-                $r['is_paid'] ? 'Paid' : 'Unpaid',
+                $r['trustee_status'],
                 $r['payment_method'],
+                $r['subscriber_id'],
             ] );
         }
         fclose( $fh );

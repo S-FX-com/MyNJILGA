@@ -31,7 +31,7 @@ class MyNJILGA_Page_Members {
         MyNJILGA_Admin_Menu::render_csv_button( 'members', 'Download Active Members CSV' );
 
         echo '<table class="widefat striped"><thead><tr>
-                <th>Member</th><th>Firm</th><th>Trustee?</th><th>Payment Method</th>
+                <th>Member</th><th>Firm</th><th>Trustee</th><th>Payment Method</th>
               </tr></thead><tbody>';
 
         if ( empty( $rows ) ) {
@@ -44,7 +44,9 @@ class MyNJILGA_Page_Members {
                 esc_url( $r['member_url'] ),
                 esc_html( $r['member'] ),
                 esc_html( $r['firm'] ),
-                $r['is_trustee'] ? '<strong style="color:#1d6f42">Yes</strong>' : '<span style="color:#888">No</span>',
+                $r['trustee_status'] !== ''
+                    ? '<strong style="color:#1d6f42">' . esc_html( $r['trustee_status'] ) . '</strong>'
+                    : '<span style="color:#888">—</span>',
                 esc_html( $r['payment_method'] )
             );
         }

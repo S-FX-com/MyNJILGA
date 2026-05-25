@@ -31,18 +31,19 @@ class MyNJILGA_Page_Trustees {
         MyNJILGA_Admin_Menu::render_csv_button( 'trustees', 'Download Trustees CSV' );
 
         echo '<table class="widefat striped"><thead><tr>
-                <th>Trustee</th><th>Firm</th><th>Dues Paid?</th><th>Payment Method</th>
+                <th>Name</th><th>Role</th><th>Firm</th><th>Dues Paid?</th><th>Payment Method</th>
               </tr></thead><tbody>';
 
         if ( empty( $rows ) ) {
-            echo '<tr><td colspan="4" style="color:#999;font-style:italic">No trustees yet.</td></tr>';
+            echo '<tr><td colspan="5" style="color:#999;font-style:italic">No trustees yet.</td></tr>';
         }
 
         foreach ( $rows as $r ) {
             printf(
-                '<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                '<tr><td><a href="%s">%s</a></td><td><strong>%s</strong></td><td>%s</td><td>%s</td><td>%s</td></tr>',
                 esc_url( $r['member_url'] ),
                 esc_html( $r['member'] ),
+                esc_html( $r['trustee_status'] ),
                 esc_html( $r['firm'] ),
                 $r['is_paid']
                     ? '<strong style="color:#1d6f42">Paid</strong>'

@@ -26,7 +26,7 @@ class MyNJILGA_Members_Data {
     // -------------------------------------------------------------------------
 
     /**
-     * @return array<int,array{member:string,member_url:string,firm:string,is_trustee:bool,payment_method:string,subscriber_id:int}>
+     * @return array<int,array{member:string,member_url:string,first_name:string,last_name:string,email:string,firm:string,is_trustee:bool,trustee_status:string,payment_method:string,subscriber_id:int}>
      */
     public static function get_active_members(): array {
         $dues_paid_id = MyNJILGA_Tags::id_for( MyNJILGA_Tags::SLUG_DUES_PAID );
@@ -44,8 +44,12 @@ class MyNJILGA_Members_Data {
                 'subscriber_id'  => (int) $sub->id,
                 'member'         => self::display_name( $sub ),
                 'member_url'     => self::contact_admin_url( $sub ),
+                'first_name'     => (string) ( $sub->first_name ?? '' ),
+                'last_name'      => (string) ( $sub->last_name ?? '' ),
+                'email'          => (string) ( $sub->email ?? '' ),
                 'firm'           => self::firm_for( $sub ),
                 'is_trustee'     => MyNJILGA_Tags::is_trustee( $sub ),
+                'trustee_status' => MyNJILGA_Tags::trustee_status( $sub ),
                 'payment_method' => MyNJILGA_Tags::payment_method( $sub ),
             ];
         }
@@ -55,15 +59,23 @@ class MyNJILGA_Members_Data {
     }
 
     /**
-     * @return array<int,array{member:string,member_url:string,firm:string,is_paid:bool,payment_method:string,subscriber_id:int}>
+     * Trustees, Senior Trustees, and Past Presidents — anyone carrying any
+     * of the trustee-family tags. The `trustee_status` field denotes which
+     * role they hold (with Past President / Senior Trustee taking
+     * precedence over plain Trustee).
+     *
+     * @return array<int,array{member:string,member_url:string,first_name:string,last_name:string,email:string,firm:string,is_paid:bool,trustee_status:string,payment_method:string,subscriber_id:int}>
      */
     public static function get_trustees(): array {
-        $trustees_id = MyNJILGA_Tags::id_for( MyNJILGA_Tags::SLUG_TRUSTEES );
-        if ( ! $trustees_id ) {
+        $trustee_ids = array_values( array_filter( array_map(
+            static fn( $slug ) => MyNJILGA_Tags::id_for( $slug ),
+            MyNJILGA_Tags::TRUSTEE_SLUGS
+        ) ) );
+        if ( ! $trustee_ids ) {
             return [];
         }
 
-        $subs = \FluentCrm\App\Models\Subscriber::filterByTags( [ $trustees_id ] )
+        $subs = \FluentCrm\App\Models\Subscriber::filterByTags( $trustee_ids )
             ->where( 'status', 'subscribed' )
             ->get();
 
@@ -73,8 +85,12 @@ class MyNJILGA_Members_Data {
                 'subscriber_id'  => (int) $sub->id,
                 'member'         => self::display_name( $sub ),
                 'member_url'     => self::contact_admin_url( $sub ),
+                'first_name'     => (string) ( $sub->first_name ?? '' ),
+                'last_name'      => (string) ( $sub->last_name ?? '' ),
+                'email'          => (string) ( $sub->email ?? '' ),
                 'firm'           => self::firm_for( $sub ),
                 'is_paid'        => MyNJILGA_Tags::is_paid( $sub ),
+                'trustee_status' => MyNJILGA_Tags::trustee_status( $sub ),
                 'payment_method' => MyNJILGA_Tags::payment_method( $sub ),
             ];
         }
