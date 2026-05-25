@@ -28,6 +28,8 @@ class MyNJILGA_Page_Members {
 
         printf( '<p style="color:#646970">%d member%s with the Dues Paid tag.</p>', count( $rows ), count( $rows ) === 1 ? '' : 's' );
 
+        MyNJILGA_Admin_Menu::render_csv_button( 'members', 'Download Active Members CSV' );
+
         echo '<table class="widefat striped"><thead><tr>
                 <th>Member</th><th>Firm</th><th>Trustee?</th><th>Payment Method</th>
               </tr></thead><tbody>';

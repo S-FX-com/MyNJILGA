@@ -26,6 +26,8 @@ class MyNJILGA_Page_Companies {
 
         echo '<p style="color:#646970">Companies are bucketed by how many of their FluentCRM contacts carry the <strong>Dues Paid</strong> tag.</p>';
 
+        MyNJILGA_Admin_Menu::render_csv_button( 'companies', 'Download Companies CSV' );
+
         foreach ( $bucket_order as $key ) {
             $companies = $data['buckets'][ $key ] ?? [];
             $label     = $data['bucket_labels'][ $key ];

@@ -36,13 +36,13 @@ class MyNJILGA_Page_Dashboard {
             <li style="color:#666">No paid members: <strong><?php echo (int) ( $s['bucket_counts']['0'] ?? 0 ); ?></strong></li>
         </ul>
 
-        <h2 style="margin-top:24px">Export</h2>
-        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
-            <input type="hidden" name="action" value="my_njilga_export">
-            <?php wp_nonce_field( 'my_njilga_export' ); ?>
-            <?php submit_button( 'Download Excel Report (.xlsx)', 'primary', 'submit', false ); ?>
-            <span style="color:#666;margin-left:8px">Three sheets: Active Members, Trustees, Companies.</span>
-        </form>
+        <h2 style="margin-top:24px">Exports</h2>
+        <p style="color:#646970">Download each report as a CSV from its page:</p>
+        <p style="display:flex;gap:8px;flex-wrap:wrap">
+            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_MEMBERS ) ); ?>">Active Members →</a>
+            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_TRUSTEES ) ); ?>">Trustees →</a>
+            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_COMPANIES ) ); ?>">Companies →</a>
+        </p>
         </div>
         <?php
     }

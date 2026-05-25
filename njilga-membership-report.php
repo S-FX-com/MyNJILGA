@@ -39,7 +39,7 @@ if ( class_exists( '\\YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory' ) ) {
 
 require_once NJILGA_REPORT_DIR . 'includes/class-tags.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-members-data.php';
-require_once NJILGA_REPORT_DIR . 'includes/class-report-xlsx.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-report-csv.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-admin-menu.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-dashboard.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-members.php';
@@ -52,20 +52,17 @@ add_action( 'admin_menu', [ 'MyNJILGA_Admin_Menu', 'register' ] );
 // Setup page: create a missing tag via the FluentCRM Tags API.
 add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_create_tag' ] );
 
-// Dashboard download: stream the three-sheet Excel workbook.
-add_action( 'admin_post_my_njilga_export', static function () {
+// Per-page CSV exports. ?type=members|trustees|companies determines the report.
+add_action( 'admin_post_my_njilga_export_csv', static function () {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_die( 'Access denied.' );
     }
-    check_admin_referer( 'my_njilga_export' );
-
-    if ( ! class_exists( '\\PhpOffice\\PhpSpreadsheet\\Spreadsheet' ) ) {
-        wp_die( 'PhpSpreadsheet is not available. The plugin\'s vendor/ folder appears to be missing — reinstall the plugin or run <code>composer install</code> in the plugin directory.' );
-    }
+    check_admin_referer( 'my_njilga_export_csv' );
 
     if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
         wp_die( 'FluentCRM is not active.' );
     }
 
-    MyNJILGA_Report_Xlsx::stream();
+    $type = sanitize_key( $_REQUEST['type'] ?? '' );
+    MyNJILGA_Report_Csv::stream( $type );
 } );

@@ -62,13 +62,17 @@ For the Companies report to populate, the **FluentCRM Companies module** must be
 
 ---
 
-## Excel export
+## CSV exports
 
-The **Download Excel Report** button on the Dashboard streams a single workbook with three sheets:
+Each list page has its own **Download CSV** button:
 
-1. **Active Members** — Member, Firm, Trustee?, Payment Method
-2. **Trustees** — Trustee, Firm, Dues Paid?, Payment Method
-3. **Companies** — sectioned by paid-member bucket; each row lists a member with Paid/Unpaid status
+| Page | CSV columns |
+|---|---|
+| Active Members | Member, Contact id, Firm, Trustee?, Payment Method |
+| Trustees | Trustee, Contact id, Firm, Dues Paid?, Payment Method |
+| Companies | Bucket, Company, Paid Members, Total Members, Member, Status (one row per member) |
+
+CSVs are UTF-8 with a BOM so accented firm names render correctly when opened directly in Excel. No PHP version or third-party library requirement — the export uses plain `fputcsv`.
 
 ---
 
@@ -86,8 +90,8 @@ my-njilga/
 │   ├── class-page-trustees.php
 │   ├── class-page-companies.php
 │   ├── class-page-setup.php
-│   └── class-report-xlsx.php            ← PhpSpreadsheet workbook builder
-├── composer.json                        ← Declares PhpSpreadsheet
+│   └── class-report-csv.php             ← fputcsv-based per-report streamer
+├── composer.json                        ← Declares the GitHub update checker
 └── README.md
 ```
 
