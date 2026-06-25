@@ -21,6 +21,9 @@ class MyNJILGA_Page_Companies {
             return;
         }
 
+        MyNJILGA_Admin_Menu::render_back_to_reports();
+        MyNJILGA_Admin_Menu::render_stats_panel();
+
         $data = MyNJILGA_Members_Data::get_companies_bucketed();
         $bucket_order = [ '1', '2-5', '6+', '0' ];
 

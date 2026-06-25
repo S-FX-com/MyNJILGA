@@ -23,12 +23,15 @@ class MyNJILGA_Report_Xls {
             wp_die( 'FluentCRM is not active.' );
         }
 
-        self::stream_firms();
+        $scope = ( sanitize_key( $_REQUEST['scope'] ?? '' ) === 'active' ) ? 'active' : 'all';
+        self::stream_firms( $scope );
     }
 
-    private static function stream_firms(): void {
-        $firms    = MyNJILGA_Members_Data::get_membership_by_firm();
-        $filename = sprintf( 'MyNJILGA_membership-by-firm_%s.xls', date( 'Y-m-d' ) );
+    private static function stream_firms( string $scope = 'all' ): void {
+        $firms    = MyNJILGA_Members_Data::get_membership_by_firm( $scope );
+        $title    = $scope === 'active' ? 'Membership by Firm — Active Membership Only' : 'Membership by Firm — All Membership';
+        $slug     = $scope === 'active' ? 'active' : 'all';
+        $filename = sprintf( 'MyNJILGA_membership-by-firm_%s_%s.xls', $slug, date( 'Y-m-d' ) );
 
         nocache_headers();
         header( 'Content-Type: application/vnd.ms-excel; charset=utf-8' );
@@ -44,7 +47,7 @@ class MyNJILGA_Report_Xls {
         echo '<head><meta charset="utf-8"></head><body>';
         echo '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:11pt">';
 
-        echo '<tr><td colspan="' . $cols . '" style="font-size:16pt;font-weight:bold">Membership by Firm</td></tr>';
+        echo '<tr><td colspan="' . $cols . '" style="font-size:16pt;font-weight:bold">' . self::xls( $title ) . '</td></tr>';
         echo '<tr><td colspan="' . $cols . '" style="color:#888">Generated ' . esc_html( date( 'Y-m-d' ) ) . '</td></tr>';
         echo '<tr><td colspan="' . $cols . '"></td></tr>';
 

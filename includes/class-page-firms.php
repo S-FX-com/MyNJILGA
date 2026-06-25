@@ -26,18 +26,35 @@ class MyNJILGA_Page_Firms {
             return;
         }
 
-        $firms = MyNJILGA_Members_Data::get_membership_by_firm();
+        MyNJILGA_Admin_Menu::render_back_to_reports();
+        MyNJILGA_Admin_Menu::render_stats_panel();
 
-        printf(
-            '<p style="color:#646970">%d firm%s with at least one attached FluentCRM contact, listed alphabetically.</p>',
-            count( $firms ),
-            count( $firms ) === 1 ? '' : 's'
-        );
+        $scope = ( ( $_GET['scope'] ?? '' ) === 'active' ) ? 'active' : 'all';
+        self::render_scope_tabs( $scope );
 
-        MyNJILGA_Admin_Menu::render_firms_export_button();
+        $firms = MyNJILGA_Members_Data::get_membership_by_firm( $scope );
+
+        if ( $scope === 'active' ) {
+            printf(
+                '<p style="color:#646970">%d firm%s with at least one active (Dues Paid) member — only active members are shown.</p>',
+                count( $firms ),
+                count( $firms ) === 1 ? '' : 's'
+            );
+        } else {
+            printf(
+                '<p style="color:#646970">%d firm%s with at least one attached FluentCRM contact, listed alphabetically.</p>',
+                count( $firms ),
+                count( $firms ) === 1 ? '' : 's'
+            );
+        }
+
+        MyNJILGA_Admin_Menu::render_firms_export_button( $scope );
 
         if ( empty( $firms ) ) {
-            echo '<p style="color:#999;font-style:italic">No firms with attached contacts yet.</p></div>';
+            $msg = $scope === 'active'
+                ? 'No firms with active members yet.'
+                : 'No firms with attached contacts yet.';
+            echo '<p style="color:#999;font-style:italic">' . esc_html( $msg ) . '</p></div>';
             return;
         }
 
@@ -70,6 +87,32 @@ class MyNJILGA_Page_Firms {
         }
 
         echo '</div>';
+    }
+
+    /**
+     * Two-variation switcher: "All Membership" vs "Active Membership Only".
+     * Renders as a pair of nav tabs; the active scope is highlighted.
+     */
+    private static function render_scope_tabs( string $scope ): void {
+        $tabs = [
+            'all'    => 'All Membership',
+            'active' => 'Active Membership Only',
+        ];
+
+        echo '<h2 class="nav-tab-wrapper" style="margin-bottom:16px">';
+        foreach ( $tabs as $key => $label ) {
+            $url = add_query_arg(
+                [ 'page' => MyNJILGA_Admin_Menu::SLUG_FIRMS, 'scope' => $key ],
+                admin_url( 'admin.php' )
+            );
+            printf(
+                '<a href="%s" class="nav-tab%s">%s</a>',
+                esc_url( $url ),
+                $scope === $key ? ' nav-tab-active' : '',
+                esc_html( $label )
+            );
+        }
+        echo '</h2>';
     }
 
     /**

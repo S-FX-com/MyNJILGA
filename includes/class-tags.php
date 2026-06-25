@@ -115,6 +115,16 @@ class MyNJILGA_Tags {
     }
 
     /**
+     * True if the subscriber carries the "Unpaid Dues" tag (flagged as owing
+     * dues — typically a member from the prior cycle who hasn't renewed).
+     *
+     * @param \FluentCrm\App\Models\Subscriber $subscriber
+     */
+    public static function is_unpaid( $subscriber ): bool {
+        return self::has_tag( $subscriber, self::SLUG_UNPAID_DUES );
+    }
+
+    /**
      * True if the subscriber carries any of the trustee-family tags
      * (Trustees, Senior Trustee, Past President).
      *
