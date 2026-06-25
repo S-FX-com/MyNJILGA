@@ -154,6 +154,61 @@ class MyNJILGA_Members_Data {
     }
 
     /**
+     * Membership by Firm: every FluentCRM Company that has at least one
+     * attached contact, sorted alphabetically by company name, each with
+     * its contacts listed (sorted by last name, then first name).
+     *
+     * Per-contact fields mirror the report columns:
+     *   - dues          "Dues Paid" | "Unpaid Dues" | ""
+     *   - trustees      "Trustees" | ""        (the `trustees` tag specifically)
+     *   - past_president "Past President" | "" (the `past-president` tag)
+     *   - payment       "Paid by Invoice" | "Paid by Check" | "Paid by Website" | ""
+     *
+     * Companies with zero attached contacts are omitted.
+     *
+     * @return array<int,array{name:string,contacts:array<int,array{first_name:string,last_name:string,email:string,dues:string,trustees:string,past_president:string,payment:string}>}>
+     */
+    public static function get_membership_by_firm(): array {
+        if ( ! self::companies_module_active() ) {
+            return [];
+        }
+
+        $companies = \FluentCrm\App\Models\Company::orderBy( 'name', 'asc' )->get();
+
+        $firms = [];
+        foreach ( $companies as $company ) {
+            $contacts = [];
+            foreach ( $company->subscribers as $sub ) {
+                $contacts[] = [
+                    'first_name'     => (string) ( $sub->first_name ?? '' ),
+                    'last_name'      => (string) ( $sub->last_name ?? '' ),
+                    'email'          => (string) ( $sub->email ?? '' ),
+                    'dues'           => MyNJILGA_Tags::dues_label( $sub ),
+                    'trustees'       => MyNJILGA_Tags::has( $sub, MyNJILGA_Tags::SLUG_TRUSTEES ) ? 'Trustees' : '',
+                    'past_president' => MyNJILGA_Tags::has( $sub, MyNJILGA_Tags::SLUG_PAST_PRESIDENT ) ? 'Past President' : '',
+                    'payment'        => MyNJILGA_Tags::dues_payment_method( $sub ),
+                ];
+            }
+
+            if ( empty( $contacts ) ) {
+                continue; // Ignore companies with no attached contacts.
+            }
+
+            usort( $contacts, static function ( $a, $b ) {
+                $cmp = strcasecmp( $a['last_name'], $b['last_name'] );
+                return $cmp !== 0 ? $cmp : strcasecmp( $a['first_name'], $b['first_name'] );
+            } );
+
+            $firms[] = [
+                'name'     => (string) ( $company->name ?? '' ),
+                'contacts' => $contacts,
+            ];
+        }
+
+        return $firms;
+    }
+
+    /**
      * Dashboard counts.
      *
      * @return array{paid:int,trustees:int,companies_with_paid:int,bucket_counts:array<string,int>}

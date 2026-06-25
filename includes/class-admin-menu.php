@@ -12,6 +12,7 @@ class MyNJILGA_Admin_Menu {
     const SLUG_MEMBERS    = 'my-njilga-members';
     const SLUG_TRUSTEES   = 'my-njilga-trustees';
     const SLUG_COMPANIES  = 'my-njilga-companies';
+    const SLUG_FIRMS      = 'my-njilga-firms';
     const SLUG_SETUP      = 'my-njilga-setup';
 
     public static function register(): void {
@@ -29,6 +30,7 @@ class MyNJILGA_Admin_Menu {
         add_submenu_page( self::SLUG_ROOT, 'Active Members', 'Active Members', 'manage_options', self::SLUG_MEMBERS,   [ 'MyNJILGA_Page_Members',   'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Trustees',       'Trustees',       'manage_options', self::SLUG_TRUSTEES,  [ 'MyNJILGA_Page_Trustees',  'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Companies',      'Companies',      'manage_options', self::SLUG_COMPANIES, [ 'MyNJILGA_Page_Companies', 'render' ] );
+        add_submenu_page( self::SLUG_ROOT, 'Membership by Firm', 'Membership by Firm', 'manage_options', self::SLUG_FIRMS, [ 'MyNJILGA_Page_Firms', 'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Setup',          'Setup',          'manage_options', self::SLUG_SETUP,     [ 'MyNJILGA_Page_Setup',     'render' ] );
     }
 
@@ -65,6 +67,24 @@ class MyNJILGA_Admin_Menu {
             esc_url( admin_url( 'admin-post.php' ) ),
             esc_attr( $type ),
             wp_nonce_field( 'my_njilga_export_csv', '_wpnonce', true, false ),
+            esc_html( $label )
+        );
+    }
+
+    /**
+     * Emit the "Export to Excel" form for the Membership by Firm report.
+     * Posts to a dedicated handler that streams a formatted .xls (the CSV
+     * exporter can't carry the bold firm headings this report needs).
+     */
+    public static function render_firms_export_button( string $label = 'Export to Excel' ): void {
+        printf(
+            '<form method="post" action="%s" style="margin:0 0 12px">
+                <input type="hidden" name="action" value="my_njilga_export_firms">
+                %s
+                <button type="submit" class="button button-primary">%s</button>
+             </form>',
+            esc_url( admin_url( 'admin-post.php' ) ),
+            wp_nonce_field( 'my_njilga_export_firms', '_wpnonce', true, false ),
             esc_html( $label )
         );
     }

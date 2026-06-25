@@ -42,6 +42,7 @@ class MyNJILGA_Page_Dashboard {
             <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_MEMBERS ) ); ?>">Active Members →</a>
             <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_TRUSTEES ) ); ?>">Trustees →</a>
             <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_COMPANIES ) ); ?>">Companies →</a>
+            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_FIRMS ) ); ?>">Membership by Firm →</a>
         </p>
         </div>
         <?php

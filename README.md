@@ -16,7 +16,7 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for member stat
 
 ## Menu
 
-The plugin registers a top-level **My NJILGA** menu with five sub-pages:
+The plugin registers a top-level **My NJILGA** menu with six sub-pages:
 
 | Page | What it shows |
 |---|---|
@@ -24,6 +24,7 @@ The plugin registers a top-level **My NJILGA** menu with five sub-pages:
 | **Active Members** | Every contact carrying the **Dues Paid** tag, with their firm, trustee flag, and payment method. |
 | **Trustees** | Every contact carrying the **Trustees** tag, plus whether they've also paid dues. |
 | **Companies** | All FluentCRM Companies, grouped into **1 / 2–5 / 6+ Paid Members** buckets, with members listed underneath. |
+| **Membership by Firm** | Every FluentCRM Company with at least one attached contact, listed alphabetically as a bold heading, with its contacts (First/Last name, Email, Dues, Trustees, Past President, Payment) underneath. Exports to a formatted Excel `.xls`. |
 | **Setup** | Detects whether the required tags exist and offers a one-click button to create any that are missing. |
 
 ---
@@ -48,9 +49,14 @@ The Setup page looks up each required tag by **slug** first, then by exact **tit
 | Slug | Title | Required? |
 |---|---|---|
 | `dues-paid` | Dues Paid | Yes |
+| `unpaid-dues` | Unpaid Dues | Optional |
 | `trustees` | Trustees | Yes |
+| `senior-trustee` | Senior Trustee | Optional |
+| `past-president` | Past President | Optional |
 | `paid-by-check` | Paid by Check | Optional |
 | `paid-by-invoice` | Paid by Invoice | Optional |
+
+On the **Membership by Firm** report, the Dues column shows **Dues Paid** when the `dues-paid` tag is present, **Unpaid Dues** when the `unpaid-dues` tag is present, and is left blank when neither exists. The Payment column shows **Paid by Invoice** / **Paid by Check** when those tags are present, **Paid by Website** when `dues-paid` is present but neither override tag is, and is blank otherwise.
 
 The Setup page can create any of these for you in one click via the FluentCRM Tags API.
 
@@ -74,6 +80,8 @@ Each list page has its own **Download CSV** button:
 
 CSVs are UTF-8 with a BOM so accented firm names render correctly when opened directly in Excel. No PHP version or third-party library requirement — the export uses plain `fputcsv`.
 
+The **Membership by Firm** page instead offers an **Export to Excel** button that streams a formatted `.xls` (an HTML table served with the Excel MIME type). This preserves the bold firm headings and grouped layout that a flat CSV can't — still with no PhpSpreadsheet/third-party dependency.
+
 ---
 
 ## File Structure
@@ -89,8 +97,10 @@ my-njilga/
 │   ├── class-page-members.php
 │   ├── class-page-trustees.php
 │   ├── class-page-companies.php
+│   ├── class-page-firms.php             ← Membership by Firm report
 │   ├── class-page-setup.php
-│   └── class-report-csv.php             ← fputcsv-based per-report streamer
+│   ├── class-report-csv.php             ← fputcsv-based per-report streamer
+│   └── class-report-xls.php             ← HTML-as-.xls formatted export
 ├── composer.json                        ← Declares the GitHub update checker
 └── README.md
 ```

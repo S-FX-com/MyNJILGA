@@ -9,6 +9,7 @@
  *
  * Required tags (see Setup page):
  *   - dues-paid       "Dues Paid"        — paid/active member
+ *   - unpaid-dues     "Unpaid Dues"      — flagged as owing dues
  *   - trustees        "Trustees"         — has paid the trustee fee
  *   - senior-trustee  "Senior Trustee"   — senior trustee (rolls up under Trustees)
  *   - past-president  "Past President"   — past president (rolls up under Trustees)
@@ -18,6 +19,7 @@
 class MyNJILGA_Tags {
 
     const SLUG_DUES_PAID       = 'dues-paid';
+    const SLUG_UNPAID_DUES     = 'unpaid-dues';
     const SLUG_TRUSTEES        = 'trustees';
     const SLUG_SENIOR_TRUSTEE  = 'senior-trustee';
     const SLUG_PAST_PRESIDENT  = 'past-president';
@@ -29,6 +31,7 @@ class MyNJILGA_Tags {
      */
     const DEFINITIONS = [
         self::SLUG_DUES_PAID       => [ 'slug' => self::SLUG_DUES_PAID,       'title' => 'Dues Paid',       'required' => true  ],
+        self::SLUG_UNPAID_DUES     => [ 'slug' => self::SLUG_UNPAID_DUES,     'title' => 'Unpaid Dues',     'required' => false ],
         self::SLUG_TRUSTEES        => [ 'slug' => self::SLUG_TRUSTEES,        'title' => 'Trustees',        'required' => true  ],
         self::SLUG_SENIOR_TRUSTEE  => [ 'slug' => self::SLUG_SENIOR_TRUSTEE,  'title' => 'Senior Trustee',  'required' => false ],
         self::SLUG_PAST_PRESIDENT  => [ 'slug' => self::SLUG_PAST_PRESIDENT,  'title' => 'Past President',  'required' => false ],
@@ -158,6 +161,59 @@ class MyNJILGA_Tags {
             return 'Invoice';
         }
         return 'Credit Card';
+    }
+
+    /**
+     * Public test for whether a subscriber carries a specific NJILGA tag,
+     * keyed by one of the SLUG_* constants. Returns false when the tag
+     * doesn't exist on the install.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $subscriber
+     */
+    public static function has( $subscriber, string $slug ): bool {
+        return self::has_tag( $subscriber, $slug );
+    }
+
+    /**
+     * Dues column for the Membership by Firm report:
+     *   "Dues Paid"   if the dues-paid tag is present,
+     *   "Unpaid Dues" if the unpaid-dues tag is present,
+     *   ""            if neither (or both tags absent from the install).
+     *
+     * Dues Paid wins if a contact somehow carries both.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $subscriber
+     */
+    public static function dues_label( $subscriber ): string {
+        if ( self::has_tag( $subscriber, self::SLUG_DUES_PAID ) ) {
+            return 'Dues Paid';
+        }
+        if ( self::has_tag( $subscriber, self::SLUG_UNPAID_DUES ) ) {
+            return 'Unpaid Dues';
+        }
+        return '';
+    }
+
+    /**
+     * Payment column for the Membership by Firm report:
+     *   "Paid by Invoice" if the paid-by-invoice tag is present,
+     *   "Paid by Check"   if the paid-by-check tag is present,
+     *   "Paid by Website" if dues-paid is present but neither override tag is,
+     *   ""                otherwise.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $subscriber
+     */
+    public static function dues_payment_method( $subscriber ): string {
+        if ( self::has_tag( $subscriber, self::SLUG_PAID_BY_INVOICE ) ) {
+            return 'Paid by Invoice';
+        }
+        if ( self::has_tag( $subscriber, self::SLUG_PAID_BY_CHECK ) ) {
+            return 'Paid by Check';
+        }
+        if ( self::has_tag( $subscriber, self::SLUG_DUES_PAID ) ) {
+            return 'Paid by Website';
+        }
+        return '';
     }
 
     private static function has_tag( $subscriber, string $slug ): bool {
