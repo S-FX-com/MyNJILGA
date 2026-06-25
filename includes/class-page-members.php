@@ -16,6 +16,9 @@ class MyNJILGA_Page_Members {
             return;
         }
 
+        MyNJILGA_Admin_Menu::render_back_to_reports();
+        MyNJILGA_Admin_Menu::render_stats_panel();
+
         if ( MyNJILGA_Tags::id_for( MyNJILGA_Tags::SLUG_DUES_PAID ) === null ) {
             printf(
                 '<div class="notice notice-warning"><p>The <strong>Dues Paid</strong> tag does not exist yet. <a href="%s">Open Setup</a> to create it.</p></div></div>',

@@ -64,7 +64,7 @@ class MyNJILGA_Members_Data {
      * role they hold (with Past President / Senior Trustee taking
      * precedence over plain Trustee).
      *
-     * @return array<int,array{member:string,member_url:string,first_name:string,last_name:string,email:string,firm:string,is_paid:bool,trustee_status:string,payment_method:string,subscriber_id:int}>
+     * @return array<int,array{member:string,member_url:string,first_name:string,last_name:string,email:string,firm:string,is_paid:bool,is_unpaid:bool,trustee_status:string,payment_method:string,subscriber_id:int}>
      */
     public static function get_trustees(): array {
         $trustee_ids = array_values( array_filter( array_map(
@@ -90,6 +90,7 @@ class MyNJILGA_Members_Data {
                 'email'          => (string) ( $sub->email ?? '' ),
                 'firm'           => self::firm_for( $sub ),
                 'is_paid'        => MyNJILGA_Tags::is_paid( $sub ),
+                'is_unpaid'      => MyNJILGA_Tags::is_unpaid( $sub ),
                 'trustee_status' => MyNJILGA_Tags::trustee_status( $sub ),
                 'payment_method' => MyNJILGA_Tags::payment_method( $sub ),
             ];
@@ -158,20 +159,28 @@ class MyNJILGA_Members_Data {
      * attached contact, sorted alphabetically by company name, each with
      * its contacts listed (sorted by last name, then first name).
      *
+     * Two scopes:
+     *   - 'all'    every company with >=1 contact, all contacts shown.
+     *   - 'active' only companies with >=1 active (Dues Paid) member, and
+     *              only those active members are listed.
+     *
      * Per-contact fields mirror the report columns:
      *   - dues          "Dues Paid" | "Unpaid Dues" | ""
      *   - trustees      "Trustees" | ""        (the `trustees` tag specifically)
      *   - past_president "Past President" | "" (the `past-president` tag)
      *   - payment       "Paid by Invoice" | "Paid by Check" | "Paid by Website" | ""
      *
-     * Companies with zero attached contacts are omitted.
+     * Companies with zero qualifying contacts (for the chosen scope) are omitted.
      *
+     * @param string $scope 'all' (default) or 'active'.
      * @return array<int,array{name:string,contacts:array<int,array{first_name:string,last_name:string,email:string,dues:string,trustees:string,past_president:string,payment:string}>}>
      */
-    public static function get_membership_by_firm(): array {
+    public static function get_membership_by_firm( string $scope = 'all' ): array {
         if ( ! self::companies_module_active() ) {
             return [];
         }
+
+        $active_only = ( $scope === 'active' );
 
         $companies = \FluentCrm\App\Models\Company::orderBy( 'name', 'asc' )->get();
 
@@ -179,6 +188,9 @@ class MyNJILGA_Members_Data {
         foreach ( $companies as $company ) {
             $contacts = [];
             foreach ( $company->subscribers as $sub ) {
+                if ( $active_only && ! MyNJILGA_Tags::is_paid( $sub ) ) {
+                    continue; // Active scope: skip members without the Dues Paid tag.
+                }
                 $contacts[] = [
                     'first_name'     => (string) ( $sub->first_name ?? '' ),
                     'last_name'      => (string) ( $sub->last_name ?? '' ),
@@ -191,7 +203,7 @@ class MyNJILGA_Members_Data {
             }
 
             if ( empty( $contacts ) ) {
-                continue; // Ignore companies with no attached contacts.
+                continue; // No qualifying contacts for this scope — omit the firm.
             }
 
             usort( $contacts, static function ( $a, $b ) {
@@ -235,9 +247,80 @@ class MyNJILGA_Members_Data {
         ];
     }
 
+    /**
+     * Cross-report KPI dashboard shown atop every report page.
+     *
+     * Definitions (tag-driven, across all subscribed FluentCRM contacts):
+     *   - paid_members       carry the "Dues Paid" tag
+     *   - unpaid_members     carry the "Unpaid Dues" tag (lapsed last cycle)
+     *   - firms_with_paid    companies with >=1 Dues-Paid contact
+     *   - firms_without_paid companies with >=1 contact but 0 Dues-Paid
+     *   - paid_trustees      trustee-family tag AND Dues Paid
+     *   - unpaid_trustees    trustee-family tag AND Unpaid Dues
+     *
+     * Unpaid counts read 0 until the "Unpaid Dues" tag exists and is applied.
+     *
+     * @return array{paid_members:int,unpaid_members:int,firms_with_paid:int,firms_without_paid:int,paid_trustees:int,unpaid_trustees:int}
+     */
+    public static function report_stats(): array {
+        $paid_members   = self::count_subscribers_with_tag( MyNJILGA_Tags::SLUG_DUES_PAID );
+        $unpaid_members = self::count_subscribers_with_tag( MyNJILGA_Tags::SLUG_UNPAID_DUES );
+
+        $paid_trustees   = 0;
+        $unpaid_trustees = 0;
+        foreach ( self::get_trustees() as $t ) {
+            $paid_trustees   += $t['is_paid']   ? 1 : 0;
+            $unpaid_trustees += $t['is_unpaid'] ? 1 : 0;
+        }
+
+        $firms_with_paid    = 0;
+        $firms_without_paid = 0;
+        if ( self::companies_module_active() ) {
+            foreach ( \FluentCrm\App\Models\Company::get() as $company ) {
+                $total = 0;
+                $paid  = 0;
+                foreach ( $company->subscribers as $sub ) {
+                    $total++;
+                    $paid += MyNJILGA_Tags::is_paid( $sub ) ? 1 : 0;
+                }
+                if ( $total === 0 ) {
+                    continue; // Skip firms with no attached contacts.
+                }
+                if ( $paid > 0 ) {
+                    $firms_with_paid++;
+                } else {
+                    $firms_without_paid++;
+                }
+            }
+        }
+
+        return [
+            'paid_members'       => $paid_members,
+            'unpaid_members'     => $unpaid_members,
+            'firms_with_paid'    => $firms_with_paid,
+            'firms_without_paid' => $firms_without_paid,
+            'paid_trustees'      => $paid_trustees,
+            'unpaid_trustees'    => $unpaid_trustees,
+        ];
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Count subscribed contacts carrying the tag for the given NJILGA slug.
+     * Returns 0 when the tag doesn't exist on the install.
+     */
+    private static function count_subscribers_with_tag( string $slug ): int {
+        $id = MyNJILGA_Tags::id_for( $slug );
+        if ( ! $id ) {
+            return 0;
+        }
+        return (int) \FluentCrm\App\Models\Subscriber::filterByTags( [ $id ] )
+            ->where( 'status', 'subscribed' )
+            ->count();
+    }
 
     /**
      * @param \FluentCrm\App\Models\Subscriber $sub

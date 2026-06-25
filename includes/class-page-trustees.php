@@ -16,6 +16,9 @@ class MyNJILGA_Page_Trustees {
             return;
         }
 
+        MyNJILGA_Admin_Menu::render_back_to_reports();
+        MyNJILGA_Admin_Menu::render_stats_panel();
+
         if ( MyNJILGA_Tags::id_for( MyNJILGA_Tags::SLUG_TRUSTEES ) === null ) {
             printf(
                 '<div class="notice notice-warning"><p>The <strong>Trustees</strong> tag does not exist yet. <a href="%s">Open Setup</a> to create it.</p></div></div>',
