@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, and Excel export — driven entirely from FluentCRM tags on the local install.
- * Version:     2.4.0
+ * Version:     2.4.1
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -51,6 +51,10 @@ require_once NJILGA_REPORT_DIR . 'includes/class-page-firms.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-setup.php';
 
 add_action( 'admin_menu', [ 'MyNJILGA_Admin_Menu', 'register' ] );
+
+// Keep My NJILGA → Reports highlighted while viewing a hidden report page.
+add_filter( 'parent_file',  [ 'MyNJILGA_Admin_Menu', 'highlight_parent_menu' ] );
+add_filter( 'submenu_file', [ 'MyNJILGA_Admin_Menu', 'highlight_submenu' ] );
 
 // Setup page: create a missing tag via the FluentCRM Tags API.
 add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_create_tag' ] );
