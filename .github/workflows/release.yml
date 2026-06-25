@@ -1,0 +1,57 @@
+name: Publish release
+
+# Auto-publish a GitHub Release on every push to main.
+#
+# The release tag is derived from the `Version:` header in
+# njilga-membership-report.php (the value the plugin-update-checker compares
+# against). A commit that bumps the header publishes a matching `v<version>`
+# release, which is what installed WordPress sites pick up as an update.
+# Commits that don't change the version (e.g. doc-only edits) are a no-op
+# because the tag already exists — see CLAUDE.md for the versioning policy.
+
+on:
+  push:
+    branches: [main]
+
+# Never run two release jobs at once; let an in-flight one finish.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Read version from plugin header
+        id: version
+        run: |
+          version="$(grep -ioP '^\s*\*?\s*Version:\s*\K[0-9]+\.[0-9]+\.[0-9]+' njilga-membership-report.php | head -n1)"
+          if [ -z "$version" ]; then
+            echo "::error::Could not parse a Version: header from njilga-membership-report.php"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Detected version $version (tag v$version)"
+
+      - name: Publish release if the tag is new
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — nothing to publish."
+            exit 0
+          fi
+          echo "Creating release $TAG"
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "MyNJILGA $TAG" \
+            --generate-notes
