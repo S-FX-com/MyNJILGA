@@ -16,6 +16,19 @@ class MyNJILGA_Admin_Menu {
     const SLUG_FIRMS      = 'my-njilga-firms';
     const SLUG_SETUP      = 'my-njilga-setup';
 
+    /**
+     * Report detail pages that are reachable by URL (clicked into from the
+     * Reports landing page) but deliberately kept out of the admin menu.
+     *
+     * @var array<string,array{0:string,1:string}>  slug => [ title, page class ]
+     */
+    const HIDDEN_PAGES = [
+        self::SLUG_MEMBERS   => [ 'Active Members',     'MyNJILGA_Page_Members'   ],
+        self::SLUG_TRUSTEES  => [ 'Trustees',           'MyNJILGA_Page_Trustees'  ],
+        self::SLUG_COMPANIES => [ 'Companies',          'MyNJILGA_Page_Companies' ],
+        self::SLUG_FIRMS     => [ 'Membership by Firm', 'MyNJILGA_Page_Firms'     ],
+    ];
+
     public static function register(): void {
         add_menu_page(
             'My NJILGA',
@@ -33,18 +46,33 @@ class MyNJILGA_Admin_Menu {
         add_submenu_page( self::SLUG_ROOT, 'Reports',   'Reports',   'manage_options', self::SLUG_REPORTS, [ 'MyNJILGA_Page_Reports',   'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Setup',     'Setup',     'manage_options', self::SLUG_SETUP,   [ 'MyNJILGA_Page_Setup',     'render' ] );
 
-        // Report detail pages: registered under the My NJILGA parent (so they
-        // route correctly and keep the menu highlighted), then removed from the
-        // visible submenu. They're reached by clicking into them from Reports.
-        add_submenu_page( self::SLUG_ROOT, 'Active Members',     'Active Members',     'manage_options', self::SLUG_MEMBERS,   [ 'MyNJILGA_Page_Members',   'render' ] );
-        add_submenu_page( self::SLUG_ROOT, 'Trustees',           'Trustees',           'manage_options', self::SLUG_TRUSTEES,  [ 'MyNJILGA_Page_Trustees',  'render' ] );
-        add_submenu_page( self::SLUG_ROOT, 'Companies',          'Companies',          'manage_options', self::SLUG_COMPANIES, [ 'MyNJILGA_Page_Companies', 'render' ] );
-        add_submenu_page( self::SLUG_ROOT, 'Membership by Firm', 'Membership by Firm', 'manage_options', self::SLUG_FIRMS,     [ 'MyNJILGA_Page_Firms',     'render' ] );
+        // Report detail pages: registered with an EMPTY parent slug. WordPress
+        // keeps them in $submenu[''] — a bucket it never renders — so they stay
+        // out of the menu while remaining fully routable via admin.php?page=…
+        // (reached by clicking into them from the Reports page). Using
+        // remove_submenu_page() instead breaks parent resolution and triggers a
+        // "not allowed to access this page" error, so do NOT do that.
+        foreach ( self::HIDDEN_PAGES as $slug => $page ) {
+            add_submenu_page( '', $page[0], $page[0], 'manage_options', $slug, [ $page[1], 'render' ] );
+        }
+    }
 
-        remove_submenu_page( self::SLUG_ROOT, self::SLUG_MEMBERS );
-        remove_submenu_page( self::SLUG_ROOT, self::SLUG_TRUSTEES );
-        remove_submenu_page( self::SLUG_ROOT, self::SLUG_COMPANIES );
-        remove_submenu_page( self::SLUG_ROOT, self::SLUG_FIRMS );
+    /**
+     * Keeps the top-level "My NJILGA" menu highlighted while viewing one of
+     * the hidden report pages. Hooked on `parent_file`.
+     */
+    public static function highlight_parent_menu( string $parent_file ): string {
+        global $plugin_page;
+        return isset( self::HIDDEN_PAGES[ (string) $plugin_page ] ) ? self::SLUG_ROOT : $parent_file;
+    }
+
+    /**
+     * Keeps the "Reports" submenu item highlighted while viewing one of the
+     * hidden report pages. Hooked on `submenu_file`.
+     */
+    public static function highlight_submenu( $submenu_file ) {
+        global $plugin_page;
+        return isset( self::HIDDEN_PAGES[ (string) $plugin_page ] ) ? self::SLUG_REPORTS : $submenu_file;
     }
 
     /**
