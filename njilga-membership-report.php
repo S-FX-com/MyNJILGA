@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, and Excel export — driven entirely from FluentCRM tags on the local install.
- * Version:     2.4.1
+ * Version:     2.5.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */

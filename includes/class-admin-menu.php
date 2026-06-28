@@ -30,6 +30,8 @@ class MyNJILGA_Admin_Menu {
     ];
 
     public static function register(): void {
+        // Position 3 places "My NJILGA" directly beneath Dashboard (position 2,
+        // with the first core separator at 4), so it's the first item under it.
         add_menu_page(
             'My NJILGA',
             'My NJILGA',
@@ -37,7 +39,7 @@ class MyNJILGA_Admin_Menu {
             self::SLUG_ROOT,
             [ 'MyNJILGA_Page_Dashboard', 'render' ],
             'dashicons-groups',
-            30
+            3
         );
 
         // Visible menu: Dashboard, Reports, Setup. The individual reports live
@@ -88,8 +90,10 @@ class MyNJILGA_Admin_Menu {
 
     /**
      * Renders the cross-report KPI dashboard (paid/unpaid members, firms with
-     * and without paid members, paid/unpaid trustees). Shown at the top of the
-     * Reports landing page and each individual report. No-op without FluentCRM.
+     * and without paid members, paid/unpaid trustees, exempt). Shown at the top
+     * of the Reports landing page and each individual report. Exempt contacts
+     * (Past Presidents / Senior Trustees) are tallied separately and never
+     * counted under Unpaid. No-op without FluentCRM.
      */
     public static function render_stats_panel(): void {
         if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
@@ -98,15 +102,47 @@ class MyNJILGA_Admin_Menu {
 
         $s = MyNJILGA_Members_Data::report_stats();
 
-        $tiles = [
+        self::render_stat_tiles( [
             [ 'Paid Members',             $s['paid_members'],       '#1d6f42' ],
             [ 'Unpaid Members',           $s['unpaid_members'],     '#d63638' ],
             [ 'Firms w/ Paid Members',    $s['firms_with_paid'],    '#1d6f42' ],
             [ 'Firms w/ No Paid Members', $s['firms_without_paid'], '#d63638' ],
             [ 'Paid Trustees',            $s['paid_trustees'],      '#1d6f42' ],
             [ 'Unpaid Trustees',          $s['unpaid_trustees'],    '#d63638' ],
-        ];
+            [ 'Exempt',                   $s['exempt'],             '#2271b1' ],
+        ] );
+    }
 
+    /**
+     * Membership by Firm overview: a focused four-tile KPI strip — Paid
+     * Members, Unpaid Members, Paid Trustees, and Exempt. Exempt counts
+     * Past Presidents and Senior Trustees, who are excluded from Unpaid.
+     * Shown at the top of the Membership by Firm report. No-op without
+     * FluentCRM.
+     */
+    public static function render_firm_overview_panel(): void {
+        if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
+            return;
+        }
+
+        $s = MyNJILGA_Members_Data::report_stats();
+
+        echo '<h2 style="margin:8px 0 4px">Overview</h2>';
+        self::render_stat_tiles( [
+            [ 'Paid Members',   $s['paid_members'],   '#1d6f42' ],
+            [ 'Unpaid Members', $s['unpaid_members'], '#d63638' ],
+            [ 'Paid Trustees',  $s['paid_trustees'],  '#1d6f42' ],
+            [ 'Exempt',         $s['exempt'],         '#2271b1' ],
+        ] );
+    }
+
+    /**
+     * Renders a responsive grid of KPI tiles. Each tile is [ label, count,
+     * accent-colour ].
+     *
+     * @param array<int,array{0:string,1:int,2:string}> $tiles
+     */
+    private static function render_stat_tiles( array $tiles ): void {
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:12px 0 24px">';
         foreach ( $tiles as $tile ) {
             printf(

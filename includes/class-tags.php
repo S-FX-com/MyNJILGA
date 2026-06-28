@@ -50,6 +50,17 @@ class MyNJILGA_Tags {
         self::SLUG_TRUSTEES,
     ];
 
+    /**
+     * Slugs that make a contact "exempt" from dues — Past Presidents and
+     * Senior Trustees. Exempt contacts are never counted as Unpaid in the
+     * report dashboards (they owe nothing, so a missing Dues Paid tag does
+     * not make them delinquent).
+     */
+    const EXEMPT_SLUGS = [
+        self::SLUG_PAST_PRESIDENT,
+        self::SLUG_SENIOR_TRUSTEE,
+    ];
+
     /** @var array<string,int|null>|null */
     private static $slug_to_id_cache = null;
 
@@ -132,6 +143,21 @@ class MyNJILGA_Tags {
      */
     public static function is_trustee( $subscriber ): bool {
         foreach ( self::TRUSTEE_SLUGS as $slug ) {
+            if ( self::has_tag( $subscriber, $slug ) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * True if the subscriber is exempt from dues — carries the Past President
+     * or Senior Trustee tag. Exempt contacts must not be reported as Unpaid.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $subscriber
+     */
+    public static function is_exempt( $subscriber ): bool {
+        foreach ( self::EXEMPT_SLUGS as $slug ) {
             if ( self::has_tag( $subscriber, $slug ) ) {
                 return true;
             }
