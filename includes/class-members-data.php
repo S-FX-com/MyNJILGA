@@ -256,21 +256,29 @@ class MyNJILGA_Members_Data {
      *   - firms_with_paid    companies with >=1 Dues-Paid contact
      *   - firms_without_paid companies with >=1 contact but 0 Dues-Paid
      *   - paid_trustees      trustee-family tag AND Dues Paid
-     *   - unpaid_trustees    trustee-family tag AND Unpaid Dues
+     *   - unpaid_trustees    trustee-family tag AND Unpaid Dues (excluding exempt)
+     *   - exempt             Past President or Senior Trustee (dues-exempt)
+     *
+     * Exempt contacts (Past Presidents / Senior Trustees) are never counted as
+     * Unpaid — they owe nothing — so they're excluded from both unpaid tallies.
      *
      * Unpaid counts read 0 until the "Unpaid Dues" tag exists and is applied.
      *
-     * @return array{paid_members:int,unpaid_members:int,firms_with_paid:int,firms_without_paid:int,paid_trustees:int,unpaid_trustees:int}
+     * @return array{paid_members:int,unpaid_members:int,firms_with_paid:int,firms_without_paid:int,paid_trustees:int,unpaid_trustees:int,exempt:int}
      */
     public static function report_stats(): array {
         $paid_members   = self::count_subscribers_with_tag( MyNJILGA_Tags::SLUG_DUES_PAID );
-        $unpaid_members = self::count_subscribers_with_tag( MyNJILGA_Tags::SLUG_UNPAID_DUES );
+        $unpaid_members = self::count_unpaid_excluding_exempt();
 
         $paid_trustees   = 0;
         $unpaid_trustees = 0;
+        $exempt          = 0;
         foreach ( self::get_trustees() as $t ) {
-            $paid_trustees   += $t['is_paid']   ? 1 : 0;
-            $unpaid_trustees += $t['is_unpaid'] ? 1 : 0;
+            $is_exempt        = in_array( $t['trustee_status'], [ 'Past President', 'Senior Trustee' ], true );
+            $paid_trustees   += $t['is_paid'] ? 1 : 0;
+            $exempt          += $is_exempt ? 1 : 0;
+            // Exempt trustees owe nothing, so never tally them as unpaid.
+            $unpaid_trustees += ( $t['is_unpaid'] && ! $is_exempt ) ? 1 : 0;
         }
 
         $firms_with_paid    = 0;
@@ -301,6 +309,7 @@ class MyNJILGA_Members_Data {
             'firms_without_paid' => $firms_without_paid,
             'paid_trustees'      => $paid_trustees,
             'unpaid_trustees'    => $unpaid_trustees,
+            'exempt'             => $exempt,
         ];
     }
 
@@ -320,6 +329,31 @@ class MyNJILGA_Members_Data {
         return (int) \FluentCrm\App\Models\Subscriber::filterByTags( [ $id ] )
             ->where( 'status', 'subscribed' )
             ->count();
+    }
+
+    /**
+     * Count subscribed contacts carrying the "Unpaid Dues" tag, minus anyone
+     * who is dues-exempt (Past President / Senior Trustee). Exempt contacts
+     * owe nothing, so they must never surface in the Unpaid tally even if a
+     * stale "Unpaid Dues" tag lingers on their record. Returns 0 when the tag
+     * doesn't exist on the install.
+     */
+    private static function count_unpaid_excluding_exempt(): int {
+        $id = MyNJILGA_Tags::id_for( MyNJILGA_Tags::SLUG_UNPAID_DUES );
+        if ( ! $id ) {
+            return 0;
+        }
+        $subs = \FluentCrm\App\Models\Subscriber::filterByTags( [ $id ] )
+            ->where( 'status', 'subscribed' )
+            ->get();
+
+        $count = 0;
+        foreach ( $subs as $sub ) {
+            if ( ! MyNJILGA_Tags::is_exempt( $sub ) ) {
+                $count++;
+            }
+        }
+        return $count;
     }
 
     /**

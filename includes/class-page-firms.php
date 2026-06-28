@@ -27,7 +27,7 @@ class MyNJILGA_Page_Firms {
         }
 
         MyNJILGA_Admin_Menu::render_back_to_reports();
-        MyNJILGA_Admin_Menu::render_stats_panel();
+        MyNJILGA_Admin_Menu::render_firm_overview_panel();
 
         $scope = ( ( $_GET['scope'] ?? '' ) === 'active' ) ? 'active' : 'all';
         self::render_scope_tabs( $scope );
