@@ -21,7 +21,7 @@ The plugin registers a top-level **My NJILGA** menu with six sub-pages:
 | Page | What it shows |
 |---|---|
 | **Dashboard** | Summary counts (paid members, trustees, companies with paid members), bucket distribution, and the Excel download. |
-| **Active Members** | Every contact carrying the **Dues Paid** tag, with their firm, trustee flag, and payment method. |
+| **Active Paid Members** | Every contact carrying the **Dues Paid** tag, with their firm, email, trustee flag, payment method, and a green **PAID** column. |
 | **Trustees** | Every contact carrying the **Trustees** tag, plus whether they've also paid dues. |
 | **Companies** | All FluentCRM Companies, grouped into **1 / 2–5 / 6+ Paid Members** buckets, with members listed underneath. |
 | **Membership by Firm** | Every FluentCRM Company with at least one attached contact, listed alphabetically as a bold heading, with its contacts (First/Last name, Email, Dues, Trustees, Past President, Payment) underneath. Exports to a formatted Excel `.xls`. |
@@ -74,13 +74,15 @@ Each list page has its own **Download CSV** button:
 
 | Page | CSV columns |
 |---|---|
-| Active Members | Member, Contact id, Firm, Trustee?, Payment Method |
+| Active Paid Members | First Name, Last Name, Email, Firm Name, Trustee, Payment Method, CRM ID |
 | Trustees | Trustee, Contact id, Firm, Dues Paid?, Payment Method |
 | Companies | Bucket, Company, Paid Members, Total Members, Member, Status (one row per member) |
 
 CSVs are UTF-8 with a BOM so accented firm names render correctly when opened directly in Excel. No PHP version or third-party library requirement — the export uses plain `fputcsv`.
 
-The **Membership by Firm** page instead offers an **Export to Excel** button that streams a formatted `.xls` (an HTML table served with the Excel MIME type). This preserves the bold firm headings and grouped layout that a flat CSV can't — still with no PhpSpreadsheet/third-party dependency.
+The **Membership by Firm** page instead offers an **Export to Excel** button that streams a formatted `.xls` (an HTML table served with the Excel MIME type). This preserves the bold firm headings and grouped layout that a flat CSV can't — still with no PhpSpreadsheet/third-party dependency. The Dues column is bold green for **Dues Paid** and bold red for **Unpaid Dues**.
+
+The **Reports** landing page offers a **Download Executive Summary (Excel)** button that streams a single formatted `.xls` combining every report — an Overview KPI section, Active Paid Members, Trustees, Companies, and Membership by Firm — using the same HTML-as-`.xls` approach, one section per report separated by a bold banner row.
 
 ---
 
@@ -100,7 +102,8 @@ my-njilga/
 │   ├── class-page-firms.php             ← Membership by Firm report
 │   ├── class-page-setup.php
 │   ├── class-report-csv.php             ← fputcsv-based per-report streamer
-│   └── class-report-xls.php             ← HTML-as-.xls formatted export
+│   ├── class-report-xls.php             ← HTML-as-.xls formatted export
+│   └── class-report-summary.php         ← Executive Summary — combines every report into one .xls
 ├── composer.json                        ← Declares the GitHub update checker
 └── README.md
 ```

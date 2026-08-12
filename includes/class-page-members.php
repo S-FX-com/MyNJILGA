@@ -1,6 +1,6 @@
 <?php
 /**
- * Active Members — contacts carrying the "Dues Paid" tag.
+ * Active Paid Members — contacts carrying the "Dues Paid" tag.
  */
 class MyNJILGA_Page_Members {
 
@@ -9,7 +9,7 @@ class MyNJILGA_Page_Members {
             wp_die( 'Access denied.' );
         }
 
-        echo '<div class="wrap"><h1>Active Members</h1>';
+        echo '<div class="wrap"><h1>Active Paid Members</h1>';
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
             echo '</div>';
@@ -29,23 +29,24 @@ class MyNJILGA_Page_Members {
 
         $rows = MyNJILGA_Members_Data::get_active_members();
 
-        printf( '<p style="color:#646970">%d member%s with the Dues Paid tag.</p>', count( $rows ), count( $rows ) === 1 ? '' : 's' );
+        printf( '<p style="color:#646970">%d active paid member%s.</p>', count( $rows ), count( $rows ) === 1 ? '' : 's' );
 
-        MyNJILGA_Admin_Menu::render_csv_button( 'members', 'Download Active Members CSV' );
+        MyNJILGA_Admin_Menu::render_csv_button( 'members', 'Download Active Paid Members CSV' );
 
         echo '<table class="widefat striped"><thead><tr>
-                <th>Member</th><th>Firm</th><th>Trustee</th><th>Payment Method</th>
+                <th>Member</th><th>Email</th><th>Firm</th><th>Trustee</th><th>Payment Method</th><th>Paid</th>
               </tr></thead><tbody>';
 
         if ( empty( $rows ) ) {
-            echo '<tr><td colspan="4" style="color:#999;font-style:italic">No paid members yet.</td></tr>';
+            echo '<tr><td colspan="6" style="color:#999;font-style:italic">No paid members yet.</td></tr>';
         }
 
         foreach ( $rows as $r ) {
             printf(
-                '<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                '<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><strong style="color:#1d6f42">PAID</strong></td></tr>',
                 esc_url( $r['member_url'] ),
                 esc_html( $r['member'] ),
+                esc_html( $r['email'] ),
                 esc_html( $r['firm'] ),
                 $r['trustee_status'] !== ''
                     ? '<strong style="color:#1d6f42">' . esc_html( $r['trustee_status'] ) . '</strong>'

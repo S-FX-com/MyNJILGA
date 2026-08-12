@@ -42,7 +42,7 @@ class MyNJILGA_Tags {
     /**
      * Slugs that qualify a contact as a trustee (any role). Used both for
      * the trustees report filter and for the boolean "Trustee?" column on
-     * the Active Members report.
+     * the Active Paid Members report.
      */
     const TRUSTEE_SLUGS = [
         self::SLUG_PAST_PRESIDENT,
@@ -226,6 +226,22 @@ class MyNJILGA_Tags {
         }
         if ( self::has_tag( $subscriber, self::SLUG_UNPAID_DUES ) ) {
             return 'Unpaid Dues';
+        }
+        return '';
+    }
+
+    /**
+     * Hex accent color for a dues_label() value — green for "Dues Paid",
+     * red for "Unpaid Dues", "" otherwise. Matches the green/red used for
+     * paid/unpaid status everywhere else in the plugin (KPI tiles, Trustees,
+     * Companies), so the Membership by Firm Dues column reads the same way.
+     */
+    public static function dues_color( string $dues_label ): string {
+        if ( $dues_label === 'Dues Paid' ) {
+            return '#1d6f42';
+        }
+        if ( $dues_label === 'Unpaid Dues' ) {
+            return '#d63638';
         }
         return '';
     }

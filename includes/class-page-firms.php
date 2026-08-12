@@ -76,7 +76,7 @@ class MyNJILGA_Page_Firms {
                     esc_html( $c['first_name'] ),
                     esc_html( $c['last_name'] ),
                     esc_html( $c['email'] ),
-                    self::cell( $c['dues'] ),
+                    self::dues_cell( $c['dues'] ),
                     self::cell( $c['trustees'] ),
                     self::cell( $c['past_president'] ),
                     self::cell( $c['payment'] )
@@ -123,5 +123,16 @@ class MyNJILGA_Page_Firms {
         return $value !== ''
             ? esc_html( $value )
             : '<span style="color:#bbb">—</span>';
+    }
+
+    /**
+     * Dues column: bold green for "Dues Paid", bold red for "Unpaid Dues",
+     * else the muted placeholder.
+     */
+    private static function dues_cell( string $dues ): string {
+        $color = MyNJILGA_Tags::dues_color( $dues );
+        return $color !== ''
+            ? '<strong style="color:' . esc_attr( $color ) . '">' . esc_html( $dues ) . '</strong>'
+            : self::cell( $dues );
     }
 }
