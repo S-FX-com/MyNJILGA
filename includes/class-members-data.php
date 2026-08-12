@@ -369,7 +369,7 @@ class MyNJILGA_Members_Data {
      *
      * @param \FluentCrm\App\Models\Subscriber $sub
      */
-    private static function display_name( $sub ): string {
+    public static function display_name( $sub ): string {
         $name = self::full_name( $sub );
         if ( $name !== '' ) {
             return $name;
