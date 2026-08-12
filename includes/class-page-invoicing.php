@@ -328,10 +328,13 @@ class MyNJILGA_Page_Invoicing {
 
         echo '<table class="widefat striped" style="margin-top:10px"><thead><tr><th>Member</th><th>Dues</th><th>Trustee Fee</th></tr></thead><tbody>';
         foreach ( $members as $m ) {
+            $duesCell = ! empty( $m['dues_exempt'] )
+                ? '<span style="color:#888">Exempt</span>'
+                : self::money_or_dash( (int) ( $m['tier_price_cents'] ?? 0 ) );
             printf(
                 '<tr><td>%s</td><td>%s</td><td>%s</td></tr>',
                 esc_html( (string) ( $m['name'] ?? '' ) ),
-                self::money_or_dash( (int) ( $m['tier_price_cents'] ?? 0 ) ),
+                $duesCell,
                 self::money_or_dash( (int) ( $m['trustee_fee_cents'] ?? 0 ) )
             );
         }

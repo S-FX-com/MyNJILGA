@@ -4,10 +4,18 @@
  * and persists it as a frozen draft snapshot in njilga_dues_invoices.
  *
  * Pricing tiers are computed fresh each cycle by headcount — no
- * persistent "this person is member #3" designation anywhere. For a firm
- * with N currently-attached contacts: 1st (alphabetical by last name,
+ * persistent "this person is member #3" designation anywhere. For a
+ * firm's paying (non-exempt) contacts: 1st (alphabetical by last name,
  * then first) = $125, 2nd-5th = $75 each, 6th+ = free. Trustee/Past
  * President assessment = $200 flat, additive, capped at one per person.
+ *
+ * Senior Trustees and Past Presidents are dues-exempt (confirmed with
+ * NJILGA): they owe $0 base membership dues but still owe the $200
+ * assessment when they qualify for it. They still count toward the
+ * firm's roster — they're sorted to the END of the billing order rather
+ * than excluded outright, so they never occupy the (paid) 1st-member
+ * slot, and every non-exempt member's own tier position is decided
+ * purely among the other non-exempt members. See sorted_members().
  */
 class MyNJILGA_Dues_Preview {
 
@@ -23,7 +31,7 @@ class MyNJILGA_Dues_Preview {
      * @return array<int,array{
      *   company_id:int, company_name:string, status:string,
      *   owner_contact_id:int, owner_name:string, owner_email:string,
-     *   roster:array<int,array{contact_id:int,name:string,tier_price_cents:int,trustee_fee_cents:int}>,
+     *   roster:array<int,array{contact_id:int,name:string,tier_price_cents:int,trustee_fee_cents:int,dues_exempt:bool}>,
      *   total_cents:int
      * }>
      */
@@ -58,11 +66,13 @@ class MyNJILGA_Dues_Preview {
             $members = self::sorted_members( $company );
             $roster  = [];
             foreach ( $members as $i => $contact ) {
+                $isExempt  = MyNJILGA_Tags::is_exempt( $contact );
                 $roster[] = [
                     'contact_id'        => (int) $contact->id,
                     'name'              => MyNJILGA_Members_Data::display_name( $contact ),
-                    'tier_price_cents'  => self::tier_for_position( $i ),
+                    'tier_price_cents'  => $isExempt ? 0 : self::tier_for_position( $i ),
                     'trustee_fee_cents' => self::contact_owes_trustee_fee( $contact ) ? self::TRUSTEE_FEE_CENTS : 0,
+                    'dues_exempt'       => $isExempt,
                 ];
             }
 
@@ -145,18 +155,11 @@ class MyNJILGA_Dues_Preview {
     }
 
     /**
-     * Who owes the $200 Trustee/Past President assessment.
-     *
-     * ASSUMPTION TO CONFIRM WITH NJILGA: currently anyone carrying ANY
-     * trustee-family tag — Trustees, Senior Trustee, or Past President,
-     * i.e. MyNJILGA_Tags::is_trustee() — owes the fee. The invoicing spec
-     * flagged this explicitly as unconfirmed ("does Senior Trustee count?
-     * does an *inactive* Past President still owe it?") and this plugin's
-     * tag model has no active/inactive split for Past President to encode
-     * a "no" answer even if that turns out to be the real policy — only a
-     * single `past-president` tag exists (see MyNJILGA_Tags::DEFINITIONS).
-     * If NJILGA's actual policy differs, change this one method — nothing
-     * else in the invoicing flow needs to know how this is decided.
+     * Who owes the $200 Trustee/Past President assessment — confirmed
+     * with NJILGA: anyone carrying any trustee-family tag (Trustees,
+     * Senior Trustee, or Past President — i.e. MyNJILGA_Tags::is_trustee()).
+     * This is additive on top of whatever base dues they owe (which is
+     * $0 for the two exempt roles — see contact-level dues_exempt above).
      *
      * @param \FluentCrm\App\Models\Subscriber $contact
      */
@@ -165,9 +168,16 @@ class MyNJILGA_Dues_Preview {
     }
 
     /**
-     * Firm roster sorted alphabetically by last name, then first name —
-     * matches the sort used on the Membership by Firm report, and is the
-     * deterministic rule that decides which name gets which tier price.
+     * Firm roster ordered for billing: non-exempt (paying) members first,
+     * sorted alphabetically by last name then first name — same sort
+     * used on the Membership by Firm report, and the deterministic rule
+     * that decides which paying name gets the 1st-member vs. 2nd-5th
+     * price. Dues-exempt members (Senior Trustee / Past President,
+     * MyNJILGA_Tags::is_exempt()) are sorted among themselves and
+     * appended at the end — confirmed with NJILGA: they still count
+     * toward the roster, but must never land in the (paid) 1st-member
+     * slot, and their presence must never bump a paying member into a
+     * more expensive tier than they'd otherwise get.
      *
      * @param \FluentCrm\App\Models\Company $company
      * @return array<int,\FluentCrm\App\Models\Subscriber>
@@ -182,11 +192,17 @@ class MyNJILGA_Dues_Preview {
             $subs = iterator_to_array( $subs );
         }
 
-        usort( $subs, static function ( $a, $b ) {
+        $byName = static function ( $a, $b ) {
             $cmp = strcasecmp( (string) ( $a->last_name ?? '' ), (string) ( $b->last_name ?? '' ) );
             return $cmp !== 0 ? $cmp : strcasecmp( (string) ( $a->first_name ?? '' ), (string) ( $b->first_name ?? '' ) );
-        } );
+        };
 
-        return array_values( $subs );
+        $paying = array_values( array_filter( $subs, static function ( $c ) { return ! MyNJILGA_Tags::is_exempt( $c ); } ) );
+        $exempt = array_values( array_filter( $subs, static function ( $c ) { return MyNJILGA_Tags::is_exempt( $c ); } ) );
+
+        usort( $paying, $byName );
+        usort( $exempt, $byName );
+
+        return array_merge( $paying, $exempt );
     }
 }
