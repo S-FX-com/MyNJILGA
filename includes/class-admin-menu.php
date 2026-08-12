@@ -23,7 +23,7 @@ class MyNJILGA_Admin_Menu {
      * @var array<string,array{0:string,1:string}>  slug => [ title, page class ]
      */
     const HIDDEN_PAGES = [
-        self::SLUG_MEMBERS   => [ 'Active Members',     'MyNJILGA_Page_Members'   ],
+        self::SLUG_MEMBERS   => [ 'Active Paid Members', 'MyNJILGA_Page_Members'   ],
         self::SLUG_TRUSTEES  => [ 'Trustees',           'MyNJILGA_Page_Trustees'  ],
         self::SLUG_COMPANIES => [ 'Companies',          'MyNJILGA_Page_Companies' ],
         self::SLUG_FIRMS     => [ 'Membership by Firm', 'MyNJILGA_Page_Firms'     ],
@@ -211,6 +211,24 @@ class MyNJILGA_Admin_Menu {
             esc_url( admin_url( 'admin-post.php' ) ),
             esc_attr( $scope === 'active' ? 'active' : 'all' ),
             wp_nonce_field( 'my_njilga_export_firms', '_wpnonce', true, false ),
+            esc_html( $label )
+        );
+    }
+
+    /**
+     * Emit the "Download Executive Summary" form — a single formatted
+     * .xls combining every report (Overview, Active Paid Members,
+     * Trustees, Companies, Membership by Firm).
+     */
+    public static function render_summary_export_button( string $label = 'Download Executive Summary (Excel)' ): void {
+        printf(
+            '<form method="post" action="%s" style="margin:0">
+                <input type="hidden" name="action" value="my_njilga_export_summary">
+                %s
+                <button type="submit" class="button button-primary">%s</button>
+             </form>',
+            esc_url( admin_url( 'admin-post.php' ) ),
+            wp_nonce_field( 'my_njilga_export_summary', '_wpnonce', true, false ),
             esc_html( $label )
         );
     }

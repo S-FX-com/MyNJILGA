@@ -21,10 +21,18 @@ class MyNJILGA_Page_Reports {
 
         MyNJILGA_Admin_Menu::render_stats_panel();
 
+        echo '<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:16px 20px;margin:0 0 20px;background:#fff;border:1px solid #c3c4c7;border-left:4px solid #2271b1;border-radius:6px">
+                <div>
+                    <div style="font-size:15px;font-weight:600;margin-bottom:2px">Executive Summary</div>
+                    <div style="color:#646970;font-size:13px">One Excel file combining every report below — overview KPIs, active paid members, trustees, companies, and membership by firm.</div>
+                </div>';
+        MyNJILGA_Admin_Menu::render_summary_export_button();
+        echo '</div>';
+
         $cards = [
             [
-                'title' => 'Active Members',
-                'desc'  => 'Every contact carrying the Dues Paid tag, with firm, trustee role, and payment method.',
+                'title' => 'Active Paid Members',
+                'desc'  => 'Every contact carrying the Dues Paid tag, with firm, email, trustee role, and payment method.',
                 'url'   => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_MEMBERS ),
             ],
             [

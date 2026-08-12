@@ -22,7 +22,7 @@ class MyNJILGA_Page_Dashboard {
         ?>
         <div style="display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:16px;margin:16px 0 24px">
             <?php
-            self::stat_card( 'Paid / Active Members', $s['paid'],     MyNJILGA_Admin_Menu::SLUG_MEMBERS );
+            self::stat_card( 'Active Paid Members', $s['paid'],     MyNJILGA_Admin_Menu::SLUG_MEMBERS );
             self::stat_card( 'Trustees',              $s['trustees'], MyNJILGA_Admin_Menu::SLUG_TRUSTEES );
             self::stat_card( 'Companies with Paid Members', $s['companies_with_paid'], MyNJILGA_Admin_Menu::SLUG_COMPANIES );
             ?>
@@ -39,7 +39,7 @@ class MyNJILGA_Page_Dashboard {
         <h2 style="margin-top:24px">Exports</h2>
         <p style="color:#646970">Download each report as a CSV from its page:</p>
         <p style="display:flex;gap:8px;flex-wrap:wrap">
-            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_MEMBERS ) ); ?>">Active Members →</a>
+            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_MEMBERS ) ); ?>">Active Paid Members →</a>
             <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_TRUSTEES ) ); ?>">Trustees →</a>
             <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_COMPANIES ) ); ?>">Companies →</a>
             <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_FIRMS ) ); ?>">Membership by Firm →</a>
