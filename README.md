@@ -16,15 +16,17 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for member stat
 
 ## Menu
 
-The plugin registers a top-level **My NJILGA** menu with six sub-pages:
+The plugin registers a top-level **My NJILGA** menu:
 
 | Page | What it shows |
 |---|---|
 | **Dashboard** | Summary counts (paid members, trustees, companies with paid members), bucket distribution, and the Excel download. |
+| **Reports** | Landing page for every report below, plus the Executive Summary export. |
 | **Active Paid Members** | Every contact carrying the **Dues Paid** tag, with their firm, email, trustee flag, payment method, and a green **PAID** column. |
 | **Trustees** | Every contact carrying the **Trustees** tag, plus whether they've also paid dues. |
 | **Companies** | All FluentCRM Companies, grouped into **1 / 2–5 / 6+ Paid Members** buckets, with members listed underneath. |
 | **Membership by Firm** | Every FluentCRM Company with at least one attached contact, listed alphabetically as a bold heading, with its contacts (First/Last name, Email, Dues, Trustees, Past President, Payment) underneath. Exports to a formatted Excel `.xls`. |
+| **Invoicing** | Annual dues invoicing by firm — see [Dues Invoicing by Firm](#dues-invoicing-by-firm) below. |
 | **Setup** | Detects whether the required tags exist and offers a one-click button to create any that are missing. |
 
 ---
@@ -86,6 +88,24 @@ The **Reports** landing page offers a **Download Executive Summary (Excel)** but
 
 ---
 
+## Dues Invoicing by Firm
+
+An annual, admin-triggered batch process (**My NJILGA → Invoicing**) that reads the FluentCRM Company roster, computes what each firm owes, and creates [FluentCart](https://fluentcart.com/) orders (invoices) for review and manual send. No JS, no build step — same server-rendered PHP forms as the rest of the plugin; the per-firm line-item breakdown uses a native `<details>`/`<summary>` disclosure instead of a script.
+
+**Flow:** Generate Preview → Review & Approve → Create Invoices (FluentCart orders) → Send (email + a FluentCRM Company Note) → Paid (automatic, via FluentCart's `fluent_cart/order_paid_done` hook) → end-of-year Downgrade Sweep (manual button) for anyone who never paid.
+
+**Pricing** (computed fresh each cycle by headcount, no persistent "member #3" designation): 1st *paying* member per firm (alphabetical by last name, then first) = $125, 2nd–5th = $75 each, 6th+ = free. Trustees/Senior Trustees/Past Presidents additionally owe a flat $200 assessment, capped at one per person.
+
+**Senior Trustees and Past Presidents are dues-exempt** (confirmed with NJILGA): they owe $0 base membership dues but still owe the $200 assessment. They still count toward the firm's roster, but are always sorted to the *end* of the billing order — never occupying the paid 1st-member slot — so a firm's actually-paying members are priced 1st/2nd-5th purely among themselves, unaffected by how many exempt members are also on the roster. (A firm with one exempt Past President and one regular associate bills the associate the full $125 1st-member price, not $75 — the exempt member doesn't silently "use up" the cheaper slot.) Plain Trustees (not Senior/Past President) are not dues-exempt — they pay full tier dues plus the $200 assessment.
+
+**Frozen snapshot:** generating a firm's invoice freezes its roster and pricing into `{$wpdb->prefix}njilga_dues_invoices` (`includes/invoicing/class-dues-invoice-table.php`). Every later step — the FluentCart order, the payment webhook, the downgrade sweep, the Company Note — reads that frozen snapshot, never a fresh Company query, so a firm's roster can't drift between "invoiced" and "paid." Re-running "Generate Preview" only ever touches rows still in `draft`/`excluded`; anything already approved or further along is left completely untouched.
+
+**On payment**, every roster member gets a year-specific `Dues Paid {year}` tag (a permanent historical record) **and** the plugin's evergreen `dues-paid` tag (removing `unpaid-dues` if present) — the second part is a deliberate addition beyond a literal reading of the original spec, so the existing reports above (Active Paid Members, Membership by Firm, the Executive Summary) keep reflecting reality instead of only ever seeing the year-suffixed tag. The **Downgrade Sweep** does the mirror image (`Unpaid Dues {year}` + evergreen `unpaid-dues`, `professional` role stripped). The `professional` WordPress role itself is only touched where a contact has a linked WP user — many won't, and that's skipped cleanly rather than erroring.
+
+**One thing to confirm before relying on this for real billing:** the exact FluentCart order-creation call. `includes/invoicing/class-invoice-creator.php` (Customer find-or-create, the custom line-item shape, `OrderResource::updatedPlaceOrder()`) was reconstructed from FluentCart's public developer docs (dev.fluentcart.com), since this plugin doesn't ship with FluentCart's source. It's a best-effort reconstruction, not a verified integration — run one real test invoice against a throwaway test firm on staging before using "Create Invoices" for actual dues billing. Everything upstream of that call (the DB table, the pricing math, the exemption/trustee-fee rules, the admin dashboard) only depends on FluentCRM, which this plugin already talks to directly and confidently elsewhere, and is smoke-tested.
+
+---
+
 ## File Structure
 
 ```
@@ -100,10 +120,19 @@ my-njilga/
 │   ├── class-page-trustees.php
 │   ├── class-page-companies.php
 │   ├── class-page-firms.php             ← Membership by Firm report
+│   ├── class-page-invoicing.php         ← Invoicing dashboard (admin-post handlers + rendering)
 │   ├── class-page-setup.php
 │   ├── class-report-csv.php             ← fputcsv-based per-report streamer
 │   ├── class-report-xls.php             ← HTML-as-.xls formatted export
-│   └── class-report-summary.php         ← Executive Summary — combines every report into one .xls
+│   ├── class-report-summary.php         ← Executive Summary — combines every report into one .xls
+│   └── invoicing/                       ← Dues Invoicing by Firm (see section above)
+│       ├── class-dues-invoice-table.php ← njilga_dues_invoices schema + CRUD
+│       ├── class-dues-preview.php       ← Company roster + tier/trustee pricing math
+│       ├── class-invoice-creator.php    ← FluentCart order creation
+│       ├── class-invoice-sender.php     ← Email + Company Note on send
+│       ├── class-payment-listener.php   ← fluent_cart/order_paid_done handler
+│       ├── class-downgrade-sweep.php    ← Manual end-of-year downgrade
+│       └── class-invoicing-notes.php    ← Shared FluentCRM Company Note helper
 ├── composer.json                        ← Declares the GitHub update checker
 └── README.md
 ```

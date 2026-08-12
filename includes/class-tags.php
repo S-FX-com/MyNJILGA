@@ -297,4 +297,71 @@ class MyNJILGA_Tags {
 
         return is_array( $result ) ? ( $result[0] ?? null ) : null;
     }
+
+    /**
+     * Finds (or creates) a FluentCRM tag by exact title, for tags that
+     * aren't part of the fixed DEFINITIONS list above — namely the
+     * invoicing flow's year-specific "Dues Paid 2027" / "Unpaid Dues
+     * 2027" tags, stamped on payment and on the end-of-year downgrade
+     * sweep. Unlike id_for(), this can create the tag on demand (via the
+     * same FluentCrmApi bulk-import used by create()), since these tags
+     * don't exist until the first time a given year is actually invoiced.
+     */
+    public static function get_or_create_by_title( string $title ): ?int {
+        if ( ! class_exists( '\\FluentCrm\\App\\Models\\Tag' ) ) {
+            return null;
+        }
+
+        $slug = sanitize_title( $title );
+        $tag  = \FluentCrm\App\Models\Tag::where( 'slug', $slug )->first();
+        if ( ! $tag ) {
+            $tag = \FluentCrm\App\Models\Tag::where( 'title', $title )->first();
+        }
+        if ( $tag ) {
+            return (int) $tag->id;
+        }
+
+        if ( ! function_exists( 'FluentCrmApi' ) ) {
+            return null;
+        }
+        $result = FluentCrmApi( 'tags' )->importBulk( [ [ 'title' => $title, 'slug' => $slug ] ] );
+        $row    = is_array( $result ) ? ( $result[0] ?? null ) : null;
+        return $row ? (int) $row->id : null;
+    }
+
+    /**
+     * Attach one of the plugin's known tags (by SLUG_* constant) to a
+     * subscriber, creating the tag first if it doesn't exist yet. Used by
+     * the invoicing flow to keep the evergreen `dues-paid` / `unpaid-dues`
+     * tags — the ones every report in this plugin already reads — in sync
+     * whenever a firm invoice is paid or downgraded, alongside the
+     * year-specific tag that records *which* year it was paid for.
+     */
+    public static function attach( $subscriber, string $slug ): void {
+        if ( ! $subscriber ) {
+            return;
+        }
+        $id = self::id_for( $slug );
+        if ( ! $id ) {
+            $tag = self::create( $slug );
+            $id  = $tag ? (int) $tag->id : null;
+        }
+        if ( $id ) {
+            $subscriber->attachTags( [ $id ] );
+        }
+    }
+
+    /**
+     * Detach one of the plugin's known tags (by SLUG_* constant) from a
+     * subscriber. No-op if the tag doesn't exist on the install.
+     */
+    public static function detach( $subscriber, string $slug ): void {
+        if ( ! $subscriber ) {
+            return;
+        }
+        $id = self::id_for( $slug );
+        if ( $id ) {
+            $subscriber->detachTags( [ $id ] );
+        }
+    }
 }

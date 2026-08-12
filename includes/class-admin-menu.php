@@ -14,6 +14,7 @@ class MyNJILGA_Admin_Menu {
     const SLUG_TRUSTEES   = 'my-njilga-trustees';
     const SLUG_COMPANIES  = 'my-njilga-companies';
     const SLUG_FIRMS      = 'my-njilga-firms';
+    const SLUG_INVOICING  = 'my-njilga-invoicing';
     const SLUG_SETUP      = 'my-njilga-setup';
 
     /**
@@ -42,11 +43,14 @@ class MyNJILGA_Admin_Menu {
             3
         );
 
-        // Visible menu: Dashboard, Reports, Setup. The individual reports live
-        // behind the Reports landing page rather than cluttering the menu.
-        add_submenu_page( self::SLUG_ROOT, 'Dashboard', 'Dashboard', 'manage_options', self::SLUG_ROOT,    [ 'MyNJILGA_Page_Dashboard', 'render' ] );
-        add_submenu_page( self::SLUG_ROOT, 'Reports',   'Reports',   'manage_options', self::SLUG_REPORTS, [ 'MyNJILGA_Page_Reports',   'render' ] );
-        add_submenu_page( self::SLUG_ROOT, 'Setup',     'Setup',     'manage_options', self::SLUG_SETUP,   [ 'MyNJILGA_Page_Setup',     'render' ] );
+        // Visible menu: Dashboard, Reports, Invoicing, Setup. The individual
+        // reports live behind the Reports landing page rather than
+        // cluttering the menu; Invoicing is its own active workflow tool,
+        // so — unlike the reports — it stays visible in the menu.
+        add_submenu_page( self::SLUG_ROOT, 'Dashboard', 'Dashboard', 'manage_options', self::SLUG_ROOT,      [ 'MyNJILGA_Page_Dashboard',  'render' ] );
+        add_submenu_page( self::SLUG_ROOT, 'Reports',   'Reports',   'manage_options', self::SLUG_REPORTS,   [ 'MyNJILGA_Page_Reports',    'render' ] );
+        add_submenu_page( self::SLUG_ROOT, 'Invoicing', 'Invoicing', 'manage_options', self::SLUG_INVOICING, [ 'MyNJILGA_Page_Invoicing',  'render' ] );
+        add_submenu_page( self::SLUG_ROOT, 'Setup',     'Setup',     'manage_options', self::SLUG_SETUP,     [ 'MyNJILGA_Page_Setup',      'render' ] );
 
         // Report detail pages: registered with an EMPTY parent slug. WordPress
         // keeps them in $submenu[''] — a bucket it never renders — so they stay
@@ -138,11 +142,12 @@ class MyNJILGA_Admin_Menu {
 
     /**
      * Renders a responsive grid of KPI tiles. Each tile is [ label, count,
-     * accent-colour ].
+     * accent-colour ]. Public so other pages (e.g. Invoicing's per-status
+     * counts) can reuse the same tile styling instead of reinventing it.
      *
      * @param array<int,array{0:string,1:int,2:string}> $tiles
      */
-    private static function render_stat_tiles( array $tiles ): void {
+    public static function render_stat_tiles( array $tiles ): void {
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:12px 0 24px">';
         foreach ( $tiles as $tile ) {
             printf(

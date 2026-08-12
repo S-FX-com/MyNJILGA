@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, and Excel export — driven entirely from FluentCRM tags on the local install.
- * Version:     2.6.0
+ * Version:     2.7.1
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -51,11 +51,33 @@ require_once NJILGA_REPORT_DIR . 'includes/class-page-companies.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-firms.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-setup.php';
 
+// Dues Invoicing by Firm — annual, admin-triggered batch invoicing against
+// FluentCart. See includes/invoicing/ for the full flow (preview → approve
+// → create → send → paid webhook → downgrade sweep).
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-invoice-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-creator.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
+
 add_action( 'admin_menu', [ 'MyNJILGA_Admin_Menu', 'register' ] );
 
 // Keep My NJILGA → Reports highlighted while viewing a hidden report page.
 add_filter( 'parent_file',  [ 'MyNJILGA_Admin_Menu', 'highlight_parent_menu' ] );
 add_filter( 'submenu_file', [ 'MyNJILGA_Admin_Menu', 'highlight_submenu' ] );
+
+// njilga_dues_invoices table: created on fresh activation, AND re-checked
+// on every admin_init. WordPress only fires register_activation_hook on a
+// brand new activation — an already-active site picking up this table via
+// an auto-update would never see it created without the admin_init check.
+register_activation_hook( __FILE__, [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
+
+// Dues Invoicing: FluentCart's own "order paid" hook cascades tags/role.
+MyNJILGA_Payment_Listener::register();
 
 // Setup page: create a missing tag via the FluentCRM Tags API.
 add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_create_tag' ] );
@@ -80,3 +102,10 @@ add_action( 'admin_post_my_njilga_export_firms', [ 'MyNJILGA_Report_Xls', 'handl
 
 // Executive Summary — formatted Excel (.xls) export combining every report.
 add_action( 'admin_post_my_njilga_export_summary', [ 'MyNJILGA_Report_Summary', 'handle' ] );
+
+// Dues Invoicing by Firm — preview/approve/create/send/downgrade actions.
+add_action( 'admin_post_my_njilga_dues_preview',   [ 'MyNJILGA_Page_Invoicing', 'handle_preview' ] );
+add_action( 'admin_post_my_njilga_dues_approve',   [ 'MyNJILGA_Page_Invoicing', 'handle_approve' ] );
+add_action( 'admin_post_my_njilga_dues_create',    [ 'MyNJILGA_Page_Invoicing', 'handle_create' ] );
+add_action( 'admin_post_my_njilga_dues_send',      [ 'MyNJILGA_Page_Invoicing', 'handle_send' ] );
+add_action( 'admin_post_my_njilga_dues_downgrade', [ 'MyNJILGA_Page_Invoicing', 'handle_downgrade' ] );
