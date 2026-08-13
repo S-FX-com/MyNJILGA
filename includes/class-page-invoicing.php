@@ -300,14 +300,22 @@ class MyNJILGA_Page_Invoicing {
             : '';
 
         if ( count( $members ) <= 1 ) {
+            $solo   = $members[0] ?? [];
+            $status = '';
+            if ( ! empty( $solo['inactive'] ) ) {
+                $status = ' <span style="color:#888;font-size:12px">(Inactive — not billed)</span>';
+            } elseif ( ! empty( $solo['dues_exempt'] ) ) {
+                $status = ' <span style="color:#888;font-size:12px">(Dues exempt)</span>';
+            }
             printf(
                 '<div style="padding:10px 14px;border:1px solid #dcdcde;border-radius:4px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
-                    <span>%s<strong>%s</strong>%s</span>
+                    <span>%s<strong>%s</strong>%s%s</span>
                     <strong>$%s</strong>
                  </div>',
                 $checkbox,
                 esc_html( $name ),
                 $owner !== '' ? ' <span style="color:#888;font-size:12px">(Owner: ' . esc_html( $owner ) . ')</span>' : '',
+                $status,
                 $total
             );
             return;
@@ -326,8 +334,15 @@ class MyNJILGA_Page_Invoicing {
             $total
         );
 
-        echo '<table class="widefat striped" style="margin-top:10px"><thead><tr><th>Member</th><th>Dues</th><th>Trustee Fee</th></tr></thead><tbody>';
+        echo '<table class="widefat striped" style="margin-top:10px"><thead><tr><th>Member</th><th>Dues</th><th>Trustee Dinner Fee</th></tr></thead><tbody>';
         foreach ( $members as $m ) {
+            if ( ! empty( $m['inactive'] ) ) {
+                printf(
+                    '<tr><td>%s</td><td colspan="2" style="color:#888">Inactive — not billed</td></tr>',
+                    esc_html( (string) ( $m['name'] ?? '' ) )
+                );
+                continue;
+            }
             $duesCell = ! empty( $m['dues_exempt'] )
                 ? '<span style="color:#888">Exempt</span>'
                 : self::money_or_dash( (int) ( $m['tier_price_cents'] ?? 0 ) );

@@ -131,12 +131,14 @@ class MyNJILGA_Invoice_Creator {
 
     /**
      * One custom (non-catalog) line item per fee — dues tier and, when
-     * owed, the trustee/past-president assessment — so the printed
-     * invoice reads per-person, per-fee, e.g.:
-     *   "Jane Doe — 2027 Membership Dues"                    $125
-     *   "John Smith — 2027 Membership Dues"                  $75
-     *   "John Smith — Trustee/Past President Assessment"     $200
-     * Members whose tier price is $0 (6th+) get no dues line at all.
+     * owed, the Trustee Dinner Fee — so the printed invoice reads
+     * per-person, per-fee, e.g.:
+     *   "Jane Doe — 2027 Membership Dues"      $125
+     *   "John Smith — 2027 Membership Dues"    $75
+     *   "John Smith — Trustee Dinner Fee"      $200
+     * Members whose tier price is $0 (6th+, dues-exempt, or inactive) get
+     * no dues line; members who don't owe the fee (not an active
+     * Officer/Trustee/Senior Trustee/Past President) get no fee line.
      *
      * @param array<int,array{contact_id:int,name:string,tier_price_cents:int,trustee_fee_cents:int}> $members
      * @return array<int,array<string,mixed>>
@@ -153,7 +155,7 @@ class MyNJILGA_Invoice_Creator {
             }
             if ( $member['trustee_fee_cents'] > 0 ) {
                 $items[] = self::custom_line_item(
-                    $member['name'] . ' — Trustee/Past President Assessment',
+                    $member['name'] . ' — Trustee Dinner Fee',
                     $member['trustee_fee_cents']
                 );
             }

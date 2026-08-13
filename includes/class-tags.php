@@ -15,6 +15,8 @@
  *   - past-president  "Past President"   — past president (rolls up under Trustees)
  *   - paid-by-check   "Paid by Check"    — payment method override
  *   - paid-by-invoice "Paid by Invoice"  — payment method override
+ *   - officer         "Officer"          — active officer (Dues Invoicing fee eligibility only)
+ *   - inactive        "Inactive"         — not currently billed at all (Dues Invoicing only)
  */
 class MyNJILGA_Tags {
 
@@ -25,6 +27,8 @@ class MyNJILGA_Tags {
     const SLUG_PAST_PRESIDENT  = 'past-president';
     const SLUG_PAID_BY_CHECK   = 'paid-by-check';
     const SLUG_PAID_BY_INVOICE = 'paid-by-invoice';
+    const SLUG_OFFICER         = 'officer';
+    const SLUG_INACTIVE        = 'inactive';
 
     /**
      * @var array<string,array{slug:string,title:string,required:bool}>
@@ -37,12 +41,17 @@ class MyNJILGA_Tags {
         self::SLUG_PAST_PRESIDENT  => [ 'slug' => self::SLUG_PAST_PRESIDENT,  'title' => 'Past President',  'required' => false ],
         self::SLUG_PAID_BY_CHECK   => [ 'slug' => self::SLUG_PAID_BY_CHECK,   'title' => 'Paid by Check',   'required' => false ],
         self::SLUG_PAID_BY_INVOICE => [ 'slug' => self::SLUG_PAID_BY_INVOICE, 'title' => 'Paid by Invoice', 'required' => false ],
+        self::SLUG_OFFICER         => [ 'slug' => self::SLUG_OFFICER,         'title' => 'Officer',         'required' => false ],
+        self::SLUG_INACTIVE        => [ 'slug' => self::SLUG_INACTIVE,        'title' => 'Inactive',        'required' => false ],
     ];
 
     /**
      * Slugs that qualify a contact as a trustee (any role). Used both for
      * the trustees report filter and for the boolean "Trustee?" column on
-     * the Active Paid Members report.
+     * the Active Paid Members report. Does NOT include Officer — that tag
+     * only matters to Dues Invoicing's fee eligibility (FEE_ELIGIBLE_SLUGS
+     * below), not to this plugin's existing Trustees report, which
+     * predates it and was never asked to include Officers.
      */
     const TRUSTEE_SLUGS = [
         self::SLUG_PAST_PRESIDENT,
@@ -54,11 +63,27 @@ class MyNJILGA_Tags {
      * Slugs that make a contact "exempt" from dues — Past Presidents and
      * Senior Trustees. Exempt contacts are never counted as Unpaid in the
      * report dashboards (they owe nothing, so a missing Dues Paid tag does
-     * not make them delinquent).
+     * not make them delinquent). Also drives Dues Invoicing's base-dues
+     * exemption (confirmed: unconditional — exempt regardless of active/
+     * inactive status; only the trustee fee cares about Inactive).
      */
     const EXEMPT_SLUGS = [
         self::SLUG_PAST_PRESIDENT,
         self::SLUG_SENIOR_TRUSTEE,
+    ];
+
+    /**
+     * Slugs that owe Dues Invoicing's $200 Trustee Dinner Fee when the
+     * contact is active (not tagged Inactive) — Officer, Trustee, Senior
+     * Trustee, Past President. Deliberately separate from TRUSTEE_SLUGS:
+     * Officer is fee-eligible but was never asked to join the Trustees
+     * report's population.
+     */
+    const FEE_ELIGIBLE_SLUGS = [
+        self::SLUG_OFFICER,
+        self::SLUG_TRUSTEES,
+        self::SLUG_SENIOR_TRUSTEE,
+        self::SLUG_PAST_PRESIDENT,
     ];
 
     /** @var array<string,int|null>|null */
@@ -158,6 +183,39 @@ class MyNJILGA_Tags {
      */
     public static function is_exempt( $subscriber ): bool {
         foreach ( self::EXEMPT_SLUGS as $slug ) {
+            if ( self::has_tag( $subscriber, $slug ) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * True if the subscriber carries the "Inactive" tag — Dues Invoicing
+     * treats this as an unconditional override: not billed at all this
+     * cycle (no base dues, no trustee fee), regardless of any other role
+     * tags carried.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $subscriber
+     */
+    public static function is_inactive( $subscriber ): bool {
+        return self::has_tag( $subscriber, self::SLUG_INACTIVE );
+    }
+
+    /**
+     * True if the subscriber holds a role that owes Dues Invoicing's $200
+     * Trustee Dinner Fee (Officer, Trustee, Senior Trustee, or Past
+     * President) AND isn't Inactive. Inactive is checked here (rather
+     * than left to callers) so nothing can accidentally charge the fee to
+     * an inactive contact by forgetting the exclusion.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $subscriber
+     */
+    public static function owes_trustee_fee( $subscriber ): bool {
+        if ( self::is_inactive( $subscriber ) ) {
+            return false;
+        }
+        foreach ( self::FEE_ELIGIBLE_SLUGS as $slug ) {
             if ( self::has_tag( $subscriber, $slug ) ) {
                 return true;
             }
