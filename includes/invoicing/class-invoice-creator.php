@@ -7,17 +7,33 @@
  * service (this plugin lives on the same WordPress install, so there's
  * no HTTP round-trip to itself).
  *
- * CONFIRM AGAINST THE LIVE SITE BEFORE FIRST REAL USE: the FluentCart
- * classes/methods below were reconstructed from https://dev.fluentcart.com's
- * public developer docs (the Customer/Order/OrderItem model field lists,
- * the Cart::addByCustom() custom-line-item shape, and the invoicing
- * spec's own OrderResource::updatedPlaceOrder() call) — this plugin
- * doesn't ship with FluentCart's source, so none of this could be
- * verified against the actual live implementation the way the rest of
- * this plugin's FluentCRM calls could be (those were checked against
- * patterns already proven elsewhere in this codebase). Run one real test
- * invoice (a throwaway test firm) on staging before relying on this for
- * actual dues billing.
+ * Every FluentCart call below was verified against FluentCart 1.6.3's
+ * actual source, not just its public docs:
+ *   - OrderResource::updatedPlaceOrder($data, $params = []) exists at
+ *     api/Resource/OrderResource.php and is what FluentCart's own admin
+ *     "create order" controller calls.
+ *   - PaymentHelper::getCustomPaymentLink($orderUuid) exists at
+ *     app/Services/Payments/PaymentHelper.php — the same call FluentCart's
+ *     own due/overdue reminder emails use to link an unpaid order.
+ *   - fct_customers really is keyed by `email` and accepts
+ *     first_name/last_name/contact_id as fillable.
+ *
+ * Three things about updatedPlaceOrder() are worth knowing, because they
+ * are not obvious from the call site:
+ *   1. It hardcodes the `offline_payment` gateway, whose handler throws
+ *      "Offline payment is not activated" when that payment method is
+ *      disabled — hence offline_gateway_active() below.
+ *   2. It derives the order's own `type`, `status` and `payment_status`
+ *      internally (AdminOrderProcessor::prepareOrderData() → on-hold +
+ *      payment pending, which is exactly what an unpaid invoice should
+ *      be). The keys we pass for those are accepted but ignored; the ones
+ *      that actually matter are `customer_id` and `order_items`.
+ *   3. Money is in integer cents throughout, matching the cents stored on
+ *      njilga_dues_invoices — no conversion needed in either direction.
+ *
+ * Still worth running one test invoice against a throwaway firm on
+ * staging before the first real billing run — verified-by-reading is not
+ * the same as having watched it place an order.
  */
 class MyNJILGA_Invoice_Creator {
 
@@ -27,11 +43,42 @@ class MyNJILGA_Invoice_Creator {
     }
 
     /**
+     * FluentCart places admin-created orders through its `offline_payment`
+     * (Cash) gateway — OrderResource::updatedPlaceOrder() hardcodes it —
+     * and CodHandler::handlePayment() throws "Offline payment is not
+     * activated" when that method is switched off. Every dues invoice is
+     * an admin-created order, so the gateway has to be enabled or the
+     * whole batch fails one firm at a time. Checked up front so the
+     * dashboard can say this plainly once, instead of repeating a raw
+     * exception per firm.
+     */
+    public static function offline_gateway_active(): bool {
+        if ( ! class_exists( '\\FluentCart\\App\\App' ) ) {
+            return false;
+        }
+        try {
+            $gateway = \FluentCart\App\App::gateway( 'offline_payment' );
+            if ( ! $gateway || ! method_exists( $gateway, 'meta' ) ) {
+                return false;
+            }
+            return ! empty( $gateway->meta()['status'] );
+        } catch ( \Throwable $e ) {
+            return false;
+        }
+    }
+
+    /**
      * @return array{ok:bool, error?:string}
      */
     public static function create_for_row( object $invoiceRow ): array {
         if ( ! self::fluentcart_active() ) {
             return [ 'ok' => false, 'error' => 'FluentCart is not active.' ];
+        }
+        if ( ! self::offline_gateway_active() ) {
+            return [
+                'ok'    => false,
+                'error' => 'FluentCart\'s Offline/Cash payment method is disabled — enable it under FluentCart → Settings → Payment Methods. Admin-created invoices are placed through that gateway and are rejected without it.',
+            ];
         }
 
         try {
@@ -81,6 +128,14 @@ class MyNJILGA_Invoice_Creator {
                 'order_items'    => $orderItems,
             ] );
 
+            // updatedPlaceOrder() reports failure by RETURNING a WP_Error
+            // (bad customer id, inactive gateway, a throw inside its own
+            // try) rather than by throwing, so the catch below never sees
+            // those. Unwrap it here or the dashboard would show every real
+            // reason as the same useless "did not return an order".
+            if ( is_wp_error( $order ) ) {
+                return [ 'ok' => false, 'error' => $order->get_error_message() ];
+            }
             if ( ! $order || empty( $order->id ) ) {
                 return [ 'ok' => false, 'error' => 'FluentCart did not return an order.' ];
             }
@@ -165,22 +220,52 @@ class MyNJILGA_Invoice_Creator {
     }
 
     /**
-     * Shape reconstructed from FluentCart's own custom-item fields (see
-     * Cart::addByCustom() and the OrderItem is_custom accessor in the
-     * public docs) — object_id/post_id are 0 since these carry no real
-     * catalog Product; other_info.is_custom marks it as a custom line.
+     * A single custom (non-catalog) line. Key names here are load-bearing
+     * and were taken from FluentCart 1.6.3's source, not guessed:
+     *
+     *   - `is_custom` MUST be top level. OrderService::validateProducts()
+     *     reads Arr::get($product, 'is_custom') to decide whether to skip
+     *     the catalog checks. Nested only under other_info, it reads as
+     *     false, FluentCart looks for a ProductVariation with id 0, finds
+     *     none, and throws "[<title>] is not available." — which would
+     *     fail every dues line of every firm.
+     *   - `other_info.is_custom` is ALSO required, separately: that's what
+     *     the saved row reads back through
+     *     OrderItem::getIsCustomAttribute(). One is for validation on the
+     *     way in, the other for recognition afterwards.
+     *   - Titles arrive as `product_title` / `variation_title`.
+     *     AdminOrderProcessor::prepareOrderItems() maps those onto
+     *     OrderItem.post_title / OrderItem.title and ignores post_title
+     *     and title if passed directly — with no catalog product behind
+     *     the line to fall back to, that left the printed line blank.
+     *     Both are set to the same string so
+     *     OrderItem::getDisplayTitle() prints it once instead of
+     *     "<post_title> - <title>".
+     *   - `other_info.payment_type` is where the one-time/subscription
+     *     flag is read from (top-level payment_type is ignored), and the
+     *     value FluentCart uses is `onetime`, not `one_time`.
+     *   - `unit_price` is integer cents; FluentCart computes
+     *     subtotal = unit_price * quantity itself.
+     *   - `fulfillment_type` digital keeps the order off the shipping
+     *     path — without it FluentCart falls back to the (nonexistent)
+     *     variation's type.
      */
     private static function custom_line_item( string $title, int $priceCents ): array {
         return [
-            'object_id'    => 0,
-            'post_id'      => 0,
-            'post_title'   => $title,
-            'title'        => $title,
-            'quantity'     => 1,
-            'price'        => $priceCents,
-            'unit_price'   => $priceCents,
-            'payment_type' => 'one_time',
-            'other_info'   => [ 'is_custom' => true ],
+            'object_id'        => 0, // No catalog ProductVariation behind a dues line.
+            'post_id'          => 0, // No catalog Product either.
+            'is_custom'        => true,
+            'product_title'    => $title,
+            'variation_title'  => $title,
+            'quantity'         => 1,
+            'price'            => $priceCents,
+            'unit_price'       => $priceCents,
+            'line_total'       => $priceCents,
+            'fulfillment_type' => 'digital',
+            'other_info'       => [
+                'is_custom'    => true,
+                'payment_type' => 'onetime',
+            ],
         ];
     }
 }
