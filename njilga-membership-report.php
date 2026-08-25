@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, and Excel export — driven entirely from FluentCRM tags on the local install.
- * Version:     2.7.2
+ * Version:     2.8.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -56,6 +56,7 @@ require_once NJILGA_REPORT_DIR . 'includes/class-page-setup.php';
 // → create → send → paid webhook → downgrade sweep).
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-invoice-table.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-roster.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-creator.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';

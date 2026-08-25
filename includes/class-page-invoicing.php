@@ -73,6 +73,13 @@ class MyNJILGA_Page_Invoicing {
 
         if ( ! MyNJILGA_Invoice_Creator::fluentcart_active() ) {
             echo '<div class="notice notice-warning"><p><strong>FluentCart is not active.</strong> Invoices can still be previewed and approved, but "Create Invoices" needs FluentCart installed and active.</p></div>';
+        } elseif ( ! MyNJILGA_Invoice_Creator::offline_gateway_active() ) {
+            // FluentCart puts every admin-created order through its
+            // Offline/Cash gateway and rejects the order outright when
+            // that method is switched off. Say so once here rather than
+            // letting the admin discover it as an identical error on
+            // every firm in the batch.
+            echo '<div class="notice notice-warning"><p><strong>FluentCart\'s Offline/Cash payment method is disabled.</strong> Invoices can still be previewed and approved, but FluentCart places admin-created orders through that gateway and will reject them while it\'s off. Enable it under <em>FluentCart → Settings → Payment Methods</em>.</p></div>';
         }
 
         self::render_excluded_section( $duesYear );
@@ -177,7 +184,12 @@ class MyNJILGA_Page_Invoicing {
 
         printf( '<h2 style="margin-top:28px">Approved — Create Invoices <span style="color:#888;font-weight:400;font-size:13px">(%d)</span></h2>', count( $rows ) );
 
-        $fluentCartActive = MyNJILGA_Invoice_Creator::fluentcart_active();
+        // Both conditions have to hold for a create to succeed: FluentCart
+        // present, and its Offline/Cash gateway enabled (FluentCart routes
+        // admin-created orders through it). Either notice above explains
+        // which one is missing.
+        $canCreate = MyNJILGA_Invoice_Creator::fluentcart_active()
+            && MyNJILGA_Invoice_Creator::offline_gateway_active();
 
         printf(
             '<form method="post" action="%s">
@@ -196,7 +208,7 @@ class MyNJILGA_Page_Invoicing {
 
         printf(
             '<p><button type="submit" class="button button-primary"%s>Create Invoices</button></p></form>',
-            $fluentCartActive ? '' : ' disabled'
+            $canCreate ? '' : ' disabled'
         );
     }
 
