@@ -116,10 +116,18 @@ class MyNJILGA_Invoice_Creator {
                 return [ 'ok' => false, 'error' => 'Could not find or create a FluentCart customer for ' . $ownerEmail ];
             }
 
-            $orderItems = self::build_order_items( $members, (int) $invoiceRow->dues_year );
-            if ( empty( $orderItems ) ) {
+            // Guard on the TOTAL, not on an empty item list. Every member now
+            // produces a line (including the $0 ones), so the list is never
+            // empty and the old emptiness check would no longer catch an
+            // all-$0 firm. That matters: FluentCart auto-settles a $0 order
+            // the moment it's created (CodHandler::handleZeroTotalPayment()),
+            // which would silently mark the whole firm paid instead of
+            // reporting that there was nothing to bill.
+            if ( MyNJILGA_Dues_Roster::total_cents( $members ) <= 0 ) {
                 return [ 'ok' => false, 'error' => 'Every roster member owes $0 — nothing to invoice.' ];
             }
+
+            $orderItems = self::build_order_items( $members, (int) $invoiceRow->dues_year );
 
             $order = \FluentCart\Api\Resource\OrderResource::updatedPlaceOrder( [
                 'type'           => 'payment', // one-time, not subscription
@@ -185,33 +193,48 @@ class MyNJILGA_Invoice_Creator {
     }
 
     /**
-     * One custom (non-catalog) line item per fee — dues tier and, when
-     * owed, the Trustee Dinner Fee — so the printed invoice reads
-     * per-person, per-fee, e.g.:
-     *   "Jane Doe — 2027 Membership Dues"      $125
-     *   "John Smith — 2027 Membership Dues"    $75
-     *   "John Smith — Trustee Dinner Fee"      $200
-     * Members whose tier price is $0 (6th+, dues-exempt, or inactive) get
-     * no dues line; members who don't owe the fee (not an active
-     * Officer/Trustee/Senior Trustee/Past President) get no fee line.
+     * Custom (non-catalog) line items for the firm's invoice, in the
+     * roster's own billing order (paying members, then dues-exempt, then
+     * inactive — see MyNJILGA_Dues_Preview::sorted_members()).
      *
-     * @param array<int,array{contact_id:int,name:string,tier_price_cents:int,trustee_fee_cents:int}> $members
+     * EVERY member gets a dues line, including the ones at $0:
+     *   "Jane Doe — 2027 Membership Dues"                                 $125
+     *   "John Smith — 2027 Membership Dues"                                $75
+     *   "John Smith — Trustee Dinner Fee"                                 $200
+     *   "Sam Lee — 2027 Membership Dues (no charge, 6th or later member)"   $0
+     *   "Pat Roe — 2027 Membership Dues (no charge, dues exempt)"           $0
+     *   "Chris Poe — 2027 Membership Dues (no charge, inactive)"            $0
+     *
+     * The $0 lines are the point of listing them: paying this invoice
+     * settles every member in the snapshot (MyNJILGA_Payment_Listener
+     * tags the whole roster, not just the priced entries), so a firm
+     * reading its invoice needs to see everyone the payment covers — not
+     * just the ones with money next to their name. Verified safe against
+     * FluentCart 1.6.3: nothing in the order-creation path rejects a
+     * zero unit_price (FluentCart creates its own bundle child items at
+     * unit_price 0), and a $0 line contributes 0 to the order total.
+     *
+     * The fee line still only appears when the fee is actually owed —
+     * an attorney who isn't an active Officer/Trustee/Senior Trustee/Past
+     * President has no dinner fee to explain, so a $0 line for it would
+     * be noise rather than reassurance.
+     *
+     * @param array<int,array{contact_id:int,name:string,tier_price_cents:int,trustee_fee_cents:int,dues_exempt?:bool,inactive?:bool}> $members
      * @return array<int,array<string,mixed>>
      */
     private static function build_order_items( array $members, int $duesYear ): array {
         $items = [];
 
         foreach ( $members as $member ) {
-            if ( $member['tier_price_cents'] > 0 ) {
+            $items[] = self::custom_line_item(
+                MyNJILGA_Dues_Roster::dues_line_label( $member, $duesYear ),
+                (int) ( $member['tier_price_cents'] ?? 0 )
+            );
+
+            if ( (int) ( $member['trustee_fee_cents'] ?? 0 ) > 0 ) {
                 $items[] = self::custom_line_item(
-                    $member['name'] . ' — ' . $duesYear . ' Membership Dues',
-                    $member['tier_price_cents']
-                );
-            }
-            if ( $member['trustee_fee_cents'] > 0 ) {
-                $items[] = self::custom_line_item(
-                    $member['name'] . ' — Trustee Dinner Fee',
-                    $member['trustee_fee_cents']
+                    MyNJILGA_Dues_Roster::fee_line_label( $member ),
+                    (int) $member['trustee_fee_cents']
                 );
             }
         }

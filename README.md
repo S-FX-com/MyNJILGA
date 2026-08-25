@@ -102,6 +102,19 @@ An annual, admin-triggered batch process (**My NJILGA → Invoicing**) that read
 
 **Inactive is a blanket override** (confirmed with NJILGA): a contact tagged `inactive` is not billed anything this cycle — $0 base dues and $0 fee — regardless of what other role tags they hold, including Senior Trustee/Past President and Officer/Trustee. Like exempt members, inactive contacts are sorted to the end of the roster (after exempt members) and never affect anyone else's tier or fee. They're still shown on the review dashboard, marked "Inactive — not billed," for transparency rather than silently vanishing from the invoice.
 
+**The invoice names everyone it covers.** Paying a firm invoice settles *every* member in the frozen snapshot — the payment listener tags the whole roster, not just the members with a price next to their name — so both the FluentCart invoice and the Owner's email list all of them, and the ones at $0 carry the reason they're at $0:
+
+```
+Ann Brown — 2027 Membership Dues                                 $125.00
+Ed Fox — 2027 Membership Dues                                     $75.00
+Ed Fox — Trustee Dinner Fee                                      $200.00
+Sam Lee — 2027 Membership Dues (no charge, 6th or later member)     $0.00
+Pat Roe — 2027 Membership Dues (no charge, dues exempt)             $0.00
+Chris Poe — 2027 Membership Dues (no charge, inactive)              $0.00
+```
+
+The send email repeats the same roster grouped per person (`Ed Fox — $75.00 membership dues + $200.00 Trustee Dinner Fee`) and closes with what the payment actually buys: *"Paying this invoice marks everyone listed above as current for 2027."* Both are built from `MyNJILGA_Dues_Roster` (`includes/invoicing/class-dues-roster.php`), so the invoice and the email can't describe the same roster two different ways. A firm where *every* member is $0 is still refused with "nothing to invoice" — that guard now tests the roster total rather than an empty line-item list, because FluentCart auto-settles a $0 order the moment it's created.
+
 **Frozen snapshot:** generating a firm's invoice freezes its roster and pricing into `{$wpdb->prefix}njilga_dues_invoices` (`includes/invoicing/class-dues-invoice-table.php`). Every later step — the FluentCart order, the payment webhook, the downgrade sweep, the Company Note — reads that frozen snapshot, never a fresh Company query, so a firm's roster can't drift between "invoiced" and "paid." Re-running "Generate Preview" only ever touches rows still in `draft`/`excluded`; anything already approved or further along is left completely untouched.
 
 **On payment**, every roster member gets a year-specific `Dues Paid {year}` tag (a permanent historical record) **and** the plugin's evergreen `dues-paid` tag (removing `unpaid-dues` if present) — the second part is a deliberate addition beyond a literal reading of the original spec, so the existing reports above (Active Paid Members, Membership by Firm, the Executive Summary) keep reflecting reality instead of only ever seeing the year-suffixed tag. The **Downgrade Sweep** does the mirror image (`Unpaid Dues {year}` + evergreen `unpaid-dues`, `professional` role stripped). The `professional` WordPress role itself is only touched where a contact has a linked WP user — many won't, and that's skipped cleanly rather than erroring.

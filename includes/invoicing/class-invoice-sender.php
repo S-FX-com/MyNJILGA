@@ -35,14 +35,34 @@ class MyNJILGA_Invoice_Sender {
         $duesYear = (int) $invoiceRow->dues_year;
         $total    = number_format( $invoiceRow->total_amount_cents / 100, 2 );
 
+        // Who the invoice covers, read from the frozen snapshot — the same
+        // roster the FluentCart line items were built from, so the email and
+        // the invoice can't disagree. This is the plain-English half of the
+        // answer to "which of our attorneys does this cover?"; the invoice
+        // itself carries the same names as line items.
+        $members = $roster['members'] ?? [];
+        $covers  = MyNJILGA_Dues_Roster::email_summary( $members, $duesYear );
+        $firm    = (string) ( $roster['company_name'] ?? '' );
+
+        // Assembled in blocks rather than one format string so an empty
+        // roster just drops its paragraph instead of leaving a blank gap.
+        $blocks = [
+            sprintf( 'Hi %s,', $ownerName ),
+            sprintf(
+                '%s %d NJILGA membership dues invoice totals $%s.',
+                $firm !== '' ? $firm . "'s" : "Your firm's",
+                $duesYear,
+                $total
+            ),
+        ];
+        if ( $covers !== '' ) {
+            $blocks[] = $covers;
+        }
+        $blocks[] = 'Pay online here: ' . $link;
+        $blocks[] = "Thank you,\nNJILGA";
+
         $subject = sprintf( '%d NJILGA Membership Dues Invoice', $duesYear );
-        $body    = sprintf(
-            "Hi %s,\n\nYour firm's %d NJILGA membership dues invoice totals $%s.\n\nPay online here: %s\n\nThank you,\nNJILGA",
-            $ownerName,
-            $duesYear,
-            $total,
-            $link
-        );
+        $body    = implode( "\n\n", $blocks );
 
         if ( ! wp_mail( $ownerEmail, $subject, $body ) ) {
             return [ 'ok' => false, 'error' => "wp_mail() failed — check the site's mail configuration." ];
