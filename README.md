@@ -1,6 +1,6 @@
 # My NJILGA
 
-A WordPress plugin that gives NJILGA admins a one-stop dashboard for member status, trustees, and company rollups — all driven by FluentCRM tags on the local WordPress install. No REST API, no credentials.
+A WordPress plugin that gives NJILGA admins a one-stop dashboard for member status, trustees, and company rollups — plus the annual **dues invoicing** process (FluentCart + FluentCRM), a **membership application gate**, and a **member-facing dues status page**. Everything is driven by FluentCRM tags on the local WordPress install. No REST API, no credentials, no subscriptions anywhere.
 
 ---
 
@@ -9,25 +9,25 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for member stat
 1. Copy this folder into `/wp-content/plugins/`
 2. Run `composer install` inside the plugin folder (requires PHP 7.4+ and Composer)
 3. Activate **My NJILGA** in **WordPress Admin → Plugins**
-4. Make sure **FluentCRM** is also active on the same site
-5. Open **My NJILGA → Setup** to verify or create the required tags
+4. Make sure **FluentCRM** (with the **Companies** module) is active on the same site; **FluentCart** is needed for invoicing
+5. Open **My NJILGA → Setup** to verify tags, products, and the environment
 
 ---
 
 ## Menu
 
-The plugin registers a top-level **My NJILGA** menu:
-
 | Page | What it shows |
 |---|---|
-| **Dashboard** | Summary counts (paid members, trustees, companies with paid members), bucket distribution, and the Excel download. |
+| **Dashboard** | Summary counts (paid members, trustees, companies with paid members), bucket distribution. |
 | **Reports** | Landing page for every report below, plus the Executive Summary export. |
-| **Active Paid Members** | Every contact carrying the **Dues Paid** tag, with their firm, email, trustee flag, payment method, and a green **PAID** column. |
-| **Trustees** | Every contact carrying the **Trustees** tag, plus whether they've also paid dues. |
-| **Companies** | All FluentCRM Companies, grouped into **1 / 2–5 / 6+ Paid Members** buckets, with members listed underneath. |
-| **Membership by Firm** | Every FluentCRM Company with at least one attached contact, listed alphabetically as a bold heading, with its contacts (First/Last name, Email, Dues, Trustees, Past President, Payment) underneath. Exports to a formatted Excel `.xls`. |
-| **Invoicing** | Annual dues invoicing by firm — see [Dues Invoicing by Firm](#dues-invoicing-by-firm) below. |
-| **Setup** | Detects whether the required tags exist and offers a one-click button to create any that are missing. |
+| **Active Paid Members** | Every contact carrying the **Dues Paid** tag, with firm, email, trustee flag, payment method. |
+| **Trustees** | Every contact carrying a trustee-family tag, plus whether they've paid dues. |
+| **Companies** | All FluentCRM Companies, grouped into **1 / 2–5 / 6+ Paid Members** buckets. |
+| **Membership by Firm** | Every FluentCRM Company with ≥1 contact, listed with its contacts. Exports to formatted Excel. |
+| **Invoicing** | Annual dues invoicing — see [Dues Invoicing](#dues-invoicing) below. |
+| **Applications** | Enrollment review queue — see [Enrollment gate](#enrollment-gate). |
+| **Settings** | **Dues & Billing** — category mapping, assessment, per-firm billing mode, all switches. |
+| **Setup** | Environment checks, tag checklist, **tag-slug audit** and **product-mapping audit** for the settings. |
 
 ---
 
@@ -37,16 +37,12 @@ The plugin registers a top-level **My NJILGA** menu:
 |---|---|
 | Paid / Active member | Contact has the **Dues Paid** tag |
 | Trustee | Contact has the **Trustees** tag |
-| Payment method = Check | Contact has the **Paid by Check** tag |
-| Payment method = Invoice | Contact has the **Paid by Invoice** tag |
-| Payment method = Credit Card | Default when neither Check nor Invoice tag is present |
-| Firm | The FluentCRM **Company** entity linked to the contact (fall back: `company_name` custom field text) |
+| Payment method = Check / Invoice | **Paid by Check** / **Paid by Invoice** tags (default: Credit Card) |
+| Firm | The FluentCRM **Company** entity linked to the contact |
 
-The Setup page looks up each required tag by **slug** first, then by exact **title** as a fallback, so a manually-created tag with a non-default slug still matches.
+Tags are looked up by **slug** first, then by exact **title** as a fallback.
 
----
-
-## Required FluentCRM tags
+### Core report tags
 
 | Slug | Title | Required? |
 |---|---|---|
@@ -55,137 +51,184 @@ The Setup page looks up each required tag by **slug** first, then by exact **tit
 | `trustees` | Trustees | Yes |
 | `senior-trustee` | Senior Trustee | Optional |
 | `past-president` | Past President | Optional |
-| `paid-by-check` | Paid by Check | Optional |
-| `paid-by-invoice` | Paid by Invoice | Optional |
-| `officer` | Officer | Optional — Dues Invoicing fee eligibility only |
-| `inactive` | Inactive | Optional — Dues Invoicing "don't bill this record" override only |
+| `paid-by-check` / `paid-by-invoice` | Paid by Check / Invoice | Optional |
+| `officer` | Officer | Optional — assessment eligibility |
+| `inactive` | Inactive | Optional — "don't bill this record" override |
 
-On the **Membership by Firm** report, the Dues column shows **Dues Paid** when the `dues-paid` tag is present, **Unpaid Dues** when the `unpaid-dues` tag is present, and is left blank when neither exists. The Payment column shows **Paid by Invoice** / **Paid by Check** when those tags are present, **Paid by Website** when `dues-paid` is present but neither override tag is, and is blank otherwise.
-
-The Setup page can create any of these for you in one click via the FluentCRM Tags API.
+The **Setup** page can create any of these in one click, plus any slug the Dues & Billing settings refer to (`professional`, `law-student`, `emerging-professional`, `pending-approval`, …).
 
 ---
 
-## Required FluentCRM module
+## Dues Invoicing
 
-For the Companies report to populate, the **FluentCRM Companies module** must be enabled (FluentCRM → Settings → Modules). Contacts must be linked to their company via FluentCRM's primary-company assignment.
+An annual, admin-driven batch process (**My NJILGA → Invoicing**). Staff generate one preview across every FluentCRM Company for a dues year, review and approve, the plugin creates FluentCart orders (invoices) in background batches, staff send the payment links, FluentCart collects, and payment settles the whole invoice — tags and WordPress roles for everyone on it — at once. There are **no subscriptions**.
 
----
+**FluentCRM tags are the source of truth for who owes what. WordPress roles are a downstream effect of payment, never an input to pricing.**
 
-## CSV exports
+**Flow:** Generate Preview → Review & Approve → Create Invoices (Action Scheduler, ~25 per job, per-row failure isolation) → Send (email + CC policy + Company Note) → Paid (automatic, via the gateway's "order paid" hook) → end-of-year Downgrade Sweep (manual, behind a confirmation screen).
 
-Each list page has its own **Download CSV** button:
+### Settings → Dues & Billing (spec §3)
 
-| Page | CSV columns |
+Everything the engine needs lives in **My NJILGA → Settings**, stored as one option (`njilga_dues_settings`) and seeded with these defaults:
+
+| Category (in precedence order) | Tag | Price | Tier-eligible | Role |
+|---|---|---|---|---|
+| Past President Membership (Exempt) | `past-president` | $0 | no | `professional` |
+| Senior Trustee Membership (Exempt) | `senior-trustee` | $0 | no | `professional` |
+| Law Student Membership | `law-student` | $0 | no | `professional` |
+| Emerging Professional Membership | `emerging-professional` | $0 (pending, spec §2.5) | no | `professional` |
+| Professional Membership | `professional` | tiers: 1st Member $125 · Members 2–5 $75 · Members 6+ $0 | **yes** | `professional` |
+
+**Assessment:** Trustee Dinner Assessment, $200, one product; qualifying tags in order `officer`, `trustees`, `senior-trustee`, `past-president`.
+
+Also: default category for untagged contacts (seeded: Professional; can be "not billed"), the inactive-override tag, evergreen paid/unpaid tags and year-tag patterns, invoice email CC policy (bill-to only / + every member / + a fixed list), Reply-To, whether the downgrade sweep removes roles, the **mid-year join policy**, enrollment tags, and the batch size. Each category row maps to a **FluentCart product/variation** (picker reads live products) and a **WordPress role**; each mapped tag and product shows a live ✓/✗ check. **Per-firm billing mode** overrides live at the bottom.
+
+Prices in Settings are what invoices charge; the mapped variation is what the line item points at. A price mismatch with FluentCart is flagged, never silently resolved.
+
+### Pricing engine (spec §6)
+
+`includes/invoicing/class-pricing-engine.php` is a **pure function**: roster in, priced roster out, no I/O. Rules, in order:
+
+1. **Inactive override** — a contact carrying the inactive tag is billed nothing (no dues, no assessment), still listed.
+2. **Category** — first configured category whose tag the contact carries; else the default category; else "no category" (listed as an exception, not billed).
+3. **Ranking partition** — tier-eligible active members are ranked 1..n alphabetically (last name, first name, contact id) and priced by rank. Everyone else — exempt/comped categories, inactive, uncategorised — ranks **after** them and never occupies a paid slot. An exempt Past President whose surname sorts first does not take the $125 slot and does not push a 5th paying member into the free bracket.
+4. Non-tier categories charge their flat price (normally $0).
+5. **Assessment** — an active contact with any qualifying tag owes it once, on top of dues (an exempt Senior Trustee still owes the dinner).
+
+Seventeen unit tests cover this, including the ranking-partition cases. Run them with any PHP CLI — no WordPress, no PHPUnit:
+
+```bash
+php tests/run.php
+```
+
+CI runs them on PHP 7.4 and 8.3 on every push (`.github/workflows/tests.yml`).
+
+### Billing modes (spec §3.4)
+
+| Mode | Rows generated per firm |
 |---|---|
-| Active Paid Members | First Name, Last Name, Email, Firm Name, Trustee, Payment Method, CRM ID |
-| Trustees | Trustee, Contact id, Firm, Dues Paid?, Payment Method |
-| Companies | Bucket, Company, Paid Members, Total Members, Member, Status (one row per member) |
+| **firm** (default) | One `combined` invoice to the Owner covering everyone. |
+| **individual** | One `combined` invoice per billed member, addressed to that member. Members at $0 ride on the Owner's own invoice (or the rank-1 member's) so someone's payment still covers them. |
+| **split_assessment** | One `dues` invoice to the Owner (assessments zeroed) + one `assessment` invoice per assessed member, addressed to that member. Paying an assessment invoice tags "Assessment Paid {year}" only — it never marks dues paid, and an unpaid assessment never lapses a membership. |
 
-CSVs are UTF-8 with a BOM so accented firm names render correctly when opened directly in Excel. No PHP version or third-party library requirement — the export uses plain `fputcsv`.
+A member with no email can't be billed individually; their invoice is addressed to the Owner and the card says so.
 
-The **Membership by Firm** page instead offers an **Export to Excel** button that streams a formatted `.xls` (an HTML table served with the Excel MIME type). This preserves the bold firm headings and grouped layout that a flat CSV can't — still with no PhpSpreadsheet/third-party dependency. The Dues column is bold green for **Dues Paid** and bold red for **Unpaid Dues**.
+### Exceptions (never silently skipped)
 
-The **Reports** landing page offers a **Download Executive Summary (Excel)** button that streams a single formatted `.xls` combining every report — an Overview KPI section, Active Paid Members, Trustees, Companies, and Membership by Firm — using the same HTML-as-`.xls` approach, one section per report separated by a bold banner row.
+The preview flags, separately from normal rows: firms with **no members**, firms with **no Owner** (roster shown so you can see what would be billed), firms where **nothing is billable**, and members with **no category tag** (badge on the card). Rows that hit an error on create/send show under **Needs attention** with the error text and stay selectable for a retry.
+
+### The invoice names everyone it covers
+
+Paying an invoice settles *every* member in its frozen snapshot, so both the FluentCart order and the email list all of them, $0 lines included, with the reason:
+
+```
+Ann Brown — 2027 Professional Membership (1st Member)              $125.00
+Ed Fox — 2027 Professional Membership (Members 2–5)                 $75.00
+Ed Fox — Trustee Dinner Assessment (Officer)                       $200.00
+Sam Lee — 2027 Professional Membership (no charge, Members 6+)       $0.00
+Pat Roe — 2027 Past President Membership (Exempt)                    $0.00
+Chris Poe — 2027 Membership Dues (no charge, inactive)               $0.00
+```
+
+Each line references the mapped FluentCart product/variation at the Settings price (custom line if unmapped) and carries `line_meta` with `contact_id`, `dues_year`, `kind`, `category`, `tier`, `rank`. A firm where every member is $0 is refused ("nothing to invoice") because FluentCart auto-settles a $0 order.
+
+### Frozen snapshot (spec §5)
+
+Generating freezes each invoice's roster and pricing into `{$wpdb->prefix}njilga_dues_invoices` (`includes/invoicing/class-dues-invoice-table.php`; snapshot shape documented in `class-dues-snapshot.php`). Every later step — order creation, the payment hook, the downgrade sweep, the Company Note — reads that snapshot, never a fresh Company query. Re-running "Generate Preview" only touches rows still `draft`/`excluded`; stale drafts a billing-mode change left behind are removed; anything approved or later is untouched. Version-1 snapshots (pre-2.9) are upgraded on read.
+
+### On payment
+
+Registered through the gateway (`fluent_cart/order_paid_done`). Every member of a paid dues invoice gets the year tag (`Dues Paid 2027`), the evergreen `dues-paid` tag (losing `unpaid-dues`), and their **category's WordPress role** — best-effort: only where a linked WP user exists and the role is defined; contacts with no account are skipped cleanly, never an error. A Company Note records it. Idempotent on duplicate hook fires.
+
+### Downgrade sweep
+
+Manual, from the Invoicing page, via a **confirmation screen** showing the exact invoices, firms, and members it will touch (and how many are protected by a paid invoice elsewhere). Applies `Unpaid Dues {year}` + `unpaid-dues`, removes `dues-paid`, removes the role if the setting says so, marks rows downgraded, leaves a Company Note.
+
+### Company Notes (spec §8)
+
+Created, sent, paid, downgraded, application approved/rejected — each leaves a note on the FluentCRM Company's "Notes & Activities".
+
+### InvoiceGateway (spec §9)
+
+`includes/invoicing/interface-invoice-gateway.php` is the only seam to the commerce plugin; `class-fluentcart-invoice-gateway.php` is the only file that names a FluentCart class. Swap it with the `my_njilga_invoice_gateway` filter.
+
+**FluentCart prerequisites:** the **Offline/Cash payment method must be enabled** (FluentCart routes admin-created orders through it and rejects them otherwise — firms still pay online by any gateway the store offers); mapped products must be **published or private** and **one-time**. The Invoicing page and Setup page check both up front. Verified against FluentCart 1.6.3 source: `OrderResource::updatedPlaceOrder()`, `AdminOrderProcessor` item mapping (it resets `line_meta`, so the gateway writes it back onto the saved `OrderItem`s), `OrderService::validateProducts()`, `PaymentHelper::getCustomPaymentLink()`, `fluent_cart/order_paid_done` payload. Run one test invoice on staging before the first real batch.
 
 ---
 
-## Dues Invoicing by Firm
+## Enrollment gate
 
-An annual, admin-triggered batch process (**My NJILGA → Invoicing**) that reads the FluentCRM Company roster, computes what each firm owes, and creates [FluentCart](https://fluentcart.com/) orders (invoices) for review and manual send. No JS, no build step — same server-rendered PHP forms as the rest of the plugin; the per-firm line-item breakdown uses a native `<details>`/`<summary>` disclosure instead of a script.
+`[njilga_membership_application]` renders the public application form — first/last name, email, phone, **firm with search-as-you-type against existing FluentCRM Companies and an "Add “…” as a new firm" fallback**, category (those flagged *applicant may pick* in Settings), message. Submitting creates/updates the FluentCRM contact, tags it **pending-approval**, records the application, and emails staff. The applicant is **not** attached to any Company and gets no role or paid tag, so they never enter the billing pool until approved.
 
-**Flow:** Generate Preview → Review & Approve → Create Invoices (FluentCart orders) → Send (email + a FluentCRM Company Note) → Paid (automatic, via FluentCart's `fluent_cart/order_paid_done` hook) → end-of-year Downgrade Sweep (manual button) for anyone who never paid.
+**My NJILGA → Applications** is the review queue (with a pending-count bubble in the menu). **Approve** attaches the contact to the firm (creating it if new, making the applicant Owner if the firm has none), swaps the pending tag for the category tag, then branches on the **mid-year join policy** setting:
 
-**Pricing** (computed fresh each cycle by headcount, no persistent "member #3" designation): 1st *paying* member per firm (alphabetical by last name, then first) = $125, 2nd–5th = $75 each, 6th+ = free. Active Officers/Trustees/Senior Trustees/Past Presidents additionally owe a flat **$200 Trustee Dinner Fee**, capped at one per person, on top of whatever base dues they owe.
+| Policy | Effect |
+|---|---|
+| **Free until next cycle** (default, spec §3.5) | Marked current for the current year (evergreen paid tag + `Dues Paid {year}` + role); first invoice is next year's batch. |
+| **Invoice now** | A draft individual invoice for the current year appears in Invoicing for staff to approve/create/send. |
+| **Manual** | Category tag only. |
 
-**Senior Trustees and Past Presidents are dues-exempt** (confirmed with NJILGA), unconditionally: they owe $0 base membership dues regardless of active/inactive status. They still owe the Trustee Dinner Fee, *unless* inactive (see below). Exempt members still count toward the firm's roster, but are always sorted to the *end* of the billing order — never occupying the paid 1st-member slot, and never counted toward pushing the firm's other members to a cheaper "next level" bracket — so a firm's actually-paying members are priced 1st/2nd-5th purely among themselves. (A firm with one exempt Past President and one regular associate bills the associate the full $125 1st-member price, not $75 — the exempt member doesn't silently "use up" the cheaper slot.) Plain Officers and Trustees (not Senior Trustee/Past President) are *not* dues-exempt — they pay full tier dues plus the fee.
-
-**Inactive is a blanket override** (confirmed with NJILGA): a contact tagged `inactive` is not billed anything this cycle — $0 base dues and $0 fee — regardless of what other role tags they hold, including Senior Trustee/Past President and Officer/Trustee. Like exempt members, inactive contacts are sorted to the end of the roster (after exempt members) and never affect anyone else's tier or fee. They're still shown on the review dashboard, marked "Inactive — not billed," for transparency rather than silently vanishing from the invoice.
-
-**The invoice names everyone it covers.** Paying a firm invoice settles *every* member in the frozen snapshot — the payment listener tags the whole roster, not just the members with a price next to their name — so both the FluentCart invoice and the Owner's email list all of them, and the ones at $0 carry the reason they're at $0:
-
-```
-Ann Brown — 2027 Membership Dues                                 $125.00
-Ed Fox — 2027 Membership Dues                                     $75.00
-Ed Fox — Trustee Dinner Fee                                      $200.00
-Sam Lee — 2027 Membership Dues (no charge, 6th or later member)     $0.00
-Pat Roe — 2027 Membership Dues (no charge, dues exempt)             $0.00
-Chris Poe — 2027 Membership Dues (no charge, inactive)              $0.00
-```
-
-The send email repeats the same roster grouped per person (`Ed Fox — $75.00 membership dues + $200.00 Trustee Dinner Fee`) and closes with what the payment actually buys: *"Paying this invoice marks everyone listed above as current for 2027."* Both are built from `MyNJILGA_Dues_Roster` (`includes/invoicing/class-dues-roster.php`), so the invoice and the email can't describe the same roster two different ways. A firm where *every* member is $0 is still refused with "nothing to invoice" — that guard now tests the roster total rather than an empty line-item list, because FluentCart auto-settles a $0 order the moment it's created.
-
-**Frozen snapshot:** generating a firm's invoice freezes its roster and pricing into `{$wpdb->prefix}njilga_dues_invoices` (`includes/invoicing/class-dues-invoice-table.php`). Every later step — the FluentCart order, the payment webhook, the downgrade sweep, the Company Note — reads that frozen snapshot, never a fresh Company query, so a firm's roster can't drift between "invoiced" and "paid." Re-running "Generate Preview" only ever touches rows still in `draft`/`excluded`; anything already approved or further along is left completely untouched.
-
-**On payment**, every roster member gets a year-specific `Dues Paid {year}` tag (a permanent historical record) **and** the plugin's evergreen `dues-paid` tag (removing `unpaid-dues` if present) — the second part is a deliberate addition beyond a literal reading of the original spec, so the existing reports above (Active Paid Members, Membership by Firm, the Executive Summary) keep reflecting reality instead of only ever seeing the year-suffixed tag. The **Downgrade Sweep** does the mirror image (`Unpaid Dues {year}` + evergreen `unpaid-dues`, `professional` role stripped). The `professional` WordPress role itself is only touched where a contact has a linked WP user — many won't, and that's skipped cleanly rather than erroring.
-
-**FluentCart prerequisite — enable the Offline/Cash payment method.** FluentCart's `OrderResource::updatedPlaceOrder()` puts every admin-created order through its `offline_payment` gateway, and rejects the order outright (`"Offline payment is not activated"`) when that method is switched off. Turn it on under *FluentCart → Settings → Payment Methods*. The Invoicing dashboard checks this up front: while it's off, a warning shows and "Create Invoices" stays disabled, rather than the whole batch failing one identical error at a time. This doesn't force firms to pay offline — the invoice still goes out as an unpaid order with a normal payment link, payable by whatever gateway the store offers.
-
-**Integration status:** `includes/invoicing/class-invoice-creator.php` was verified line by line against **FluentCart 1.6.3's actual source**, not just its published docs — `OrderResource::updatedPlaceOrder()`, `PaymentHelper::getCustomPaymentLink()`, the `fct_customers` fillable fields, the custom line-item key names, and the `fluent_cart/order_paid_done` payload (`['order' => …, 'transaction' => …, 'customer' => …]`, which FluentCart's own docs call the recommended hook for third-party integrations) all check out. Worth knowing about that call: it derives the order's `type`/`status`/`payment_status` itself (on-hold + payment pending — exactly right for an unpaid invoice), so those keys are accepted but ignored, and money is integer cents end to end, matching what's stored in `njilga_dues_invoices`. Verified by reading is still not the same as having watched it place an order, so run one test invoice against a throwaway firm on staging before the first real billing run.
+**Reject** swaps the pending tag for `application-rejected`. Both email the applicant and leave a Company Note.
 
 ---
 
-## File Structure
+## Firm dues status page
+
+`[njilga_firm_dues_status]` — the logged-in member → FluentCRM contact → their Company(ies) → every invoice row, newest year first: bill-to, total, status, the **full roster** with amounts, and the **payment link** while an invoice is awaiting payment. Every member of the firm sees it, not just the Owner. Also shows the viewer's own paid/unpaid status.
+
+---
+
+## CSV / Excel exports
+
+Each list page has a **Download CSV** button; **Membership by Firm** exports a formatted `.xls`; **Reports** offers the **Executive Summary** `.xls` combining every report. No third-party libraries.
+
+---
+
+## File structure
 
 ```
 my-njilga/
-├── njilga-membership-report.php         ← Plugin bootstrap + admin-post hooks
+├── njilga-membership-report.php          ← Plugin bootstrap + hooks
 ├── includes/
-│   ├── class-admin-menu.php             ← Top-level menu + sub-pages
-│   ├── class-tags.php                   ← Tag resolution + per-subscriber helpers
-│   ├── class-members-data.php           ← Builds the three datasets
-│   ├── class-page-dashboard.php
-│   ├── class-page-members.php
-│   ├── class-page-trustees.php
-│   ├── class-page-companies.php
-│   ├── class-page-firms.php             ← Membership by Firm report
-│   ├── class-page-invoicing.php         ← Invoicing dashboard (admin-post handlers + rendering)
-│   ├── class-page-setup.php
-│   ├── class-report-csv.php             ← fputcsv-based per-report streamer
-│   ├── class-report-xls.php             ← HTML-as-.xls formatted export
-│   ├── class-report-summary.php         ← Executive Summary — combines every report into one .xls
-│   └── invoicing/                       ← Dues Invoicing by Firm (see section above)
-│       ├── class-dues-invoice-table.php ← njilga_dues_invoices schema + CRUD
-│       ├── class-dues-preview.php       ← Company roster + tier/trustee pricing math
-│       ├── class-invoice-creator.php    ← FluentCart order creation
-│       ├── class-invoice-sender.php     ← Email + Company Note on send
-│       ├── class-payment-listener.php   ← fluent_cart/order_paid_done handler
-│       ├── class-downgrade-sweep.php    ← Manual end-of-year downgrade
-│       └── class-invoicing-notes.php    ← Shared FluentCRM Company Note helper
-├── composer.json                        ← Declares the GitHub update checker
+│   ├── class-admin-menu.php
+│   ├── class-tags.php                    ← Tag resolution (core + settings-driven slugs)
+│   ├── class-members-data.php
+│   ├── class-page-*.php                  ← Dashboard, Reports, Members, Trustees, Companies, Firms
+│   ├── class-page-invoicing.php          ← Invoicing dashboard + admin-post handlers
+│   ├── class-page-settings.php           ← Dues & Billing settings UI
+│   ├── class-page-applications.php       ← Enrollment review queue
+│   ├── class-page-setup.php              ← Environment, tag audit, product audit
+│   ├── class-firm-status-page.php        ← [njilga_firm_dues_status]
+│   ├── class-report-*.php                ← CSV / XLS / Executive Summary
+│   ├── invoicing/
+│   │   ├── class-dues-settings.php       ← Settings storage + seed defaults
+│   │   ├── class-pricing-engine.php      ← PURE pricing function (unit-tested)
+│   │   ├── class-dues-snapshot.php       ← roster_snapshot shape (v2) + v1 upgrade
+│   │   ├── class-dues-invoice-table.php  ← njilga_dues_invoices schema + CRUD
+│   │   ├── interface-invoice-gateway.php ← Commerce seam
+│   │   ├── class-fluentcart-invoice-gateway.php ← The only file naming FluentCart classes
+│   │   ├── class-invoicing.php           ← Gateway locator + helpers
+│   │   ├── class-dues-preview.php        ← Preview builder (engine + billing modes + exceptions)
+│   │   ├── class-dues-roster.php         ← Line labels / line items / email summary
+│   │   ├── class-invoice-creator.php     ← Action Scheduler batches, per-row isolation
+│   │   ├── class-invoice-sender.php      ← Email + CC policy + Company Note
+│   │   ├── class-payment-listener.php    ← Paid → tags + roles (best-effort)
+│   │   ├── class-downgrade-sweep.php     ← preview() + run()
+│   │   └── class-invoicing-notes.php     ← FluentCRM Company Note helper
+│   └── enrollment/
+│       ├── class-applications-table.php  ← njilga_membership_applications
+│       ├── class-application-form.php    ← [njilga_membership_application] + AJAX + submit
+│       └── class-application-review.php  ← approve() / reject() + join policy
+├── tests/                                ← php tests/run.php
+├── .github/workflows/
+│   ├── release.yml                       ← Auto GitHub Release on version bump
+│   └── tests.yml                         ← Lint + unit tests on PHP 7.4 / 8.3
+├── composer.json
 └── README.md
 ```
 
 ---
 
-## Setup with Claude Code
-
-```bash
-cd wp-content/plugins/my-njilga
-composer install
-```
-
-No build step. The `vendor/` directory is committed, so reinstalling is only needed if you bump a dependency.
-
----
-
 ## Updates
 
-The plugin checks **`s-fx-com/MyNJILGA`** on GitHub for new **tagged releases** using [yahnis-elsts/plugin-update-checker](https://github.com/YahnisElsts/plugin-update-checker). Cut a release on GitHub whose tag matches the new `Version:` header (e.g. tag `v2.1.0` for `Version: 2.1.0`) and every site running the plugin will see an "Update available" prompt in **WordPress Admin → Plugins** within the normal WP transient window.
-
-### Private repo
-
-If the repository is private, add a GitHub Personal Access Token (with `repo` scope) to `wp-config.php`:
-
-```php
-define( 'MY_NJILGA_GITHUB_TOKEN', 'ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' );
-```
-
-The update checker uses it for both the version-check call and the zip download. Without the constant, only public-repo access is attempted.
-
-### Cutting a release
-
-1. Bump the `Version:` header in `njilga-membership-report.php`.
-2. Commit and push to `main`.
-3. On GitHub, **Releases → Draft a new release**, pick a tag like `v2.1.0`, publish.
-4. WordPress sites will pick it up on their next plugin-update cron run (force it with `?wp-admin/update-core.php` → "Check Again").
+The plugin checks **`s-fx-com/MyNJILGA`** on GitHub for tagged releases via [yahnis-elsts/plugin-update-checker](https://github.com/YahnisElsts/plugin-update-checker). Bump the `Version:` header, push to `main`, and `release.yml` publishes the matching `v<version>` release automatically. For a private repo, define `MY_NJILGA_GITHUB_TOKEN` in `wp-config.php`.

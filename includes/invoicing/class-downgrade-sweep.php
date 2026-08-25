@@ -1,35 +1,82 @@
 <?php
 /**
- * Step 6 — end-of-year downgrade. Run manually (a "Run Downgrade Sweep"
- * button in the dashboard) rather than a silent cron — stripping a role
- * is consequential enough to want a human eye on it, and NJILGA's own
- * reminder cadence lives outside this plugin, so there's no reason this
- * needs to fire automatically on a schedule this plugin controls.
+ * Step 6 (spec §7) — end-of-year downgrade. Manually triggered, never
+ * cron: the dashboard shows a confirmation screen with the affected
+ * firm/member counts (preview()) before anything runs (run()).
  *
- * For every njilga_dues_invoices row still not paid/excluded/downgraded
- * as of whenever the admin runs the sweep: strip `professional`, add the
- * year-specific "Unpaid Dues {year}" tag, and — matching the payment
- * listener's dual-tag approach — also flip the evergreen `unpaid-dues` /
- * `dues-paid` tags so the plugin's existing reports keep reflecting
- * reality. Mark the row downgraded.
+ * For every invoice row still unpaid for the year that would have
+ * settled membership (assessment-only invoices don't count — an unpaid
+ * dinner never lapses a membership): every roster member gets the
+ * year-specific unpaid tag ("Unpaid Dues 2027") and the evergreen
+ * `unpaid-dues` tag, loses `dues-paid`, and — if Settings say so — loses
+ * their category's WordPress role (best-effort, same rules as the grant).
+ * The row is marked downgraded and a Company Note is left.
+ *
+ * Only firms that never paid are touched: paid rows are excluded by the
+ * query, and a contact who appears on BOTH an unpaid row and a paid row
+ * for the same year (possible under individual billing) is protected —
+ * they're skipped, since someone's payment did cover them.
  */
 class MyNJILGA_Downgrade_Sweep {
 
     /**
-     * @return array{firms_swept:int, members_downgraded:int}
+     * What run() WOULD do — for the confirmation screen.
+     *
+     * @return array{rows:array<int,object>,invoices:int,firms:int,members:int,protected:int,remove_roles:bool}
+     */
+    public static function preview( int $duesYear ): array {
+        $rows      = MyNJILGA_Dues_Invoice_Table::get_unpaid_for_sweep( $duesYear );
+        $protected = self::protected_contact_ids( $duesYear );
+
+        $firms = []; $members = 0; $skipped = 0;
+        foreach ( $rows as $row ) {
+            $firms[ (int) $row->fluentcrm_company_id ] = true;
+            foreach ( MyNJILGA_Dues_Snapshot::members( $row ) as $m ) {
+                if ( isset( $protected[ (int) $m['contact_id'] ] ) ) {
+                    $skipped++;
+                } else {
+                    $members++;
+                }
+            }
+        }
+
+        return [
+            'rows'         => $rows,
+            'invoices'     => count( $rows ),
+            'firms'        => count( $firms ),
+            'members'      => $members,
+            'protected'    => $skipped,
+            'remove_roles' => (bool) MyNJILGA_Dues_Settings::general( 'downgrade_remove_roles', true ),
+        ];
+    }
+
+    /**
+     * @return array{firms_swept:int,invoices_swept:int,members_downgraded:int,roles_removed:int,protected:int}
      */
     public static function run( int $duesYear ): array {
-        $rows      = MyNJILGA_Dues_Invoice_Table::get_unpaid_for_sweep( $duesYear );
-        $yearTagId = MyNJILGA_Tags::get_or_create_by_title( 'Unpaid Dues ' . $duesYear );
+        $rows        = MyNJILGA_Dues_Invoice_Table::get_unpaid_for_sweep( $duesYear );
+        $protected   = self::protected_contact_ids( $duesYear );
+        $removeRoles = (bool) MyNJILGA_Dues_Settings::general( 'downgrade_remove_roles', true );
+        $crmActive   = MyNJILGA_Members_Data::fluentcrm_active();
 
-        $membersDowngraded = 0;
+        $paidTag   = (string) MyNJILGA_Dues_Settings::general( 'paid_tag', 'dues-paid' );
+        $unpaidTag = (string) MyNJILGA_Dues_Settings::general( 'unpaid_tag', 'unpaid-dues' );
+        $yearTagId = $crmActive ? MyNJILGA_Tags::get_or_create_by_title( MyNJILGA_Dues_Settings::year_tag( 'year_unpaid_tag_pattern', $duesYear ) ) : null;
+
+        $firms = []; $membersDowngraded = 0; $rolesRemoved = 0; $protectedCount = 0;
 
         foreach ( $rows as $row ) {
-            $roster  = json_decode( (string) $row->roster_snapshot, true );
-            $members = $roster['members'] ?? [];
+            $firms[ (int) $row->fluentcrm_company_id ] = true;
+            $members   = MyNJILGA_Dues_Snapshot::members( $row );
+            $rowCount  = 0;
 
             foreach ( $members as $member ) {
-                $contact = \FluentCrm\App\Models\Subscriber::find( (int) ( $member['contact_id'] ?? 0 ) );
+                $contactId = (int) ( $member['contact_id'] ?? 0 );
+                if ( isset( $protected[ $contactId ] ) ) {
+                    $protectedCount++;
+                    continue;
+                }
+                $contact = $crmActive ? \FluentCrm\App\Models\Subscriber::find( $contactId ) : null;
                 if ( ! $contact ) {
                     continue;
                 }
@@ -37,16 +84,14 @@ class MyNJILGA_Downgrade_Sweep {
                 if ( $yearTagId ) {
                     $contact->attachTags( [ $yearTagId ] );
                 }
-                MyNJILGA_Tags::attach( $contact, MyNJILGA_Tags::SLUG_UNPAID_DUES );
-                MyNJILGA_Tags::detach( $contact, MyNJILGA_Tags::SLUG_DUES_PAID );
+                MyNJILGA_Tags::attach_slug( $contact, $unpaidTag );
+                MyNJILGA_Tags::detach_slug( $contact, $paidTag );
 
-                if ( ! empty( $contact->user_id ) ) {
-                    $user = get_user_by( 'id', (int) $contact->user_id );
-                    if ( $user ) {
-                        $user->remove_role( MyNJILGA_Payment_Listener::WP_ROLE );
-                    }
+                if ( $removeRoles && self::remove_role( $contact, (string) ( $member['role'] ?? '' ) ) ) {
+                    $rolesRemoved++;
                 }
                 $membersDowngraded++;
+                $rowCount++;
             }
 
             MyNJILGA_Dues_Invoice_Table::mark_downgraded( [ (int) $row->id ] );
@@ -54,10 +99,64 @@ class MyNJILGA_Downgrade_Sweep {
             MyNJILGA_Invoicing_Notes::log(
                 (int) $row->fluentcrm_company_id,
                 'Dues invoice downgraded',
-                sprintf( '%d invoice never paid as of the downgrade sweep — %d member(s) downgraded.', $duesYear, count( $members ) )
+                sprintf(
+                    '%d invoice never paid as of the downgrade sweep — %d member(s) tagged unpaid%s.',
+                    $duesYear,
+                    $rowCount,
+                    $removeRoles ? ' and WordPress role removed where present' : ''
+                )
             );
         }
 
-        return [ 'firms_swept' => count( $rows ), 'members_downgraded' => $membersDowngraded ];
+        return [
+            'firms_swept'        => count( $firms ),
+            'invoices_swept'     => count( $rows ),
+            'members_downgraded' => $membersDowngraded,
+            'roles_removed'      => $rolesRemoved,
+            'protected'          => $protectedCount,
+        ];
+    }
+
+    /**
+     * Contacts covered by a PAID dues/combined invoice for the year —
+     * never downgraded even if they also appear on an unpaid row.
+     *
+     * @return array<int,true>
+     */
+    private static function protected_contact_ids( int $duesYear ): array {
+        $ids = [];
+        foreach ( MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ MyNJILGA_Dues_Invoice_Table::STATUS_PAID ] ) as $row ) {
+            if ( ! MyNJILGA_Dues_Snapshot::settles_dues( $row ) ) {
+                continue;
+            }
+            foreach ( MyNJILGA_Dues_Snapshot::members( $row ) as $m ) {
+                $ids[ (int) $m['contact_id'] ] = true;
+            }
+        }
+        return $ids;
+    }
+
+    /**
+     * @param \FluentCrm\App\Models\Subscriber $contact
+     */
+    private static function remove_role( $contact, string $role ): bool {
+        $role = sanitize_key( $role );
+        if ( $role === '' ) {
+            $role = MyNJILGA_Payment_Listener::WP_ROLE;
+        }
+        $userId = (int) ( $contact->user_id ?? 0 );
+        if ( $userId <= 0 && ! empty( $contact->email ) ) {
+            $user   = get_user_by( 'email', (string) $contact->email );
+            $userId = $user ? (int) $user->ID : 0;
+        }
+        if ( $userId <= 0 ) {
+            return false;
+        }
+        $user = get_user_by( 'id', $userId );
+        if ( ! $user || ! in_array( $role, (array) $user->roles, true ) ) {
+            return false;
+        }
+        $user->remove_role( $role );
+        return true;
     }
 }

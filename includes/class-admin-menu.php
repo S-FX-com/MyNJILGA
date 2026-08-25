@@ -14,8 +14,10 @@ class MyNJILGA_Admin_Menu {
     const SLUG_TRUSTEES   = 'my-njilga-trustees';
     const SLUG_COMPANIES  = 'my-njilga-companies';
     const SLUG_FIRMS      = 'my-njilga-firms';
-    const SLUG_INVOICING  = 'my-njilga-invoicing';
-    const SLUG_SETUP      = 'my-njilga-setup';
+    const SLUG_INVOICING    = 'my-njilga-invoicing';
+    const SLUG_APPLICATIONS = 'my-njilga-applications';
+    const SLUG_SETTINGS     = 'my-njilga-settings';
+    const SLUG_SETUP        = 'my-njilga-setup';
 
     /**
      * Report detail pages that are reachable by URL (clicked into from the
@@ -50,6 +52,21 @@ class MyNJILGA_Admin_Menu {
         add_submenu_page( self::SLUG_ROOT, 'Dashboard', 'Dashboard', 'manage_options', self::SLUG_ROOT,      [ 'MyNJILGA_Page_Dashboard',  'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Reports',   'Reports',   'manage_options', self::SLUG_REPORTS,   [ 'MyNJILGA_Page_Reports',    'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Invoicing', 'Invoicing', 'manage_options', self::SLUG_INVOICING, [ 'MyNJILGA_Page_Invoicing',  'render' ] );
+
+        // Applications: the enrollment review queue, with a pending-count
+        // bubble like Comments/Plugins use.
+        // admin_menu fires before admin_init, so on the first admin request
+        // after an auto-update the table may not exist yet — create it here
+        // rather than query a missing table.
+        $pending = 0;
+        if ( class_exists( 'MyNJILGA_Applications_Table' ) ) {
+            MyNJILGA_Applications_Table::maybe_upgrade();
+            $pending = MyNJILGA_Applications_Table::count_pending();
+        }
+        $appsLabel = 'Applications' . ( $pending > 0 ? sprintf( ' <span class="awaiting-mod count-%1$d"><span class="pending-count">%1$d</span></span>', $pending ) : '' );
+        add_submenu_page( self::SLUG_ROOT, 'Applications', $appsLabel, 'manage_options', self::SLUG_APPLICATIONS, [ 'MyNJILGA_Page_Applications', 'render' ] );
+
+        add_submenu_page( self::SLUG_ROOT, 'Dues & Billing Settings', 'Settings', 'manage_options', self::SLUG_SETTINGS, [ 'MyNJILGA_Page_Settings', 'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Setup',     'Setup',     'manage_options', self::SLUG_SETUP,     [ 'MyNJILGA_Page_Setup',      'render' ] );
 
         // Report detail pages: registered with an EMPTY parent slug. WordPress

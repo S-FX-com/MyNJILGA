@@ -1,7 +1,11 @@
 <?php
 /**
- * Step 4 — manual send: emails the Owner the payment link, marks the row
- * sent, and logs a FluentCRM Company Note.
+ * Step 4 (spec §7) — manual send: emails the bill-to contact the payment
+ * link (CC per the Settings policy: nobody / every member on the invoice
+ * / a fixed list), marks the row sent, and logs a FluentCRM Company Note.
+ *
+ * Any recipient can pay — the link is the order's public pay-now URL,
+ * not tied to a login.
  */
 class MyNJILGA_Invoice_Sender {
 
@@ -13,18 +17,20 @@ class MyNJILGA_Invoice_Sender {
             return [ 'ok' => false, 'error' => 'No order on this row yet — create the invoice first.' ];
         }
 
-        // Frozen snapshot identity, not a fresh Subscriber lookup — this
-        // has to match who the order/customer was actually created for.
-        $roster     = json_decode( (string) $invoiceRow->roster_snapshot, true );
-        $ownerEmail = (string) ( $roster['owner_email'] ?? '' );
-        $ownerName  = (string) ( $roster['owner_name'] ?? '' );
-        if ( $ownerEmail === '' ) {
-            $owner      = \FluentCrm\App\Models\Subscriber::find( (int) $invoiceRow->fluentcrm_owner_contact_id );
-            $ownerEmail = $owner ? (string) ( $owner->email ?? '' ) : '';
-            $ownerName  = $owner ? MyNJILGA_Members_Data::display_name( $owner ) : '';
+        $snapshot = MyNJILGA_Dues_Snapshot::decode( $invoiceRow );
+        $billTo   = MyNJILGA_Dues_Snapshot::bill_to( $invoiceRow );
+        if ( $billTo['email'] === '' && MyNJILGA_Members_Data::fluentcrm_active() ) {
+            $contact = \FluentCrm\App\Models\Subscriber::find( (int) ( $invoiceRow->bill_to_contact_id ?: $invoiceRow->fluentcrm_owner_contact_id ) );
+            if ( $contact ) {
+                $billTo = MyNJILGA_Dues_Snapshot::person( [
+                    'contact_id' => (int) $contact->id,
+                    'name'       => MyNJILGA_Members_Data::display_name( $contact ),
+                    'email'      => (string) ( $contact->email ?? '' ),
+                ] );
+            }
         }
-        if ( $ownerEmail === '' ) {
-            return [ 'ok' => false, 'error' => 'Owner contact not found or has no email on file.' ];
+        if ( $billTo['email'] === '' ) {
+            return [ 'ok' => false, 'error' => 'Bill-to contact not found or has no email on file.' ];
         }
 
         $link = MyNJILGA_Invoice_Creator::payment_link( (string) $invoiceRow->fluentcart_order_uuid );
@@ -33,49 +39,102 @@ class MyNJILGA_Invoice_Sender {
         }
 
         $duesYear = (int) $invoiceRow->dues_year;
-        $total    = number_format( $invoiceRow->total_amount_cents / 100, 2 );
+        $kind     = (string) ( $snapshot['invoice_kind'] ?? MyNJILGA_Dues_Snapshot::KIND_COMBINED );
+        $members  = $snapshot['members'];
+        $firm     = (string) ( $snapshot['company']['name'] ?? '' );
+        $total    = MyNJILGA_Invoicing::money( (int) $invoiceRow->total_amount_cents );
+        $isAssess = $kind === MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT;
 
-        // Who the invoice covers, read from the frozen snapshot — the same
-        // roster the FluentCart line items were built from, so the email and
-        // the invoice can't disagree. This is the plain-English half of the
-        // answer to "which of our attorneys does this cover?"; the invoice
-        // itself carries the same names as line items.
-        $members = $roster['members'] ?? [];
-        $covers  = MyNJILGA_Dues_Roster::email_summary( $members, $duesYear );
-        $firm    = (string) ( $roster['company_name'] ?? '' );
+        $covers = MyNJILGA_Dues_Roster::email_summary( $members, $duesYear, $kind );
 
-        // Assembled in blocks rather than one format string so an empty
-        // roster just drops its paragraph instead of leaving a blank gap.
-        $blocks = [
-            sprintf( 'Hi %s,', $ownerName ),
-            sprintf(
-                '%s %d NJILGA membership dues invoice totals $%s.',
-                $firm !== '' ? $firm . "'s" : "Your firm's",
+        $blocks = [ sprintf( 'Hi %s,', $billTo['name'] ) ];
+        if ( $isAssess ) {
+            $blocks[] = sprintf( 'Your %d NJILGA %s invoice totals %s.', $duesYear, (string) ( $members[0]['assessment_label'] ?? 'assessment' ), $total );
+        } else {
+            $blocks[] = sprintf(
+                '%s %d NJILGA membership dues invoice totals %s.',
+                $firm !== '' ? $firm . "'s" : 'Your',
                 $duesYear,
                 $total
-            ),
-        ];
+            );
+        }
         if ( $covers !== '' ) {
             $blocks[] = $covers;
         }
         $blocks[] = 'Pay online here: ' . $link;
         $blocks[] = "Thank you,\nNJILGA";
 
-        $subject = sprintf( '%d NJILGA Membership Dues Invoice', $duesYear );
+        $subject = $isAssess
+            ? sprintf( '%d NJILGA %s Invoice', $duesYear, (string) ( $members[0]['assessment_label'] ?? 'Assessment' ) )
+            : sprintf( '%d NJILGA Membership Dues Invoice%s', $duesYear, $firm !== '' ? ' — ' . $firm : '' );
         $body    = implode( "\n\n", $blocks );
+        $headers = self::headers( $billTo['email'], $members );
 
-        if ( ! wp_mail( $ownerEmail, $subject, $body ) ) {
+        if ( ! wp_mail( $billTo['email'], $subject, $body, $headers ) ) {
             return [ 'ok' => false, 'error' => "wp_mail() failed — check the site's mail configuration." ];
         }
 
         MyNJILGA_Dues_Invoice_Table::mark_sent( [ (int) $invoiceRow->id ] );
+        MyNJILGA_Dues_Invoice_Table::clear_error( (int) $invoiceRow->id );
 
+        $ccCount = 0;
+        foreach ( $headers as $h ) {
+            if ( stripos( $h, 'Cc:' ) === 0 ) {
+                $ccCount = count( array_filter( explode( ',', substr( $h, 3 ) ) ) );
+            }
+        }
         MyNJILGA_Invoicing_Notes::log(
             (int) $invoiceRow->fluentcrm_company_id,
             'Dues invoice sent',
-            sprintf( '%d invoice sent to %s (%s) — total $%s.', $duesYear, $ownerName, $ownerEmail, $total )
+            sprintf(
+                '%d %s invoice sent to %s (%s)%s — total %s.',
+                $duesYear,
+                $isAssess ? 'assessment' : 'dues',
+                $billTo['name'],
+                $billTo['email'],
+                $ccCount > 0 ? sprintf( ' with %d CC', $ccCount ) : '',
+                $total
+            )
         );
 
         return [ 'ok' => true ];
+    }
+
+    /**
+     * CC / Reply-To headers per Settings → Dues & Billing.
+     *
+     * @param array<int,array<string,mixed>> $members
+     * @return array<int,string>
+     */
+    private static function headers( string $toEmail, array $members ): array {
+        $headers = [];
+        $mode    = (string) MyNJILGA_Dues_Settings::general( 'send_cc_mode', MyNJILGA_Dues_Settings::CC_OWNER_ONLY );
+        $cc      = [];
+
+        if ( $mode === MyNJILGA_Dues_Settings::CC_ALL_MEMBERS ) {
+            foreach ( $members as $m ) {
+                $email = sanitize_email( (string) ( $m['email'] ?? '' ) );
+                if ( $email !== '' && strcasecmp( $email, $toEmail ) !== 0 ) {
+                    $cc[] = $email;
+                }
+            }
+        } elseif ( $mode === MyNJILGA_Dues_Settings::CC_CUSTOM ) {
+            foreach ( preg_split( '/[\s,;]+/', (string) MyNJILGA_Dues_Settings::general( 'send_cc_emails', '' ) ) as $raw ) {
+                $email = sanitize_email( $raw );
+                if ( $email !== '' && strcasecmp( $email, $toEmail ) !== 0 ) {
+                    $cc[] = $email;
+                }
+            }
+        }
+        $cc = array_values( array_unique( array_map( 'strtolower', $cc ) ) );
+        if ( $cc ) {
+            $headers[] = 'Cc: ' . implode( ', ', $cc );
+        }
+
+        $replyTo = sanitize_email( (string) MyNJILGA_Dues_Settings::general( 'send_reply_to', '' ) );
+        if ( $replyTo !== '' ) {
+            $headers[] = 'Reply-To: ' . $replyTo;
+        }
+        return $headers;
     }
 }

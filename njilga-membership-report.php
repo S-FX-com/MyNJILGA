@@ -2,8 +2,8 @@
 /**
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
- * Description: NJILGA membership dashboard, member/trustee/company reports, and Excel export — driven entirely from FluentCRM tags on the local install.
- * Version:     2.8.0
+ * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (FluentCart + FluentCRM), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
+ * Version:     2.9.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -15,9 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'NJILGA_REPORT_DIR', plugin_dir_path( __FILE__ ) );
 define( 'NJILGA_REPORT_URL', plugin_dir_url( __FILE__ ) );
 
-// Composer autoload powers the GitHub update checker on every request and
-// PhpSpreadsheet on the export request. Classmapped, so PhpSpreadsheet
-// itself isn't loaded until first use.
+// Composer autoload powers the GitHub update checker.
 $njilga_autoload = NJILGA_REPORT_DIR . 'vendor/autoload.php';
 if ( file_exists( $njilga_autoload ) ) {
     require_once $njilga_autoload;
@@ -37,6 +35,7 @@ if ( class_exists( '\\YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory' ) ) {
     }
 }
 
+// Reports (tag-driven).
 require_once NJILGA_REPORT_DIR . 'includes/class-tags.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-members-data.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-csv.php';
@@ -51,11 +50,16 @@ require_once NJILGA_REPORT_DIR . 'includes/class-page-companies.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-firms.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-setup.php';
 
-// Dues Invoicing by Firm — annual, admin-triggered batch invoicing against
-// FluentCart. See includes/invoicing/ for the full flow (preview → approve
-// → create → send → paid webhook → downgrade sweep).
+// Dues Invoicing — annual, admin-triggered batch invoicing through the
+// InvoiceGateway (FluentCart). See includes/invoicing/ and README.
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-settings.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-pricing-engine.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-snapshot.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-invoice-table.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/interface-invoice-gateway.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-fluentcart-invoice-gateway.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-roster.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-creator.php';
@@ -63,6 +67,15 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-page-settings.php';
+
+// Enrollment gate (application form → review queue → approval) and the
+// member-facing firm dues status page.
+require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-applications-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-form.php';
+require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-review.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-page-applications.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-firm-status-page.php';
 
 add_action( 'admin_menu', [ 'MyNJILGA_Admin_Menu', 'register' ] );
 
@@ -70,15 +83,26 @@ add_action( 'admin_menu', [ 'MyNJILGA_Admin_Menu', 'register' ] );
 add_filter( 'parent_file',  [ 'MyNJILGA_Admin_Menu', 'highlight_parent_menu' ] );
 add_filter( 'submenu_file', [ 'MyNJILGA_Admin_Menu', 'highlight_submenu' ] );
 
-// njilga_dues_invoices table: created on fresh activation, AND re-checked
-// on every admin_init. WordPress only fires register_activation_hook on a
-// brand new activation — an already-active site picking up this table via
-// an auto-update would never see it created without the admin_init check.
+// Custom tables: created on fresh activation AND re-checked on every
+// admin_init — WordPress only fires the activation hook on a brand new
+// activation, never on an auto-update of an already-active plugin.
 register_activation_hook( __FILE__, [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Applications_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Applications_Table', 'maybe_upgrade' ] );
 
-// Dues Invoicing: FluentCart's own "order paid" hook cascades tags/role.
-MyNJILGA_Payment_Listener::register();
+// Background invoice creation (Action Scheduler chunks) — the hook must be
+// registered on every request so the scheduler's worker can find it.
+MyNJILGA_Invoice_Creator::register();
+
+// Payment listener: registered once every plugin has loaded, so a site
+// can swap the invoice gateway via the `my_njilga_invoice_gateway` filter
+// before the "order paid" hook is bound.
+add_action( 'plugins_loaded', [ 'MyNJILGA_Payment_Listener', 'register' ], 20 );
+
+// Public shortcodes: [njilga_membership_application], [njilga_firm_dues_status].
+MyNJILGA_Application_Form::register();
+MyNJILGA_Firm_Status_Page::register();
 
 // Setup page: create a missing tag via the FluentCRM Tags API.
 add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_create_tag' ] );
@@ -104,9 +128,16 @@ add_action( 'admin_post_my_njilga_export_firms', [ 'MyNJILGA_Report_Xls', 'handl
 // Executive Summary — formatted Excel (.xls) export combining every report.
 add_action( 'admin_post_my_njilga_export_summary', [ 'MyNJILGA_Report_Summary', 'handle' ] );
 
-// Dues Invoicing by Firm — preview/approve/create/send/downgrade actions.
-add_action( 'admin_post_my_njilga_dues_preview',   [ 'MyNJILGA_Page_Invoicing', 'handle_preview' ] );
-add_action( 'admin_post_my_njilga_dues_approve',   [ 'MyNJILGA_Page_Invoicing', 'handle_approve' ] );
-add_action( 'admin_post_my_njilga_dues_create',    [ 'MyNJILGA_Page_Invoicing', 'handle_create' ] );
-add_action( 'admin_post_my_njilga_dues_send',      [ 'MyNJILGA_Page_Invoicing', 'handle_send' ] );
-add_action( 'admin_post_my_njilga_dues_downgrade', [ 'MyNJILGA_Page_Invoicing', 'handle_downgrade' ] );
+// Dues Invoicing — preview/approve/create/send/downgrade actions.
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_PREVIEW,   [ 'MyNJILGA_Page_Invoicing', 'handle_preview' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_APPROVE,   [ 'MyNJILGA_Page_Invoicing', 'handle_approve' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_CREATE,    [ 'MyNJILGA_Page_Invoicing', 'handle_create' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SEND,      [ 'MyNJILGA_Page_Invoicing', 'handle_send' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_DOWNGRADE, [ 'MyNJILGA_Page_Invoicing', 'handle_downgrade' ] );
+
+// Dues & Billing settings.
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_SAVE,  [ 'MyNJILGA_Page_Settings', 'handle_save' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_RESET, [ 'MyNJILGA_Page_Settings', 'handle_reset' ] );
+
+// Applications review queue.
+add_action( 'admin_post_' . MyNJILGA_Page_Applications::ACTION_DECIDE, [ 'MyNJILGA_Page_Applications', 'handle_decide' ] );

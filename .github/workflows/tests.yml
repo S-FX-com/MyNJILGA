@@ -1,0 +1,34 @@
+name: Tests
+
+# Runs the dependency-free unit tests (tests/run.php) and a PHP syntax
+# check over every plugin file, on the plugin's minimum PHP (7.4) and a
+# current one. No WordPress install is needed — the tested classes are
+# pure.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.3']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Syntax check every PHP file
+        run: |
+          set -e
+          find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l > /dev/null
+
+      - name: Unit tests
+        run: php tests/run.php

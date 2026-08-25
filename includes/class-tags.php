@@ -110,6 +110,90 @@ class MyNJILGA_Tags {
      */
     public static function flush_cache(): void {
         self::$slug_to_id_cache = null;
+        self::$generic_cache    = [];
+    }
+
+    // -------------------------------------------------------------------------
+    // Generic (settings-driven) tag helpers — Dues & Billing settings refer
+    // to tags by slug that aren't necessarily in DEFINITIONS above
+    // (professional, law-student, pending-approval, …).
+    // -------------------------------------------------------------------------
+
+    /** @var array<string,int|null> */
+    private static $generic_cache = [];
+
+    /**
+     * Resolve ANY slug to a FluentCRM tag id — slug match first, then an
+     * exact-title match on the slug's natural title ("law-student" →
+     * "Law Student"). Null when the tag doesn't exist.
+     */
+    public static function resolve_slug( string $slug ): ?int {
+        $slug = sanitize_title( $slug );
+        if ( $slug === '' ) {
+            return null;
+        }
+        if ( array_key_exists( $slug, self::$generic_cache ) ) {
+            return self::$generic_cache[ $slug ];
+        }
+        $title = isset( self::DEFINITIONS[ $slug ] ) ? self::DEFINITIONS[ $slug ]['title'] : self::title_for_slug( $slug );
+        self::$generic_cache[ $slug ] = self::resolve_one( $slug, $title );
+        return self::$generic_cache[ $slug ];
+    }
+
+    /**
+     * "law-student" → "Law Student".
+     */
+    public static function title_for_slug( string $slug ): string {
+        return ucwords( str_replace( [ '-', '_' ], ' ', $slug ) );
+    }
+
+    /**
+     * Every FluentCRM tag on the install, for settings dropdowns and the
+     * Setup page's slug audit.
+     *
+     * @return array<int,array{id:int,slug:string,title:string}>
+     */
+    public static function all_tags(): array {
+        if ( ! class_exists( '\\FluentCrm\\App\\Models\\Tag' ) ) {
+            return [];
+        }
+        $out = [];
+        foreach ( \FluentCrm\App\Models\Tag::orderBy( 'title', 'asc' )->get() as $tag ) {
+            $out[] = [ 'id' => (int) $tag->id, 'slug' => (string) $tag->slug, 'title' => (string) $tag->title ];
+        }
+        return $out;
+    }
+
+    /**
+     * Attach a tag by ANY slug, creating it (titled from the slug, or
+     * $title) when it doesn't exist yet. Used by the invoicing and
+     * enrollment flows for settings-configured tags.
+     */
+    public static function attach_slug( $subscriber, string $slug, ?string $title = null ): void {
+        if ( ! $subscriber || sanitize_title( $slug ) === '' ) {
+            return;
+        }
+        $id = self::resolve_slug( $slug );
+        if ( ! $id ) {
+            $id = self::get_or_create_by_title( $title ?: self::title_for_slug( $slug ), sanitize_title( $slug ) );
+            self::$generic_cache[ sanitize_title( $slug ) ] = $id;
+        }
+        if ( $id ) {
+            $subscriber->attachTags( [ $id ] );
+        }
+    }
+
+    /**
+     * Detach a tag by ANY slug. No-op if it doesn't exist.
+     */
+    public static function detach_slug( $subscriber, string $slug ): void {
+        if ( ! $subscriber ) {
+            return;
+        }
+        $id = self::resolve_slug( $slug );
+        if ( $id ) {
+            $subscriber->detachTags( [ $id ] );
+        }
     }
 
     /**
@@ -365,12 +449,12 @@ class MyNJILGA_Tags {
      * same FluentCrmApi bulk-import used by create()), since these tags
      * don't exist until the first time a given year is actually invoiced.
      */
-    public static function get_or_create_by_title( string $title ): ?int {
+    public static function get_or_create_by_title( string $title, string $slug = '' ): ?int {
         if ( ! class_exists( '\\FluentCrm\\App\\Models\\Tag' ) ) {
             return null;
         }
 
-        $slug = sanitize_title( $title );
+        $slug = $slug !== '' ? sanitize_title( $slug ) : sanitize_title( $title );
         $tag  = \FluentCrm\App\Models\Tag::where( 'slug', $slug )->first();
         if ( ! $tag ) {
             $tag = \FluentCrm\App\Models\Tag::where( 'title', $title )->first();
