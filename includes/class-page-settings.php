@@ -142,7 +142,7 @@ class MyNJILGA_Page_Settings {
         echo '<p style="color:#646970;max-width:820px">Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> is granted on payment, best-effort.</p>';
 
         echo '<table class="widefat striped" style="max-width:1200px"><thead><tr>
-                <th style="width:60px">Order</th><th>Label</th><th>Tag slug</th><th>Product / variation</th><th style="width:90px">Price ($)</th><th>Role</th><th style="width:70px">Tier-eligible</th><th style="width:80px">Applicant may pick</th><th style="width:50px">Delete</th>
+                <th style="width:60px">Order</th><th style="min-width:200px">Label</th><th style="min-width:180px">Tag slug</th><th style="min-width:260px">Product / variation</th><th style="width:90px">Price ($)</th><th>Role</th><th style="width:70px">Tier-eligible</th><th style="width:80px">Applicant may pick</th><th style="width:50px">Delete</th>
               </tr></thead><tbody>';
 
         $rows = $s['categories'];
