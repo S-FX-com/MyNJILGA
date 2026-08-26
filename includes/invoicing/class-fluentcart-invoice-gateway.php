@@ -24,6 +24,13 @@
  *   - `fluent_cart/order_paid_done` receives ['order' => Order, ...] and is
  *     FluentCart's documented hook for third-party "order fully paid"
  *     integrations.
+ *   - Product statuses are `publish`, `draft`, `private`, `future`, `trash`
+ *     (Status::getProductStatuses()) — there is no `pending` product
+ *     status; that value only exists elsewhere, for payments/transactions.
+ *     list_products() reads the real list via
+ *     Status::productAdminAllStatuses() rather than a hardcoded array, so a
+ *     scheduled ("future") product is selectable and this can't drift from
+ *     FluentCart's own status list again.
  */
 class MyNJILGA_FluentCart_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
 
@@ -159,8 +166,11 @@ class MyNJILGA_FluentCart_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             return [];
         }
         try {
+            // FluentCart's real statuses (publish/draft/private/future/trash,
+            // minus trash) — not a hand-copied list. See the class docblock:
+            // 'pending' was never one of them.
             $products = \FluentCart\App\Models\Product::query()
-                ->whereIn( 'post_status', [ 'publish', 'private', 'draft', 'pending' ] )
+                ->whereIn( 'post_status', \FluentCart\App\Helpers\Status::productAdminAllStatuses() )
                 ->with( 'variants' )
                 ->orderBy( 'post_title', 'asc' )
                 ->get();
