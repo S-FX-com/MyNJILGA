@@ -233,6 +233,16 @@ class MyNJILGA_Page_Setup {
             return;
         }
 
+        // Mirrors render_settings_tag_audit()'s intro immediately above this
+        // section: this table only ever READS njilga_dues_settings — it has
+        // no pickers of its own. Say so and point at where the pickers
+        // actually are, or every-row-unmapped on a fresh install reads as
+        // broken instead of as "nobody has configured Settings yet."
+        printf(
+            '<p style="color:#646970">Read-only — reflects the picks on the <a href="%s">Dues &amp; Billing settings</a> page. A row reading "Not mapped" means no product/variation has been chosen there yet, not that something is broken.</p>',
+            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) )
+        );
+
         echo '<table class="widefat striped" style="max-width:1000px"><thead><tr><th>Fee</th><th>Charges</th><th>Mapped to</th><th>Status</th></tr></thead><tbody>';
         $rows = [];
         foreach ( $s['categories'] as $cat ) {
