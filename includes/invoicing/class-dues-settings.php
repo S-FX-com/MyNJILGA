@@ -76,7 +76,9 @@ class MyNJILGA_Dues_Settings {
                 'send_cc_emails'           => '',
                 'send_reply_to'            => '',
                 'downgrade_remove_roles'   => true,
-                'mid_year_join_policy'     => self::JOIN_FREE_UNTIL_NEXT_CYCLE,
+                // Confirmed by NJILGA 2026-08: joining is an approval process and
+                // the approved applicant is invoiced right away.
+                'mid_year_join_policy'     => self::JOIN_INVOICE_NOW,
                 'pending_tag'              => 'pending-approval',
                 'rejected_tag'             => 'application-rejected',
                 'application_notify_email' => '',
@@ -114,7 +116,7 @@ class MyNJILGA_Dues_Settings {
                     'tag'                  => 'law-student',
                     'product_id'           => 0,
                     'variation_id'         => 0,
-                    'price_cents'          => 0,
+                    'price_cents'          => 3000, // Confirmed by NJILGA 2026-08: students currently pay $30 (may become free later).
                     'role'                 => 'professional',
                     'tier_eligible'        => false,
                     'applicant_selectable' => true,
@@ -126,7 +128,7 @@ class MyNJILGA_Dues_Settings {
                     'tag'                  => 'emerging-professional',
                     'product_id'           => 0,
                     'variation_id'         => 0,
-                    'price_cents'          => 0, // Final pricing pending (spec §2.5) — $0 / non-tier by default.
+                    'price_cents'          => 5000, // Confirmed by NJILGA 2026-08: $50, flat (non-tier).
                     'role'                 => 'professional',
                     'tier_eligible'        => false,
                     'applicant_selectable' => true,

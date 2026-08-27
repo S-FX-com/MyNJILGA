@@ -168,11 +168,12 @@ class MyNJILGA_Pricing_Engine_Test extends NJILGA_TestCase {
         $this->assertSame( 12500, $dues[1] );
         $this->assertSame( 7500, $dues[2] );
         $this->assertSame( 7500, $dues[5] ); // 5th paying member is NOT free
-        $this->assertSame( 0, $dues[10] );
-        $this->assertSame( 0, $dues[11] );
+        $this->assertSame( 0, $dues[10] );    // exempt
+        $this->assertSame( 3000, $dues[11] ); // law student: flat $30, not ranked
         $this->assertSame( 5, $this->member( $r, 5 )['rank'] );
-        // Dues 425 + one senior-trustee assessment 200.
-        $this->assertSame( 42500, $r['totals']['dues_cents'] );
+        $this->assertSame( 0, $this->member( $r, 11 )['rank'] );
+        // Dues 425 + 30 flat, plus one senior-trustee assessment 200.
+        $this->assertSame( 45500, $r['totals']['dues_cents'] );
         $this->assertSame( 20000, $r['totals']['assessment_cents'] );
     }
 
@@ -225,18 +226,41 @@ class MyNJILGA_Pricing_Engine_Test extends NJILGA_TestCase {
         $this->assertSame( 20000, $r['totals']['total_cents'] );
     }
 
-    /** 9. $0 categories (Law Student, Emerging Professional) produce a $0 firm. */
-    public function test_zero_price_categories_total_zero(): void {
+    /**
+     * 9. Flat-priced categories (Law Student $30, Emerging Professional $50)
+     * charge their flat price regardless of how many there are, never take
+     * a rank, and never affect the Professional tiers.
+     */
+    public function test_flat_price_categories_charge_flat_and_never_rank(): void {
         $r = MyNJILGA_Pricing_Engine::price( [
-            $this->contact( 1, 'Lee', 'Law', [ 'law-student' ] ),
+            $this->contact( 1, 'Lee', 'Law',    [ 'law-student' ] ),
             $this->contact( 2, 'Em',  'Erging', [ 'emerging-professional' ] ),
+            $this->contact( 3, 'Al',  'Law',    [ 'law-student' ] ),
+            $this->contact( 4, 'Zed', 'Zulu',   [ 'professional' ] ),
         ], $this->config() );
 
-        $this->assertSame( 0, $r['totals']['total_cents'] );
-        $this->assertSame( 2, $r['totals']['billed_members'] );
+        $this->assertSame( 3000, $this->member( $r, 1 )['dues_cents'] );
+        $this->assertSame( 3000, $this->member( $r, 3 )['dues_cents'] ); // second student still $30, not a "2nd member"
+        $this->assertSame( 5000, $this->member( $r, 2 )['dues_cents'] );
         $this->assertFalse( $this->member( $r, 1 )['tier_eligible'] );
-        $this->assertSame( 'Law Student Membership', $this->member( $r, 1 )['dues_note'] );
         $this->assertSame( 0, $this->member( $r, 1 )['rank'] );
+        $this->assertSame( '', $this->member( $r, 1 )['dues_note'] );
+        $this->assertSame( 1, $this->member( $r, 4 )['rank'] );        // the lone professional is still #1
+        $this->assertSame( 12500, $this->member( $r, 4 )['dues_cents'] );
+        $this->assertSame( 23500, $r['totals']['total_cents'] );
+        $this->assertSame( 4, $r['totals']['billed_members'] );
+
+        // A $0 flat category still reads as "no charge (label)".
+        $zero = $this->config();
+        foreach ( $zero['categories'] as &$cat ) {
+            if ( $cat['key'] === 'law_student' ) {
+                $cat['price_cents'] = 0;
+            }
+        }
+        unset( $cat );
+        $r0 = MyNJILGA_Pricing_Engine::price( [ $this->contact( 1, 'Lee', 'Law', [ 'law-student' ] ) ], $zero );
+        $this->assertSame( 0, $r0['totals']['total_cents'] );
+        $this->assertSame( 'Law Student Membership', $r0['members'][0]['dues_note'] );
     }
 
     /** 10. The assessment is capped at one per person; the first configured qualifier labels it. */

@@ -75,8 +75,8 @@ Everything the engine needs lives in **My NJILGA → Settings**, stored as one o
 |---|---|---|---|---|
 | Past President Membership (Exempt) | `past-president` | $0 | no | `professional` |
 | Senior Trustee Membership (Exempt) | `senior-trustee` | $0 | no | `professional` |
-| Law Student Membership | `law-student` | $0 | no | `professional` |
-| Emerging Professional Membership | `emerging-professional` | $0 (pending, spec §2.5) | no | `professional` |
+| Law Student Membership | `law-student` | $30 (flat; NJILGA may make students free later) | no | `professional` |
+| Emerging Professional Membership | `emerging-professional` | $50 (flat) | no | `professional` |
 | Professional Membership | `professional` | tiers: 1st Member $125 · Members 2–5 $75 · Members 6+ $0 | **yes** | `professional` |
 
 **Assessment:** Trustee Dinner Assessment, $200, one product; qualifying tags in order `officer`, `trustees`, `senior-trustee`, `past-president`.
@@ -164,8 +164,8 @@ Created, sent, paid, downgraded, application approved/rejected — each leaves a
 
 | Policy | Effect |
 |---|---|
-| **Free until next cycle** (default, spec §3.5) | Marked current for the current year (evergreen paid tag + `Dues Paid {year}` + role); first invoice is next year's batch. |
-| **Invoice now** | A draft individual invoice for the current year appears in Invoicing for staff to approve/create/send. |
+| **Invoice now** (default — confirmed by NJILGA) | A draft individual invoice for the current year appears in Invoicing for staff to approve/create/send. |
+| **Free until next cycle** | Marked current for the current year (evergreen paid tag + `Dues Paid {year}` + role); first invoice is next year's batch. |
 | **Manual** | Category tag only. |
 
 **Reject** swaps the pending tag for `application-rejected`. Both email the applicant and leave a Company Note.
