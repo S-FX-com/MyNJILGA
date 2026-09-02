@@ -32,9 +32,14 @@ class MyNJILGA_Payment_Listener {
 
     /**
      * @param array<string,mixed> $payment Raw payment details from the
-     *   gateway. Not consumed here — a later phase (the webhook receiver)
-     *   writes the payment-ledger row from this array before calling
-     *   settle(); this method only needs the id to match the invoice row.
+     *   gateway — the Stripe webhook receiver's invoice.paid handler
+     *   builds this in the shape MyNJILGA_Dues_Payments_Table::record()
+     *   expects (stripe_object_id/kind/method/amount_cents/status/
+     *   occurred_at/card_brand/last4/bank_name/receipt_url/raw), minus
+     *   invoice_row_id/livemode — this method supplies those two from
+     *   the invoice row it looks up right here, and is the ONE place
+     *   that both writes the ledger row and decides settlement for this
+     *   event, so a duplicate fire can never do one without the other.
      */
     public static function handle_invoice_paid( string $invoiceId, array $payment ): void {
         if ( $invoiceId === '' ) {
@@ -44,6 +49,19 @@ class MyNJILGA_Payment_Listener {
         if ( ! $invoiceRow ) {
             return; // Not a dues invoice — some other invoice.
         }
+
+        if ( ! empty( $payment ) ) {
+            $ledgerData = $payment;
+            $ledgerData['invoice_row_id'] = (int) $invoiceRow->id;
+            if ( ! array_key_exists( 'livemode', $ledgerData ) ) {
+                $ledgerData['livemode'] = (bool) $invoiceRow->livemode;
+            }
+            // Duplicate-safe on (stripe_object_id, kind) — a re-delivery
+            // of the same event (or a re-fire after the row is already
+            // paid) is a harmless no-op here, not a second ledger row.
+            MyNJILGA_Dues_Payments_Table::record( $ledgerData );
+        }
+
         if ( $invoiceRow->status === MyNJILGA_Dues_Invoice_Table::STATUS_PAID ) {
             return; // Already processed.
         }

@@ -116,4 +116,21 @@ class MyNJILGA_Stripe_Customer_Map {
         global $wpdb;
         $wpdb->delete( self::table_name(), [ 'company_id' => $companyId, 'mode' => $mode ], [ '%d', '%s' ] );
     }
+
+    /**
+     * Removes any mapping row for this Stripe Customer id in this mode —
+     * belt-and-suspenders cleanup for a `customer.deleted` webhook event
+     * (spec: Stripe migration phase 3). Not load-bearing:
+     * find_or_create_customer() already re-detects a deleted customer on
+     * its own next use; this just avoids one extra round-trip on that
+     * firm's next invoice.
+     */
+    public static function delete_by_customer_id( string $stripeCustomerId, string $mode ): void {
+        global $wpdb;
+        $wpdb->delete(
+            self::table_name(),
+            [ 'stripe_customer_id' => $stripeCustomerId, 'mode' => $mode ],
+            [ '%s', '%s' ]
+        );
+    }
 }

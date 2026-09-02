@@ -65,6 +65,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-customer-map.p
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/interface-invoice-gateway.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-invoice-gateway.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-webhook.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-roster.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
@@ -106,6 +107,11 @@ add_action( 'admin_init', [ 'MyNJILGA_Stripe_Customer_Map', 'maybe_upgrade' ] );
 // Background invoice creation (Action Scheduler chunks) — the hook must be
 // registered on every request so the scheduler's worker can find it.
 MyNJILGA_Invoice_Creator::register();
+
+// Stripe webhook receiver — registers its own REST route (rest_api_init)
+// and its Action Scheduler processing hook; must run on every request so
+// both the REST endpoint and the scheduler's worker can find it.
+MyNJILGA_Stripe_Webhook::register();
 
 // Payment listener: registered once every plugin has loaded, so a site
 // can swap the invoice gateway via the `my_njilga_invoice_gateway` filter

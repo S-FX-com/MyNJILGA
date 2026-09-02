@@ -14,7 +14,9 @@
  *
  * Statuses:
  *   draft → approved → created → sent → paid
+ *                                  ↘ processing (ACH in flight — Stripe webhook only)
  *                                  ↘ downgraded (sweep, never paid)
+ *                                  ↘ voided / uncollectible (Stripe webhook only)
  *   excluded  (no Owner / no members / nothing to bill — never invoiced)
  *
  * Schema history:
@@ -37,13 +39,21 @@ class MyNJILGA_Dues_Invoice_Table {
     const OPTION_DB_VERSION = 'njilga_dues_db_version';
     const DB_VERSION        = '1.2.0';
 
-    const STATUS_DRAFT      = 'draft';
-    const STATUS_APPROVED   = 'approved';
-    const STATUS_CREATED    = 'created';
-    const STATUS_SENT       = 'sent';
-    const STATUS_PAID       = 'paid';
-    const STATUS_DOWNGRADED = 'downgraded';
-    const STATUS_EXCLUDED   = 'excluded';
+    const STATUS_DRAFT         = 'draft';
+    const STATUS_APPROVED      = 'approved';
+    const STATUS_CREATED       = 'created';
+    const STATUS_SENT          = 'sent';
+    // ACH-in-flight (spec: Stripe migration phase 3) — set only by the
+    // payment_intent.processing webhook event; never settles membership.
+    const STATUS_PROCESSING    = 'processing';
+    const STATUS_PAID          = 'paid';
+    const STATUS_DOWNGRADED    = 'downgraded';
+    // Terminal, Stripe-driven outcomes (spec: Stripe migration phase 3) —
+    // set only by the invoice.voided / invoice.marked_uncollectible
+    // webhook events.
+    const STATUS_VOIDED        = 'voided';
+    const STATUS_UNCOLLECTIBLE = 'uncollectible';
+    const STATUS_EXCLUDED      = 'excluded';
 
     const ALL_STATUSES = [
         self::STATUS_EXCLUDED,
@@ -51,8 +61,11 @@ class MyNJILGA_Dues_Invoice_Table {
         self::STATUS_APPROVED,
         self::STATUS_CREATED,
         self::STATUS_SENT,
+        self::STATUS_PROCESSING,
         self::STATUS_PAID,
         self::STATUS_DOWNGRADED,
+        self::STATUS_VOIDED,
+        self::STATUS_UNCOLLECTIBLE,
     ];
 
     public static function table_name(): string {
@@ -562,6 +575,61 @@ class MyNJILGA_Dues_Invoice_Table {
     public static function clear_error( int $id ): void {
         global $wpdb;
         $wpdb->update( self::table_name(), [ 'last_error' => null ], [ 'id' => $id ], [ '%s' ], [ '%d' ] );
+    }
+
+    /**
+     * Generic partial-field update over a fixed whitelist of columns —
+     * this class owns all SQL against this table, so a caller (the
+     * Stripe webhook receiver's several event handlers, a later phase's
+     * reconciler) that needs to refresh a handful of gateway-driven
+     * fields at once (status, stripe_status/last_synced_at, amounts,
+     * timestamps, ...) comes through here rather than hand-rolling its
+     * own $wpdb call. Only whitelisted keys in $fields are written; an
+     * unrecognized key is silently ignored (a caller bug, not user
+     * input needing to be guarded against) and an empty/all-unrecognized
+     * $fields is a no-op.
+     *
+     * @param array<string,mixed> $fields
+     */
+    public static function update_gateway_fields( int $id, array $fields ): void {
+        global $wpdb;
+
+        $allowed = [
+            'status'                 => '%s',
+            'primary_method'         => '%s',
+            'stripe_status'          => '%s',
+            'last_synced_at'         => '%s',
+            'amount_paid_cents'      => '%d',
+            'amount_due_cents'       => '%d',
+            'amount_refunded_cents'  => '%d',
+            'paid_off_stripe_cents'  => '%d',
+            'hosted_invoice_url'     => '%s',
+            'invoice_pdf_url'        => '%s',
+            'gateway_invoice_number' => '%s',
+            'gateway_invoice_id'     => '%s',
+            'gateway_customer_id'    => '%s',
+            'processing_at'          => '%s',
+            'voided_at'              => '%s',
+            'finalized_at'           => '%s',
+            'last_error'             => '%s',
+            'due_date'               => '%s',
+        ];
+
+        $data   = [];
+        $format = [];
+        foreach ( $fields as $key => $value ) {
+            if ( ! array_key_exists( $key, $allowed ) ) {
+                continue;
+            }
+            $data[ $key ] = ( $allowed[ $key ] === '%d' ) ? (int) $value : $value;
+            $format[]     = $allowed[ $key ];
+        }
+
+        if ( empty( $data ) ) {
+            return;
+        }
+
+        $wpdb->update( self::table_name(), $data, [ 'id' => $id ], $format, [ '%d' ] );
     }
 
     /**
