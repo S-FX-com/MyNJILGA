@@ -179,7 +179,6 @@ add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_CREATE,    [ 'MyNJIL
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SEND,      [ 'MyNJILGA_Page_Invoicing', 'handle_send' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_DOWNGRADE, [ 'MyNJILGA_Page_Invoicing', 'handle_downgrade' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SYNC,      [ 'MyNJILGA_Page_Invoicing', 'handle_sync' ] );
-add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_MARK_PAID, [ 'MyNJILGA_Page_Invoicing', 'handle_mark_paid' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_VOID,      [ 'MyNJILGA_Page_Invoicing', 'handle_void' ] );
 
 // Dues & Billing settings.

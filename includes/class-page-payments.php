@@ -674,7 +674,6 @@ class MyNJILGA_Page_Payments {
         $kindMap = [
             MyNJILGA_Dues_Payments_Table::KIND_PAYMENT => [ 'Payment', 'success' ],
             MyNJILGA_Dues_Payments_Table::KIND_REFUND  => [ 'Refund', 'destructive' ],
-            MyNJILGA_Dues_Payments_Table::KIND_MANUAL  => [ 'Manual', 'outline' ],
         ];
         [ $kindLabel, $kindVariant ] = $kindMap[ (string) $p->kind ] ?? [ ucfirst( (string) $p->kind ), 'muted' ];
 

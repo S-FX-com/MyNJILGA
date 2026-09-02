@@ -22,11 +22,10 @@
  *     whole) before the invoice is finalized.
  *
  *   - Settlement (granting roles/tags on payment) is intentionally NOT
- *     performed anywhere in this class — see mark_paid_out_of_band().
- *     The `invoice.paid` webhook (a later phase) is the ONLY code path
- *     allowed to call MyNJILGA_Payment_Listener::settle(); this class
- *     only ever asks Stripe to mark something paid, never decides that
- *     dues are settled itself.
+ *     performed anywhere in this class. The `invoice.paid` webhook is the
+ *     ONLY code path allowed to call MyNJILGA_Payment_Listener::settle(),
+ *     however an invoice came to be paid — online, or closed out with
+ *     Stripe's own "Mark as paid".
  *
  * Testability: create_order() is the one method exercised by
  * tests/StripeGatewayTest.php without WordPress loaded at all. Every
@@ -520,81 +519,6 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
         add_action( 'njilga_stripe_invoice_paid', function ( $invoiceId, $payment ) use ( $callback ) {
             $callback( (string) $invoiceId, (array) $payment );
         }, 10, 2 );
-    }
-
-    /**
-     * @param array<string,mixed> $meta
-     * @return array{ok:bool,error?:string}
-     */
-    public function mark_paid_out_of_band( string $invoiceId, array $meta ): array {
-        try {
-            $client = $this->client();
-            if ( $client === null || $invoiceId === '' ) {
-                return [ 'ok' => false, 'error' => 'Stripe is not connected.' ];
-            }
-
-            $keyMap   = [
-                'payment_method'             => 'njilga_payment_method',
-                'check_number'               => 'njilga_check_number',
-                'check_date'                 => 'njilga_check_date',
-                'recorded_by'                => 'njilga_recorded_by',
-                // Stripe migration run 4 (Mark Paid by check/cash/wire):
-                // the balance BEFORE this payment, i.e. exactly what this
-                // out-of-band payment covers — never Stripe's own
-                // cumulative amount_paid, which the webhook would
-                // otherwise log and double-count against any prior
-                // manually-recorded partial. See
-                // MyNJILGA_Page_Invoicing::handle_mark_paid() and
-                // class-stripe-webhook.php's handle_invoice_paid().
-                'final_payment_amount_cents' => 'njilga_final_payment_amount_cents',
-            ];
-            $metadata = [];
-            foreach ( $keyMap as $metaKey => $stripeKey ) {
-                if ( isset( $meta[ $metaKey ] ) && $meta[ $metaKey ] !== '' ) {
-                    $metadata[ $stripeKey ] = (string) $meta[ $metaKey ];
-                }
-            }
-
-            // Derived from the actual metadata content, not just the
-            // invoice id: a client-level retry of THIS SAME attempt (lost
-            // response, transport blip) reuses the key and Stripe returns
-            // its cached result instead of erroring — which matters here,
-            // since a false "could not mark paid" after the pay call
-            // actually succeeded would otherwise send staff back to Mark
-            // Paid believing nothing happened. A genuinely different
-            // later attempt (corrected check number/amount) gets a fresh
-            // key rather than colliding with a stale one.
-            $idempotencySuffix = md5( (string) wp_json_encode( $metadata ) );
-
-            if ( ! empty( $metadata ) ) {
-                $updateResp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ), [ 'metadata' => $metadata ], [
-                    'idempotency_key' => 'njilga-payoob-meta-' . $invoiceId . '-' . $idempotencySuffix,
-                ] );
-                if ( ! $updateResp['ok'] ) {
-                    return [ 'ok' => false, 'error' => $updateResp['error'] !== '' ? $updateResp['error'] : 'Could not record payment metadata on the invoice.' ];
-                }
-            }
-
-            // Marks the Stripe invoice paid_out_of_band and stops here.
-            // This method deliberately does NOT call
-            // MyNJILGA_Payment_Listener::settle() or grant any role/tag —
-            // per this migration's design, the resulting invoice.paid
-            // webhook event (a later phase) is the ONLY code path allowed
-            // to trigger settlement. Do not "helpfully" add a direct
-            // settle() call here: it would double-settle once the webhook
-            // catches up, or settle before Stripe has actually confirmed
-            // the pay call succeeded.
-            $payResp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ) . '/pay', [ 'paid_out_of_band' => true ], [
-                'idempotency_key' => 'njilga-payoob-pay-' . $invoiceId . '-' . $idempotencySuffix,
-            ] );
-            if ( ! $payResp['ok'] ) {
-                return [ 'ok' => false, 'error' => $payResp['error'] !== '' ? $payResp['error'] : 'Stripe could not mark the invoice paid.' ];
-            }
-
-            return [ 'ok' => true ];
-        } catch ( \Throwable $e ) {
-            return [ 'ok' => false, 'error' => $e->getMessage() ];
-        }
     }
 
     /**

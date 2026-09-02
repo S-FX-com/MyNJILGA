@@ -6,7 +6,7 @@
  * constructor / private client() helper).
  *
  * Every other interface method (is_available, find_or_create_customer,
- * invoice_status, mark_paid_out_of_band, ...) reaches into
+ * invoice_status, void_invoice, ...) reaches into
  * MyNJILGA_Stripe_Connection, which calls get_option()/current_time() —
  * genuinely WordPress-dependent — and is out of scope for this
  * dependency-free runner.

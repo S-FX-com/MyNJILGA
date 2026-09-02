@@ -85,18 +85,6 @@ interface MyNJILGA_Invoice_Gateway {
     public function on_invoice_paid( callable $callback ): void;
 
     /**
-     * Mark an open invoice paid outside the gateway (check/cash/wire).
-     * $meta carries payment_method/check_number/check_date/recorded_by
-     * and, when the payment zeroes the balance, final_payment_amount_cents
-     * keys, free-form — gateway-specific what it does with them (e.g.
-     * Stripe: pay the invoice out-of-band and note the detail on it).
-     *
-     * @param array<string,mixed> $meta
-     * @return array{ok:bool,error?:string}
-     */
-    public function mark_paid_out_of_band( string $invoiceId, array $meta ): array;
-
-    /**
      * Void an invoice. Terminal — a voided invoice cannot be paid or
      * reopened.
      *

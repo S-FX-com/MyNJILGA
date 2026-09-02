@@ -18,10 +18,11 @@ class OffStripeAmountTest extends NJILGA_TestCase {
     }
 
     /**
-     * The case that would otherwise overstate collections: $100 cheque
-     * recorded in the admin, then the rest closed out in the Stripe
-     * Dashboard. Stripe reports the cumulative $200; only the remaining
-     * $100 belongs to this event.
+     * The case that would otherwise overstate collections: $100 already
+     * paid against the invoice (a card payment, say), then the remaining
+     * balance closed out with "Mark as paid" in the Stripe Dashboard.
+     * Stripe reports the cumulative $200; only the remaining $100 was
+     * settled off Stripe and belongs to this event.
      */
     public function testPartialAlreadyRecordedIsNotBookedTwice(): void {
         $this->assertSame( 10000, MyNJILGA_Stripe_Webhook::off_stripe_amount_cents( 10000, 20000 ) );
