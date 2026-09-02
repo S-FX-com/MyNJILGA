@@ -383,7 +383,7 @@ class MyNJILGA_Page_Invoicing {
      */
     private static function row_actions( object $row, array $c, bool $canCreate ): string {
         $rowId = (int) $row->id;
-        $link  = MyNJILGA_Invoice_Creator::payment_link( (string) $row->fluentcart_order_uuid );
+        $link  = (string) ( $row->hosted_invoice_url ?? '' );
 
         switch ( $c['status'] ) {
             case 'ready':

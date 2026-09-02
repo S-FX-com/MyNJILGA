@@ -102,9 +102,12 @@ class MyNJILGA_Page_Settings {
 
         if ( ! $gateway->is_available() ) {
             MyNJILGA_Admin_UI::callout( sprintf( '<strong>%s is not active</strong> — product pickers are empty. Categories still price correctly; line items will be created as custom lines until products are mapped.', esc_html( $gateway->name() ) ), 'warning' );
-        } elseif ( empty( $products ) ) {
-            MyNJILGA_Admin_UI::callout( sprintf( '<strong>No %s products found.</strong> Create the dues products first (Professional Membership with its three variations, Emerging Professional, Law Student, Past President (Exempt), Senior Trustee (Exempt), Trustee Dinner Assessment), then map them here.', esc_html( $gateway->name() ) ), 'warning' );
         }
+        // No top-level "no products found" warning when the gateway is
+        // available but simply catalog-less by design (Stripe: inline
+        // line items, list_products() always []) — render_categories()/
+        // render_assessment() already say so per section, calmly, instead
+        // of implying something needs fixing.
 
         self::render_tag_datalist( $tags );
 
@@ -476,6 +479,14 @@ class MyNJILGA_Page_Settings {
             'Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> is granted on payment, best-effort.'
         );
 
+        // A catalog-less gateway (Stripe: inline line items) has nothing
+        // for the product/variation pickers to list — show the price
+        // field alone instead of a non-functional empty <select>.
+        $noCatalog = empty( $products );
+        if ( $noCatalog ) {
+            MyNJILGA_Admin_UI::callout( 'Prices are billed as inline line items — the amounts below are what appears on the invoice.', 'info' );
+        }
+
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
                 <th style="width:70px">Order</th><th style="min-width:200px">Label</th><th style="min-width:180px">Tag slug</th><th style="min-width:260px">Product / variation</th><th style="width:100px">Price ($)</th><th>Role</th><th style="width:80px">Tier-eligible</th><th style="width:90px">Applicant may pick</th><th style="width:60px">Delete</th>
               </tr></thead><tbody>';
@@ -489,7 +500,12 @@ class MyNJILGA_Page_Settings {
             printf( '<td><input type="number" name="%s[order]" value="%d" min="0" class="njilga-input-sm" style="width:64px"></td>', $n, $isNew ? 999 : $i + 1 );
             printf( '<td><input type="text" name="%s[label]" value="%s" placeholder="%s" class="njilga-full">%s</td>', $n, esc_attr( $cat['label'] ), $isNew ? 'New category label…' : '', $isNew ? '' : sprintf( '<input type="hidden" name="%s[key]" value="%s"><div class="njilga-dim" style="font-size:11px;margin-top:4px">key: %s</div>', $n, esc_attr( $cat['key'] ), esc_html( $cat['key'] ) ) );
             printf( '<td><input type="text" list="njilga-tags" name="%s[tag]" value="%s" class="njilga-full">%s</td>', $n, esc_attr( $cat['tag'] ), self::tag_check( $cat['tag'] ) );
-            printf( '<td>%s%s</td>', self::product_select( "{$n}[product]", (int) $cat['product_id'], (int) $cat['variation_id'], $products ), self::variation_check( $gateway, (int) $cat['product_id'], (int) $cat['variation_id'], (int) $cat['price_cents'] ) );
+            printf(
+                '<td>%s</td>',
+                $noCatalog
+                    ? '<span class="njilga-dim">&#8212;</span>'
+                    : self::product_select( "{$n}[product]", (int) $cat['product_id'], (int) $cat['variation_id'], $products ) . self::variation_check( $gateway, (int) $cat['product_id'], (int) $cat['variation_id'], (int) $cat['price_cents'] )
+            );
             printf( '<td><input type="number" step="0.01" min="0" name="%s[price]" value="%s" style="width:92px"></td>', $n, esc_attr( number_format( $cat['price_cents'] / 100, 2, '.', '' ) ) );
             printf( '<td>%s</td>', self::role_select( "{$n}[role]", $cat['role'], $roles ) );
             printf( '<td class="njilga-col-center"><input type="checkbox" name="%s[tier_eligible]" value="1"%s></td>', $n, checked( ! empty( $cat['tier_eligible'] ), true, false ) );
@@ -516,7 +532,12 @@ class MyNJILGA_Page_Settings {
                 printf( '<td><input type="number" name="%s[from]" value="%d" min="0" class="njilga-input-sm" style="width:76px"></td>', $tn, (int) $t['from'] );
                 printf( '<td><input type="number" name="%s[to]" value="%d" min="0" class="njilga-input-sm" style="width:76px"></td>', $tn, (int) $t['to'] );
                 printf( '<td><input type="number" step="0.01" min="0" name="%s[price]" value="%s" class="njilga-input-sm" style="width:92px"></td>', $tn, esc_attr( number_format( $t['price_cents'] / 100, 2, '.', '' ) ) );
-                printf( '<td>%s%s</td>', self::product_select( "{$tn}[product]", (int) $cat['product_id'], (int) $t['variation_id'], $products, true ), $t['key'] !== '' ? self::variation_check( $gateway, 0, (int) $t['variation_id'], (int) $t['price_cents'] ) : '' );
+                printf(
+                    '<td>%s</td>',
+                    $noCatalog
+                        ? '<span class="njilga-dim">&#8212;</span>'
+                        : self::product_select( "{$tn}[product]", (int) $cat['product_id'], (int) $t['variation_id'], $products, true ) . ( $t['key'] !== '' ? self::variation_check( $gateway, 0, (int) $t['variation_id'], (int) $t['price_cents'] ) : '' )
+                );
                 echo '</tr>';
             }
             echo '</tbody></table></div></div></details></td></tr>';
@@ -530,9 +551,19 @@ class MyNJILGA_Page_Settings {
             'Assessment',
             'One flat charge per qualifying ACTIVE contact, on top of their dues (an exempt Senior Trustee still owes it). Qualifying tags are matched in order; the first one a contact carries labels their line. Capped at one per person.'
         );
+
+        // Same catalog-optional tolerance as render_categories() — no
+        // products to pick from means no picker row, straight to price.
+        $noCatalog = empty( $products );
+        if ( $noCatalog ) {
+            MyNJILGA_Admin_UI::callout( 'Prices are billed as inline line items — the amounts below are what appears on the invoice.', 'info' );
+        }
+
         echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
         self::text_row( 'assessment[label]', 'Label', $a['label'], 'Printed on the invoice line, e.g. "Trustee Dinner Assessment".' );
-        echo '<tr><th scope="row">Product / variation</th><td>' . self::product_select( 'assessment[product]', (int) $a['product_id'], (int) $a['variation_id'], $products ) . self::variation_check( $gateway, (int) $a['product_id'], (int) $a['variation_id'], (int) $a['price_cents'] ) . '</td></tr>';
+        if ( ! $noCatalog ) {
+            echo '<tr><th scope="row">Product / variation</th><td>' . self::product_select( 'assessment[product]', (int) $a['product_id'], (int) $a['variation_id'], $products ) . self::variation_check( $gateway, (int) $a['product_id'], (int) $a['variation_id'], (int) $a['price_cents'] ) . '</td></tr>';
+        }
         printf( '<tr><th scope="row"><label for="a-price">Price ($)</label></th><td><input type="number" step="0.01" min="0" id="a-price" name="assessment[price]" value="%s" style="width:110px"></td></tr>', esc_attr( number_format( $a['price_cents'] / 100, 2, '.', '' ) ) );
         echo '</tbody></table></div>';
 

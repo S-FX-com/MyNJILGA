@@ -212,12 +212,10 @@ class MyNJILGA_Dues_Invoice_Table {
         return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE id = %d", $id ) ); // phpcs:ignore
     }
 
-    public static function get_by_order_id( int $orderId ) {
+    public static function get_by_order_id( string $invoiceId ) {
         global $wpdb;
         $table = self::table_name();
-        // %s (not %d): gateway_invoice_id is VARCHAR since 1.2.0 — an int
-        // still stringifies fine against it.
-        return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE gateway_invoice_id = %s", $orderId ) ); // phpcs:ignore
+        return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE gateway_invoice_id = %s", $invoiceId ) ); // phpcs:ignore
     }
 
     /**
@@ -453,23 +451,67 @@ class MyNJILGA_Dues_Invoice_Table {
         return self::bulk_set_status( $ids, self::STATUS_APPROVED, 'approved_at', [ self::STATUS_DRAFT ] );
     }
 
-    public static function mark_created( int $id, ?int $customerId, int $orderId, string $orderUuid ): void {
+    /**
+     * Stamp a row as created against the gateway. The base fields
+     * (customer/invoice id+number, status, cleared error/queued_at) are
+     * always written; $extra optionally carries whatever of these the
+     * gateway's create_order() response provided — each written only
+     * when the KEY is present in $extra (array_key_exists, not just
+     * truthy), so omitting a key never clobbers that column with null:
+     *   'hosted_invoice_url' => string
+     *   'invoice_pdf_url'    => string
+     *   'due_date'           => string ('Y-m-d', or '' for NULL)
+     *   'finalized_at'       => string (mysql datetime)
+     *   'stripe_status'      => string
+     *   'amount_due_cents'   => int
+     *   'gateway'            => string (defaults to 'stripe' when absent
+     *                            — a row only reaches mark_created()
+     *                            through an active gateway's create_order())
+     *
+     * @param array<string,mixed> $extra
+     */
+    public static function mark_created( int $id, ?string $customerId, string $invoiceId, string $invoiceNumber, array $extra = [] ): void {
         global $wpdb;
+
+        $data = [
+            'gateway_customer_id'    => $customerId,
+            'gateway_invoice_id'     => $invoiceId,
+            'gateway_invoice_number' => $invoiceNumber,
+            'status'                 => self::STATUS_CREATED,
+            'last_error'             => null,
+            'queued_at'              => null,
+            'gateway'                => array_key_exists( 'gateway', $extra ) ? (string) $extra['gateway'] : 'stripe',
+        ];
+        $format = [ '%s', '%s', '%s', '%s', '%s', '%s', '%s' ];
+
+        $optional = [
+            'hosted_invoice_url' => '%s',
+            'invoice_pdf_url'    => '%s',
+            'due_date'           => '%s',
+            'finalized_at'       => '%s',
+            'stripe_status'      => '%s',
+            'amount_due_cents'   => '%d',
+        ];
+        foreach ( $optional as $key => $fmt ) {
+            if ( ! array_key_exists( $key, $extra ) ) {
+                continue;
+            }
+            if ( $key === 'due_date' ) {
+                // '' means "no due date" (NULL), not the literal string.
+                $data[ $key ] = ( (string) $extra[ $key ] === '' ) ? null : (string) $extra[ $key ];
+            } elseif ( $fmt === '%d' ) {
+                $data[ $key ] = (int) $extra[ $key ];
+            } else {
+                $data[ $key ] = (string) $extra[ $key ];
+            }
+            $format[] = $fmt;
+        }
+
         $wpdb->update(
             self::table_name(),
-            [
-                'gateway_customer_id'    => $customerId,
-                'gateway_invoice_id'     => $orderId,
-                'gateway_invoice_number' => $orderUuid,
-                'status'                 => self::STATUS_CREATED,
-                'last_error'             => null,
-                'queued_at'              => null,
-            ],
+            $data,
             [ 'id' => $id ],
-            // '%s' for all three: now VARCHAR columns, even though the
-            // values passed in are still typed int/string per this
-            // method's (unchanged, for now) signature.
-            [ '%s', '%s', '%s', '%s', '%s', '%s' ],
+            $format,
             [ '%d' ]
         );
     }

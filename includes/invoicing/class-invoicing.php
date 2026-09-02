@@ -12,7 +12,7 @@ class MyNJILGA_Invoicing {
 
     public static function gateway(): MyNJILGA_Invoice_Gateway {
         if ( self::$gateway === null ) {
-            $gateway = new MyNJILGA_FluentCart_Invoice_Gateway();
+            $gateway = new MyNJILGA_Stripe_Invoice_Gateway();
             /**
              * Replace the invoice gateway.
              *

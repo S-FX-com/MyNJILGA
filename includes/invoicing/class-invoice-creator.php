@@ -1,19 +1,20 @@
 <?php
 /**
  * Step 3 (spec §7) — turns approved rows into real invoices through the
- * MyNJILGA_Invoice_Gateway: find-or-create the commerce customer for the
+ * MyNJILGA_Invoice_Gateway: find-or-create the gateway customer for the
  * bill-to contact, build one line per fee from the frozen snapshot
  * (referencing the mapped catalog products, line_meta carrying
- * contact_id / dues_year), create the order, store order id / uuid.
+ * contact_id / dues_year), create the invoice, store its id/number and
+ * whatever else create_order() returned (hosted URL, PDF URL, due date).
  *
  * Runs in Action Scheduler chunks (batch size from Settings, default 25
  * invoices per job) when Action Scheduler is present — it ships inside
- * both FluentCart and FluentCRM — and inline otherwise. Each row is
- * isolated: a failure is recorded on THAT row's `last_error` and the
- * loop moves on; nothing is rolled back and nothing blocks the rest of
- * the batch.
+ * FluentCRM — and inline otherwise. Each row is isolated: a failure is
+ * recorded on THAT row's `last_error` and the loop moves on; nothing is
+ * rolled back and nothing blocks the rest of the batch.
  *
- * This class never names a FluentCart class; see the gateway.
+ * This class never names a Stripe (or other gateway SDK) class; see the
+ * gateway.
  */
 class MyNJILGA_Invoice_Creator {
 
@@ -26,13 +27,6 @@ class MyNJILGA_Invoice_Creator {
 
     public static function gateway(): MyNJILGA_Invoice_Gateway {
         return MyNJILGA_Invoicing::gateway();
-    }
-
-    /**
-     * Convenience for pages: public pay-now link for a row's order.
-     */
-    public static function payment_link( string $orderUuid ): string {
-        return self::gateway()->payment_link( $orderUuid );
     }
 
     // -------------------------------------------------------------------------
@@ -163,9 +157,11 @@ class MyNJILGA_Invoice_Creator {
         }
 
         // Guard on the TOTAL, not on an empty item list: every member gets a
-        // line (including $0 ones), and FluentCart auto-settles a $0 order
-        // the moment it's created — which would silently mark the whole
-        // firm paid instead of reporting there was nothing to bill.
+        // line (including $0 ones). Stripe does not auto-settle a $0
+        // invoice the way FluentCart used to — this guard stays anyway
+        // because an empty invoice is meaningless paperwork, not a
+        // technical necessity: a firm that owes nothing this cycle
+        // shouldn't get an invoice at all, regardless of gateway.
         if ( MyNJILGA_Dues_Roster::total_cents( $members ) <= 0 ) {
             return [ 'ok' => false, 'error' => 'Every roster member owes $0 — nothing to invoice.' ];
         }
@@ -198,21 +194,36 @@ class MyNJILGA_Invoice_Creator {
             return [ 'ok' => false, 'error' => (string) ( $result['error'] ?? 'Order creation failed.' ) ];
         }
 
+        $invoiceId     = (string) ( $result['invoice_id'] ?? '' );
+        $invoiceNumber = (string) ( $result['invoice_number'] ?? '' );
+
+        $extra = [];
+        if ( isset( $result['hosted_url'] ) ) {
+            $extra['hosted_invoice_url'] = (string) $result['hosted_url'];
+        }
+        if ( isset( $result['pdf_url'] ) ) {
+            $extra['invoice_pdf_url'] = (string) $result['pdf_url'];
+        }
+        if ( isset( $result['due_date'] ) ) {
+            $extra['due_date'] = (string) $result['due_date'];
+        }
+
         MyNJILGA_Dues_Invoice_Table::mark_created(
             (int) $invoiceRow->id,
             $customerId,
-            (int) $result['order_id'],
-            (string) ( $result['order_uuid'] ?? '' )
+            $invoiceId,
+            $invoiceNumber,
+            $extra
         );
 
         MyNJILGA_Invoicing_Notes::log(
             (int) $invoiceRow->fluentcrm_company_id,
             'Dues invoice created',
             sprintf(
-                '%d %s invoice #%d created in %s for %s (%s) — %s, %d member(s).',
+                '%d %s invoice %s created in %s for %s (%s) — %s, %d member(s).',
                 $duesYear,
                 $kind === MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT ? 'assessment' : 'dues',
-                (int) $result['order_id'],
+                $invoiceNumber !== '' ? $invoiceNumber : $invoiceId,
                 $gateway->name(),
                 $billTo['name'],
                 $billTo['email'],

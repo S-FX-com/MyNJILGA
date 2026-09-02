@@ -116,8 +116,8 @@ class MyNJILGA_Firm_Status_Page {
         $members  = $snapshot['members'];
         $billTo   = MyNJILGA_Dues_Snapshot::bill_to( $row );
         $kind     = MyNJILGA_Dues_Snapshot::invoice_kind( $row );
-        $payable  = in_array( $row->status, [ MyNJILGA_Dues_Invoice_Table::STATUS_CREATED, MyNJILGA_Dues_Invoice_Table::STATUS_SENT ], true ) && ! empty( $row->fluentcart_order_uuid );
-        $link     = $payable ? MyNJILGA_Invoicing::gateway()->payment_link( (string) $row->fluentcart_order_uuid ) : '';
+        $payable  = in_array( $row->status, [ MyNJILGA_Dues_Invoice_Table::STATUS_CREATED, MyNJILGA_Dues_Invoice_Table::STATUS_SENT ], true ) && ! empty( $row->hosted_invoice_url );
+        $link     = $payable ? (string) ( $row->hosted_invoice_url ?? '' ) : '';
 
         [ $statusLabel, $statusClass ] = self::status_label( $row );
 

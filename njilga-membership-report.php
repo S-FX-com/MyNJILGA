@@ -52,7 +52,7 @@ require_once NJILGA_REPORT_DIR . 'includes/class-page-firms.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-setup.php';
 
 // Dues Invoicing — annual, admin-triggered batch invoicing through the
-// InvoiceGateway (FluentCart). See includes/invoicing/ and README.
+// InvoiceGateway (Stripe). See includes/invoicing/ and README.
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-settings.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-client.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-connection.php';
@@ -64,7 +64,6 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-events-table.p
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-customer-map.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/interface-invoice-gateway.php';
-require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-fluentcart-invoice-gateway.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-roster.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
