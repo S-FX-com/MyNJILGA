@@ -156,14 +156,16 @@ class MyNJILGA_Stripe_Reconciler {
             ];
         }
 
-        $stripeStatus  = (string) ( $fetched['stripe_status'] ?? '' );
-        $stripeAmtPaid = (int) ( $fetched['amount_paid_cents'] ?? 0 );
-        $stripeAmtDue  = (int) ( $fetched['amount_due_cents'] ?? 0 );
+        $stripeStatus   = (string) ( $fetched['stripe_status'] ?? '' );
+        $stripeAmtPaid  = (int) ( $fetched['amount_paid_cents'] ?? 0 );
+        $stripeAmtDue   = (int) ( $fetched['amount_due_cents'] ?? 0 );
+        $stripeOffCents = (int) ( $fetched['paid_off_stripe_cents'] ?? 0 );
 
         $rowStatus     = (string) $invoiceRow->status;
         $rowStripeStat = (string) ( $invoiceRow->stripe_status ?? '' );
         $rowAmtPaid    = (int) $invoiceRow->amount_paid_cents;
         $rowAmtDue     = (int) $invoiceRow->amount_due_cents;
+        $rowOffCents   = (int) ( $invoiceRow->paid_off_stripe_cents ?? 0 );
 
         $stripeSaysPaid = ( $stripeStatus === 'paid' );
         $missedPayment  = ( $stripeSaysPaid && $rowStatus !== MyNJILGA_Dues_Invoice_Table::STATUS_PAID );
@@ -171,7 +173,8 @@ class MyNJILGA_Stripe_Reconciler {
         $diverges = $missedPayment
             || ( $stripeStatus !== $rowStripeStat )
             || ( $stripeAmtPaid !== $rowAmtPaid )
-            || ( $stripeAmtDue !== $rowAmtDue );
+            || ( $stripeAmtDue !== $rowAmtDue )
+            || ( $stripeOffCents !== $rowOffCents );
 
         if ( ! $diverges ) {
             return [ 'updated' => false, 'needs_attention' => false, 'note' => sprintf( '%s: already in sync.', $name ) ];
@@ -267,6 +270,12 @@ class MyNJILGA_Stripe_Reconciler {
         if ( $stripeStatus !== $rowStripeStat ) {
             $fields['stripe_status'] = $stripeStatus;
         }
+        // How much of this invoice was settled OFF Stripe (checks, wires
+        // — anything marked paid out of band). Reported by Stripe itself,
+        // so it stays right even for a settlement we never observed.
+        if ( $stripeOffCents !== $rowOffCents ) {
+            $fields['paid_off_stripe_cents'] = $stripeOffCents;
+        }
         $method = self::best_effort_payment_detail( $fetched )['method'];
         if ( $method !== '' && $method !== (string) ( $invoiceRow->primary_method ?? '' ) ) {
             $fields['primary_method'] = $method;
@@ -306,7 +315,7 @@ class MyNJILGA_Stripe_Reconciler {
             $detail['card_brand'] = isset( $pmDetails['card']['brand'] ) ? (string) $pmDetails['card']['brand'] : null;
             $detail['last4']      = isset( $pmDetails['card']['last4'] ) ? (string) $pmDetails['card']['last4'] : null;
         } elseif ( $type === 'us_bank_account' && is_array( $pmDetails['us_bank_account'] ?? null ) ) {
-            $detail['method']    = 'ach';
+            $detail['method']    = 'us_bank_account';
             $detail['bank_name'] = isset( $pmDetails['us_bank_account']['bank_name'] ) ? (string) $pmDetails['us_bank_account']['bank_name'] : null;
             $detail['last4']     = isset( $pmDetails['us_bank_account']['last4'] ) ? (string) $pmDetails['us_bank_account']['last4'] : null;
         } elseif ( $type !== '' ) {

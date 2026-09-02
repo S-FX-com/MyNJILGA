@@ -508,7 +508,7 @@ class MyNJILGA_Stripe_Webhook {
             $detail['card_brand'] = isset( $pmDetails['card']['brand'] ) ? (string) $pmDetails['card']['brand'] : null;
             $detail['last4']      = isset( $pmDetails['card']['last4'] ) ? (string) $pmDetails['card']['last4'] : null;
         } elseif ( $type === 'us_bank_account' && is_array( $pmDetails['us_bank_account'] ?? null ) ) {
-            $detail['method']    = 'ach';
+            $detail['method']    = 'us_bank_account';
             $detail['bank_name'] = isset( $pmDetails['us_bank_account']['bank_name'] ) ? (string) $pmDetails['us_bank_account']['bank_name'] : null;
             $detail['last4']     = isset( $pmDetails['us_bank_account']['last4'] ) ? (string) $pmDetails['us_bank_account']['last4'] : null;
         } elseif ( $type !== '' ) {
@@ -788,7 +788,10 @@ class MyNJILGA_Stripe_Webhook {
         ];
         MyNJILGA_Dues_Payments_Table::record( $ledger );
 
-        MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
+        // Stripe's charge carries the CUMULATIVE refunded total, which is
+        // what this column should hold — summing our own ledger rows would
+        // drift the moment a refund arrived that we never saw.
+        $fields = [
             'last_error'     => sprintf(
                 'Refunded %s on %s — review membership status.',
                 MyNJILGA_Invoicing::money( abs( $refundAmount ) ),
@@ -796,7 +799,11 @@ class MyNJILGA_Stripe_Webhook {
             ),
             'stripe_status'  => (string) ( $dataObject['status'] ?? '' ),
             'last_synced_at' => current_time( 'mysql' ),
-        ] );
+        ];
+        if ( isset( $dataObject['amount_refunded'] ) ) {
+            $fields['amount_refunded_cents'] = abs( (int) $dataObject['amount_refunded'] );
+        }
+        MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, $fields );
 
         self::finish_processed( $eventId, (int) $row->id );
     }

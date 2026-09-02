@@ -193,6 +193,7 @@ class MyNJILGA_Invoice_Creator {
             'company_name'   => MyNJILGA_Dues_Snapshot::company_name( $invoiceRow ),
             'invoice_row_id' => (int) $invoiceRow->id,
             'invoice_kind'   => $kind,
+            'bill_to_contact_id' => (int) ( $billTo['contact_id'] ?? 0 ),
         ] );
 
         if ( empty( $result['ok'] ) ) {
@@ -202,7 +203,11 @@ class MyNJILGA_Invoice_Creator {
         $invoiceId     = (string) ( $result['invoice_id'] ?? '' );
         $invoiceNumber = (string) ( $result['invoice_number'] ?? '' );
 
-        $extra = [];
+        // create_order() finalizes the invoice before returning (that is
+        // the point of no return in Stripe's lifecycle), so this row is
+        // finalized as of now — the column exists to answer "when did
+        // this stop being editable", and only this moment can say.
+        $extra = [ 'finalized_at' => current_time( 'mysql' ) ];
         if ( isset( $result['hosted_url'] ) ) {
             $extra['hosted_invoice_url'] = (string) $result['hosted_url'];
         }

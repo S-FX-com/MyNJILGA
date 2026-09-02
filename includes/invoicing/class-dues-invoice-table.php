@@ -272,10 +272,18 @@ class MyNJILGA_Dues_Invoice_Table {
      * Every invoice row, any year, for the given companies — newest year
      * first. Backs the member-facing firm status page.
      *
+     * $livemode is REQUIRED, and not defaulted, for the same reason
+     * find_row() requires it: this is the one read that faces MEMBERS
+     * rather than staff, so a forgotten mode filter would show a firm its
+     * test-mode invoice — complete with a test-mode "Pay this invoice"
+     * link that can never actually collect money. The UNIQUE key
+     * deliberately permits a test row and a live row for the same
+     * firm/year, so both really can be sitting there at once.
+     *
      * @param array<int,int> $companyIds
      * @return array<int,object>
      */
-    public static function get_for_companies( array $companyIds ): array {
+    public static function get_for_companies( array $companyIds, bool $livemode ): array {
         global $wpdb;
         $companyIds = array_values( array_filter( array_map( 'intval', $companyIds ) ) );
         if ( empty( $companyIds ) ) {
@@ -283,9 +291,11 @@ class MyNJILGA_Dues_Invoice_Table {
         }
         $table        = self::table_name();
         $placeholders = implode( ',', array_fill( 0, count( $companyIds ), '%d' ) );
+        $args         = $companyIds;
+        $args[]       = $livemode ? 1 : 0;
         return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT * FROM $table WHERE fluentcrm_company_id IN ($placeholders) ORDER BY dues_year DESC, id ASC",
-            $companyIds
+            "SELECT * FROM $table WHERE fluentcrm_company_id IN ($placeholders) AND livemode = %d ORDER BY dues_year DESC, id ASC",
+            $args
         ) );
     }
 

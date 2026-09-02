@@ -62,7 +62,11 @@ class MyNJILGA_Firm_Status_Page {
             return (string) ob_get_clean();
         }
 
-        $rows = MyNJILGA_Dues_Invoice_Table::get_for_companies( $companyIds );
+        // Members only ever see the mode the site is actually operating
+        // in — a test-mode invoice (and its uncollectable payment link)
+        // must never reach a firm.
+        $liveMode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+        $rows     = MyNJILGA_Dues_Invoice_Table::get_for_companies( $companyIds, $liveMode );
         // Only real invoices — exceptions are staff-facing.
         $rows = array_values( array_filter( $rows, static function ( $r ) { return $r->status !== MyNJILGA_Dues_Invoice_Table::STATUS_EXCLUDED; } ) );
 
