@@ -335,6 +335,13 @@ class MyNJILGA_Admin_UI {
 .njilga-card-title{font-size:17px;font-weight:600;margin:0}
 .njilga-card-pad{padding:18px}
 
+/* Generic layout utilities — a responsive two-up card grid (Payments tab's
+   Test/Live cards) and a flex row that splits its children to the edges
+   (a card's title + status pills). Kept generic rather than one-off so
+   any future screen needing the same shapes can reuse them. */
+.njilga-cols-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;margin-bottom:20px}
+.njilga-row-between{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+
 /* Banner: an inline card with copy on the left, an action on the right. */
 .njilga-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
   padding:16px 20px;margin:0 0 20px;background:var(--bg);border:1px solid var(--border);

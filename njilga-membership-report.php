@@ -55,6 +55,7 @@ require_once NJILGA_REPORT_DIR . 'includes/class-page-setup.php';
 // InvoiceGateway (FluentCart). See includes/invoicing/ and README.
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-settings.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-client.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-connection.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-pricing-engine.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-snapshot.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-invoice-table.php';
@@ -140,6 +141,12 @@ add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_DOWNGRADE, [ 'MyNJIL
 // Dues & Billing settings.
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_SAVE,  [ 'MyNJILGA_Page_Settings', 'handle_save' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_RESET, [ 'MyNJILGA_Page_Settings', 'handle_reset' ] );
+
+// Settings > Payments tab — Stripe connect/credential actions.
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_PAYMENTS_SAVE,       [ 'MyNJILGA_Page_Settings', 'handle_payments_save' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_CONNECT,      [ 'MyNJILGA_Page_Settings', 'handle_connect' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_WEBHOOK_SAVE, [ 'MyNJILGA_Page_Settings', 'handle_webhook_save' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_SWITCH_MODE,  [ 'MyNJILGA_Page_Settings', 'handle_switch_mode' ] );
 
 // Applications review queue.
 add_action( 'admin_post_' . MyNJILGA_Page_Applications::ACTION_DECIDE, [ 'MyNJILGA_Page_Applications', 'handle_decide' ] );
