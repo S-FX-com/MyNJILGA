@@ -322,6 +322,8 @@ class MyNJILGA_Admin_UI {
 .njilga-stat-warning .njilga-stat-value{color:var(--warn-fg)}
 .njilga-stat-destructive .njilga-stat-icon{background:var(--danger-bg);color:var(--danger-fg)}
 .njilga-stat-destructive .njilga-stat-value{color:var(--danger-fg)}
+.njilga-stat-muted .njilga-stat-icon{background:var(--muted);color:var(--muted-fg)}
+.njilga-stat-muted .njilga-stat-value{color:var(--muted-fg)}
 
 /* --- Progress ------------------------------------------------------------ */
 .njilga-progress-wrap{margin:6px 0 22px}
@@ -352,6 +354,7 @@ class MyNJILGA_Admin_UI {
   border-radius:var(--radius-card)}
 .njilga-banner-title{font-size:15px;font-weight:600;margin-bottom:3px}
 .njilga-banner-desc{color:var(--muted-fg);font-size:13px;line-height:1.5;max-width:760px}
+.njilga-banner-total{font-size:17px;font-weight:700;color:var(--fg)}
 
 /* Link cards: the Reports / Dashboard navigation grid. */
 .njilga-linkcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:8px 0 20px}
@@ -383,7 +386,7 @@ class MyNJILGA_Admin_UI {
 .njilga-search input{width:100%;height:38px;padding:0 12px 0 34px;border:1px solid var(--border);
   border-radius:var(--radius-control);font-size:13.5px;background:var(--bg);color:var(--fg);font-family:inherit}
 .njilga-ui input[type=text],.njilga-ui input[type=email],.njilga-ui input[type=number],
-.njilga-ui input[type=url],.njilga-ui input[type=search],.njilga-ui textarea{
+.njilga-ui input[type=url],.njilga-ui input[type=search],.njilga-ui input[type=date],.njilga-ui textarea{
   height:38px;padding:0 12px;border:1px solid var(--border);border-radius:var(--radius-control);
   font-size:13.5px;background:var(--bg);color:var(--fg);font-family:inherit;max-width:100%}
 .njilga-ui textarea{height:auto;padding:9px 12px;line-height:1.5;resize:vertical}
@@ -394,6 +397,10 @@ class MyNJILGA_Admin_UI {
   -webkit-appearance:none;appearance:none;max-width:100%;
   background:var(--bg) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 9px center}
 .njilga-select-sm,.njilga-ui select.njilga-select-sm{height:32px;font-size:12.5px}
+/* A real <select multiple> (Payments' Years filter) needs to show several
+   rows at once rather than collapse to the single-select's fixed height —
+   the dropdown chevron background is meaningless on a multi-select too. */
+.njilga-select[multiple]{height:auto;min-height:84px;padding:6px 10px;background-image:none}
 .njilga-ui input[type=checkbox],.njilga-ui input[type=radio]{width:16px;height:16px;
   accent-color:var(--primary);cursor:pointer;margin:0}
 .njilga-input-sm{height:32px!important;font-size:12.5px!important;padding:0 9px!important}
@@ -500,9 +507,13 @@ class MyNJILGA_Admin_UI {
 .njilga-confirm-actions{display:flex;gap:10px;flex-wrap:wrap}
 .njilga-confirm-form{margin-top:16px}
 
-/* --- Data-table workspace (Invoicing) ------------------------------------
-   Row expansion, bulk bar, client-side pagination. Only the Invoicing
-   screen uses these today; they live here so any future list screen can. */
+/* --- Data-table workspace (Invoicing, Payments) ---------------------------
+   Row expansion, bulk bar, client-side pagination. Shared by any list
+   screen built on this pattern (Invoicing, Payments). */
+/* A wrapping row of small chips inside one table cell (Payments' by-firm/
+   by-member year chips) — flex + wrap rather than relying on inline-flex
+   badges to wrap unassisted inside a table cell. */
+.njilga-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .njilga-year{display:flex;align-items:center;gap:6px;margin:0}
 .njilga-year-label{display:inline-flex;align-items:center;gap:5px;color:var(--muted-fg);
   font-size:12.5px;font-weight:500}

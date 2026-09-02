@@ -100,6 +100,113 @@ class MyNJILGA_Report_Csv {
         exit;
     }
 
+    // -------------------------------------------------------------------------
+    // Payments ledger (Stripe migration phase 4) — By-invoice/By-firm/Aging.
+    // Data comes from MyNJILGA_Page_Payments's own build_lines()/
+    // group_by_firm()/aging_buckets(), the exact same source the on-screen
+    // tables render from, so an export always matches what's on screen.
+    // -------------------------------------------------------------------------
+
+    const PAYMENTS_VIEW_INVOICE = 'invoice';
+    const PAYMENTS_VIEW_FIRM    = 'firm';
+    const PAYMENTS_VIEW_AGING   = 'aging';
+
+    /**
+     * Entry point for the Payments page's CSV export — dispatches on
+     * ?view= the same way stream() dispatches on ?type=.
+     */
+    public static function stream_payments( string $view ): void {
+        switch ( $view ) {
+            case self::PAYMENTS_VIEW_INVOICE: self::stream_payments_by_invoice(); break;
+            case self::PAYMENTS_VIEW_FIRM:    self::stream_payments_by_firm();    break;
+            case self::PAYMENTS_VIEW_AGING:   self::stream_payments_aging();      break;
+            default:
+                wp_die( 'Unknown payments view.' );
+        }
+    }
+
+    private static function stream_payments_by_invoice(): void {
+        $lines = MyNJILGA_Page_Payments::build_lines();
+        $fh    = self::open( 'payments-by-invoice' );
+
+        fputcsv( $fh, [ 'Firm', 'Dues Year', 'Invoice #', 'Bill To', 'Status', 'Method', 'Amount', 'Paid', 'Balance', 'Paid On', 'Due Date' ] );
+        foreach ( $lines as $l ) {
+            $invoiceNo = $l['invoiceNo'] !== '' ? $l['invoiceNo'] : ( $l['invoiceId'] !== '' ? '…' . substr( $l['invoiceId'], -8 ) : '' );
+            fputcsv( $fh, [
+                $l['firm'],
+                $l['year'],
+                $invoiceNo,
+                $l['billTo'],
+                MyNJILGA_Page_Payments::status_pill_parts( $l['status'] )[0],
+                MyNJILGA_Page_Payments::method_label( $l['method'] ),
+                number_format( $l['total'] / 100, 2, '.', '' ),
+                number_format( $l['paid'] / 100, 2, '.', '' ),
+                number_format( $l['due'] / 100, 2, '.', '' ),
+                $l['paidDate'],
+                $l['dueDate'],
+            ] );
+        }
+        fclose( $fh );
+        exit;
+    }
+
+    /**
+     * Long-format, one row per (firm, dues year) — same convention as
+     * stream_companies() above: the firm's aggregate (its total
+     * outstanding) is repeated on every one of its rows so the file can
+     * be filtered/pivoted in Excel.
+     */
+    private static function stream_payments_by_firm(): void {
+        $lines = MyNJILGA_Page_Payments::build_lines();
+        $firms = MyNJILGA_Page_Payments::group_by_firm( $lines );
+        $fh    = self::open( 'payments-by-firm' );
+
+        $verdictLabels = [ 'paid' => 'Paid', 'partial' => 'Partial', 'unpaid' => 'Unpaid', 'written_off' => 'Written Off' ];
+
+        fputcsv( $fh, [ 'Firm', 'Dues Year', 'Year Status', 'Firm Total Outstanding' ] );
+        foreach ( $firms as $f ) {
+            $outstanding = number_format( $f['outstandingCents'] / 100, 2, '.', '' );
+            if ( empty( $f['years'] ) ) {
+                fputcsv( $fh, [ $f['name'], '', '', $outstanding ] );
+                continue;
+            }
+            foreach ( $f['years'] as $year => $yr ) {
+                fputcsv( $fh, [ $f['name'], $year, $verdictLabels[ $yr['verdict'] ] ?? ucfirst( $yr['verdict'] ), $outstanding ] );
+            }
+        }
+        fclose( $fh );
+        exit;
+    }
+
+    /**
+     * Long-format, one row per outstanding invoice, Bucket label repeated
+     * per row (same filter/pivot-friendly convention as stream_companies()
+     * and stream_payments_by_firm() above) rather than subtotal rows —
+     * Excel can pivot/subtotal this on the Bucket column itself.
+     */
+    private static function stream_payments_aging(): void {
+        $lines = MyNJILGA_Page_Payments::build_lines();
+        $aging = MyNJILGA_Page_Payments::aging_buckets( $lines );
+        $fh    = self::open( 'payments-aging' );
+
+        fputcsv( $fh, [ 'Bucket', 'Firm', 'Invoice #', 'Status', 'Balance', 'Due Date' ] );
+        foreach ( $aging['buckets'] as $bucket ) {
+            foreach ( $bucket['lines'] as $l ) {
+                $invoiceNo = $l['invoiceNo'] !== '' ? $l['invoiceNo'] : ( $l['invoiceId'] !== '' ? '…' . substr( $l['invoiceId'], -8 ) : '' );
+                fputcsv( $fh, [
+                    $bucket['label'],
+                    $l['firm'],
+                    $invoiceNo,
+                    MyNJILGA_Page_Payments::status_pill_parts( $l['status'] )[0],
+                    number_format( $l['due'] / 100, 2, '.', '' ),
+                    $l['dueDate'],
+                ] );
+            }
+        }
+        fclose( $fh );
+        exit;
+    }
+
     /**
      * Sends the headers + opens php://output. Excel-friendly UTF-8 BOM
      * so accented firm names render correctly when opened directly.

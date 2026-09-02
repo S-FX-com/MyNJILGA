@@ -75,6 +75,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-page-payments.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-settings.php';
 
 // Enrollment gate (application form → review queue → approval) and the
@@ -148,6 +149,24 @@ add_action( 'admin_post_my_njilga_export_csv', static function () {
 
 // Membership by Firm — formatted Excel (.xls) export.
 add_action( 'admin_post_my_njilga_export_firms', [ 'MyNJILGA_Report_Xls', 'handle' ] );
+
+// Payments ledger — CSV export (?view=invoice|firm|aging).
+add_action( 'admin_post_my_njilga_export_payments', static function () {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_die( 'Access denied.' );
+    }
+    check_admin_referer( 'my_njilga_export_payments' );
+
+    if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
+        wp_die( 'FluentCRM is not active.' );
+    }
+
+    $view = sanitize_key( $_REQUEST['view'] ?? '' );
+    MyNJILGA_Report_Csv::stream_payments( $view );
+} );
+
+// Payments ledger — formatted Excel (.xls) export (?view=firm|aging).
+add_action( 'admin_post_my_njilga_export_payments_xls', [ 'MyNJILGA_Report_Xls', 'handle_payments' ] );
 
 // Executive Summary — formatted Excel (.xls) export combining every report.
 add_action( 'admin_post_my_njilga_export_summary', [ 'MyNJILGA_Report_Summary', 'handle' ] );
