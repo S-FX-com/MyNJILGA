@@ -64,6 +64,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-events-table.p
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-customer-map.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/interface-invoice-gateway.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-invoice-gateway.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-roster.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';

@@ -278,6 +278,25 @@ class MyNJILGA_Stripe_Connection {
     }
 
     /**
+     * The one place the Stripe invoice gateway gets its HTTP transport
+     * from: a ready-to-use client for the given (or active) mode, or null
+     * when there's nothing usable — not connected in that mode, or the
+     * stored key won't decrypt (wrong/rotated NJILGA_STRIPE_KEY). Callers
+     * must treat null as "can't talk to Stripe right now", not throw.
+     */
+    public static function client_for_mode( ?string $mode = null ): ?MyNJILGA_Stripe_Client {
+        $mode = self::normalize_mode( $mode );
+        if ( ! self::is_connected( $mode ) ) {
+            return null;
+        }
+        $secretKey = self::decrypted_secret_key( $mode );
+        if ( $secretKey === null || $secretKey === '' ) {
+            return null;
+        }
+        return new MyNJILGA_Stripe_Client( $secretKey );
+    }
+
+    /**
      * Display-safe masked key: "rk_live_••••••••4a9f" — first 8 chars,
      * a fixed bullet run, last 4. Never returns the real key. Returns ''
      * when nothing is stored, and a short placeholder when the stored

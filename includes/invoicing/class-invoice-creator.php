@@ -177,6 +177,12 @@ class MyNJILGA_Invoice_Creator {
             return [ 'ok' => false, 'error' => 'Bill-to contact not found or has no email on file.' ];
         }
 
+        // Not part of the interface's documented bill-to shape, but the
+        // Stripe gateway needs the FIRM identity — it bills one Customer
+        // per firm, not per bill-to contact (see interface docblock).
+        $billTo['company_id']   = (int) $invoiceRow->fluentcrm_company_id;
+        $billTo['company_name'] = MyNJILGA_Dues_Snapshot::company_name( $invoiceRow );
+
         $customerId = $gateway->find_or_create_customer( $billTo );
         if ( ! $customerId ) {
             return [ 'ok' => false, 'error' => 'Could not find or create a ' . $gateway->name() . ' customer for ' . $billTo['email'] ];
@@ -186,6 +192,7 @@ class MyNJILGA_Invoice_Creator {
         $result    = $gateway->create_order( $customerId, $lineItems, [
             'dues_year'      => $duesYear,
             'company_id'     => (int) $invoiceRow->fluentcrm_company_id,
+            'company_name'   => MyNJILGA_Dues_Snapshot::company_name( $invoiceRow ),
             'invoice_row_id' => (int) $invoiceRow->id,
             'invoice_kind'   => $kind,
         ] );

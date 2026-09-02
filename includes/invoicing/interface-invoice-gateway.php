@@ -21,6 +21,14 @@
  *
  * Bill-to (input to find_or_create_customer):
  *   [ 'contact_id' => int, 'email' => string, 'first_name' => string, 'last_name' => string ]
+ *   The Stripe gateway additionally expects, when present, 'company_id'
+ *   (int) and 'company_name' (string) — Stripe bills one Customer per
+ *   FIRM, not per bill-to contact, and needs the firm's identity to
+ *   find-or-create it (see MyNJILGA_Stripe_Invoice_Gateway::
+ *   find_or_create_customer()). Extra keys on an associative array
+ *   passed to an `array $billTo` parameter are not a type violation, so
+ *   this stays a superset of the shape documented above rather than a
+ *   change to the interface itself.
  */
 interface MyNJILGA_Invoice_Gateway {
 
@@ -50,7 +58,8 @@ interface MyNJILGA_Invoice_Gateway {
      * Create an unpaid invoice for the customer.
      *
      * @param array<int,array<string,mixed>> $lineItems See interface docblock.
-     * @param array<string,mixed>            $context   Free-form: dues_year, company_id, invoice_row_id.
+     * @param array<string,mixed>            $context   Free-form: dues_year, company_id, invoice_row_id,
+     *                                                   invoice_kind, and (Stripe gateway) company_name.
      * @return array{ok:bool,invoice_id?:string,invoice_number?:string,hosted_url?:string,pdf_url?:string,due_date?:string,error?:string}
      *   invoice_id is the gateway's own id (Stripe: `in_...`); invoice_number
      *   is the gateway's human-readable number (Stripe: the `number` field,
