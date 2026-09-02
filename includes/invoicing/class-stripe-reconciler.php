@@ -58,6 +58,12 @@ class MyNJILGA_Stripe_Reconciler {
      */
     const OPTION_ORPHANS = 'njilga_stripe_orphan_invoices';
 
+    /**
+     * A hard stop so a pagination bug at either end can never spin the
+     * daily job: 20 pages of 100 is far more than a year of dues.
+     */
+    const ORPHAN_SCAN_MAX_PAGES = 20;
+
     // -------------------------------------------------------------------------
     // PART A — the sync algorithm
     // -------------------------------------------------------------------------
@@ -163,16 +169,14 @@ class MyNJILGA_Stripe_Reconciler {
             ];
         }
 
-        $stripeStatus   = (string) ( $fetched['stripe_status'] ?? '' );
-        $stripeAmtPaid  = (int) ( $fetched['amount_paid_cents'] ?? 0 );
-        $stripeAmtDue   = (int) ( $fetched['amount_due_cents'] ?? 0 );
-        $stripeOffCents = (int) ( $fetched['paid_off_stripe_cents'] ?? 0 );
+        $stripeStatus  = (string) ( $fetched['stripe_status'] ?? '' );
+        $stripeAmtPaid = (int) ( $fetched['amount_paid_cents'] ?? 0 );
+        $stripeAmtDue  = (int) ( $fetched['amount_due_cents'] ?? 0 );
 
         $rowStatus     = (string) $invoiceRow->status;
         $rowStripeStat = (string) ( $invoiceRow->stripe_status ?? '' );
         $rowAmtPaid    = (int) $invoiceRow->amount_paid_cents;
         $rowAmtDue     = (int) $invoiceRow->amount_due_cents;
-        $rowOffCents   = (int) ( $invoiceRow->paid_off_stripe_cents ?? 0 );
 
         $stripeSaysPaid = ( $stripeStatus === 'paid' );
         $missedPayment  = ( $stripeSaysPaid && $rowStatus !== MyNJILGA_Dues_Invoice_Table::STATUS_PAID );
@@ -180,8 +184,7 @@ class MyNJILGA_Stripe_Reconciler {
         $diverges = $missedPayment
             || ( $stripeStatus !== $rowStripeStat )
             || ( $stripeAmtPaid !== $rowAmtPaid )
-            || ( $stripeAmtDue !== $rowAmtDue )
-            || ( $stripeOffCents !== $rowOffCents );
+            || ( $stripeAmtDue !== $rowAmtDue );
 
         if ( ! $diverges ) {
             return [ 'updated' => false, 'needs_attention' => false, 'note' => sprintf( '%s: already in sync.', $name ) ];
@@ -277,12 +280,11 @@ class MyNJILGA_Stripe_Reconciler {
         if ( $stripeStatus !== $rowStripeStat ) {
             $fields['stripe_status'] = $stripeStatus;
         }
-        // How much of this invoice was settled OFF Stripe (checks, wires
-        // — anything marked paid out of band). Reported by Stripe itself,
-        // so it stays right even for a settlement we never observed.
-        if ( $stripeOffCents !== $rowOffCents ) {
-            $fields['paid_off_stripe_cents'] = $stripeOffCents;
-        }
+        // paid_off_stripe_cents is deliberately NOT synced from Stripe.
+        // It is written where the off-Stripe money is actually known —
+        // when staff record a check/wire/cash here — and Stripe has no
+        // dependable field to check it against, so reading one back would
+        // mean overwriting a figure we know with a guess we don't.
         $method = self::best_effort_payment_detail( $fetched )['method'];
         if ( $method !== '' && $method !== (string) ( $invoiceRow->primary_method ?? '' ) ) {
             $fields['primary_method'] = $method;
@@ -396,22 +398,28 @@ class MyNJILGA_Stripe_Reconciler {
      * the dangerous direction: a firm can pay an invoice this plugin will
      * never notice, never settle membership for, and never show in the
      * ledger. It happens when create_order() finalized at Stripe and the
-     * local write then failed, or when someone creates an invoice by hand
-     * in the Stripe dashboard.
+     * local write then failed, or when a row is lost afterwards.
      *
      * So: page every invoice Stripe has tagged as ours for the year, in
      * the active mode, and record the ones whose id matches no row. The
      * findings go in an option for the Setup page to render — there is no
      * row to hang a last_error on, which is the whole point.
      *
+     * SCOPE, precisely: the search matches on the metadata create_order()
+     * writes (source + njilga_dues_year), so this finds invoices THIS
+     * PLUGIN created and then lost track of. An invoice typed by hand
+     * into the Stripe Dashboard carries none of that metadata and is not
+     * found here — detecting those would mean trawling every invoice on
+     * the account, most of which have nothing to do with dues.
+     *
      * Deliberately NOT called from sync_year(): that runs per-row from the
      * Invoicing page's Refresh button too, and this is a whole-year scan
      * of a separate API. The daily job and the manual full sync call it.
      *
-     * @return array{scanned:int,orphans:array<int,array<string,mixed>>,error:string}
+     * @return array{ok:bool,scanned:int,orphans:array<int,array<string,mixed>>,error:string}
      */
     public static function scan_for_orphans( int $duesYear ): array {
-        $out = [ 'scanned' => 0, 'orphans' => [], 'error' => '' ];
+        $out = [ 'ok' => false, 'scanned' => 0, 'orphans' => [], 'error' => '' ];
 
         $gateway = MyNJILGA_Invoicing::gateway();
         if ( ! $gateway->is_available() ) {
@@ -436,6 +444,23 @@ class MyNJILGA_Stripe_Reconciler {
         $pages  = 0;
         do {
             $page = $gateway->list_our_invoices( $duesYear, $cursor );
+
+            // A page that didn't come back (rate limit, 5xx, transport
+            // failure, a key just rotated) makes the whole comparison
+            // meaningless: what we have is no longer "everything Stripe
+            // holds", so anything missing from it is not evidence of an
+            // orphan and — far worse — an EMPTY result is not evidence
+            // that a previously-found orphan has been resolved. Abandon
+            // the scan with what we know, and leave the stored report
+            // exactly as the last successful scan left it.
+            if ( empty( $page['ok'] ) ) {
+                $out['error'] = sprintf(
+                    'Could not read %d\'s invoices from Stripe — the check was abandoned and the previous result left untouched.',
+                    $duesYear
+                );
+                return $out;
+            }
+
             foreach ( $page['invoices'] as $invoice ) {
                 $id = (string) ( $invoice['id'] ?? '' );
                 if ( $id === '' ) {
@@ -467,10 +492,21 @@ class MyNJILGA_Stripe_Reconciler {
 
             $cursor = $page['next_cursor'];
             $pages++;
-            // A hard stop so a pagination bug at either end can never spin
-            // this job: 20 pages of 100 is far more than a year of dues.
-        } while ( ! empty( $page['has_more'] ) && $cursor !== null && $pages < 20 );
+        } while ( ! empty( $page['has_more'] ) && $cursor !== null && $pages < self::ORPHAN_SCAN_MAX_PAGES );
 
+        // Hitting the cap means the same thing as a failed page: the set
+        // is partial, so it can neither prove an orphan nor clear one.
+        if ( ! empty( $page['has_more'] ) && $cursor !== null ) {
+            $out['error'] = sprintf(
+                'Stripe holds more than %d pages of %d invoices — the check was abandoned and the previous result left untouched.',
+                self::ORPHAN_SCAN_MAX_PAGES,
+                $duesYear
+            );
+            return $out;
+        }
+
+        // Only a scan that read every page gets to speak for the year.
+        $out['ok'] = true;
         self::record_orphans( $duesYear, $livemode, $out['orphans'] );
 
         return $out;

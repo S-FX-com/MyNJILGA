@@ -124,7 +124,12 @@ interface MyNJILGA_Invoice_Gateway {
      * first page, then whatever the previous call returned as
      * next_cursor until has_more is false.
      *
-     * @return array{invoices:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string}
+     * ok is false when the gateway could not be asked at all (not
+     * connected, rate limited, a transport failure). An implementation
+     * MUST NOT report that as an empty page: the caller is comparing
+     * two sets, and "nothing came back" is not "there is nothing".
+     *
+     * @return array{ok:bool,invoices:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string}
      */
     public function list_our_invoices( int $duesYear, ?string $cursor ): array;
 }

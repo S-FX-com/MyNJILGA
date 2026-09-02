@@ -622,12 +622,11 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             }
 
             // Only expand what we're confident about (payment_intent).
-            // Stripe's Payment Record model exposes off-Stripe payment
-            // totals under some response shapes, but guessing at an
-            // expand path for that here risks a 400 for no real benefit —
-            // whatever the raw body naturally contains is merged in
-            // below, and paid_off_stripe_cents falls back to 0 when
-            // nothing recognizable is present.
+            // Off-Stripe payment totals are deliberately NOT read back
+            // from Stripe: there is no dependable field for them on the
+            // Invoice object, and the plugin already knows that number
+            // exactly — it writes paid_off_stripe_cents itself when staff
+            // record a check or wire.
             $resp = $client->request( 'GET', '/invoices/' . rawurlencode( $invoiceId ), [], [
                 'expand' => [ 'payment_intent' ],
             ] );
@@ -637,21 +636,12 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
 
             $body = $resp['body'];
 
-            $paidOffStripe = 0;
-            foreach ( [ 'amount_paid_off_stripe', 'amount_paid_out_of_band' ] as $key ) {
-                if ( isset( $body[ $key ] ) ) {
-                    $paidOffStripe = (int) $body[ $key ];
-                    break;
-                }
-            }
-
             return array_merge( $body, [
                 'status'                 => (string) ( $body['status'] ?? '' ),
                 'stripe_status'          => (string) ( $body['status'] ?? '' ),
                 'amount_due_cents'       => (int) ( $body['amount_due'] ?? 0 ),
                 'amount_paid_cents'      => (int) ( $body['amount_paid'] ?? 0 ),
                 'amount_remaining_cents' => (int) ( $body['amount_remaining'] ?? 0 ),
-                'paid_off_stripe_cents'  => $paidOffStripe,
                 'total_cents'            => (int) ( $body['total'] ?? 0 ),
             ] );
         } catch ( \Throwable $e ) {
@@ -660,10 +650,14 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
     }
 
     /**
-     * @return array{invoices:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string}
+     * @return array{ok:bool,invoices:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string}
      */
     public function list_our_invoices( int $duesYear, ?string $cursor ): array {
-        $empty = [ 'invoices' => [], 'has_more' => false, 'next_cursor' => null ];
+        // ok:false, never an empty page: a caller comparing what Stripe
+        // holds against what we hold MUST be able to tell "Stripe says
+        // there is nothing" from "Stripe didn't answer", or a rate limit
+        // reads as a clean bill of health.
+        $empty = [ 'ok' => false, 'invoices' => [], 'has_more' => false, 'next_cursor' => null ];
         try {
             $client = $this->client();
             if ( $client === null ) {
@@ -696,6 +690,7 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             $nextPage = isset( $resp['body']['next_page'] ) ? (string) $resp['body']['next_page'] : '';
 
             return [
+                'ok'          => true,
                 'invoices'    => $data,
                 'has_more'    => (bool) ( $resp['body']['has_more'] ?? false ),
                 'next_cursor' => $nextPage !== '' ? $nextPage : null,

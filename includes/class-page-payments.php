@@ -611,12 +611,28 @@ class MyNJILGA_Page_Payments {
     private static function render_invoice_detail( array $l ): void {
         $payments = MyNJILGA_Dues_Payments_Table::get_for_invoice_row( $l['id'] );
 
+        // Two figures that live on the invoice row rather than in the
+        // ledger, and only matter when they aren't zero: money refunded
+        // (Stripe's own cumulative total), and money settled off Stripe
+        // by check/wire/cash — the part a Stripe payout will never
+        // account for, which is exactly what someone reconciling a bank
+        // statement against this page needs told.
+        $subline   = [ MyNJILGA_Invoicing::money( $l['total'] ) . ' total' ];
+        $refunded  = (int) ( $l['row']->amount_refunded_cents ?? 0 );
+        $offStripe = (int) ( $l['row']->paid_off_stripe_cents ?? 0 );
+        if ( $offStripe > 0 ) {
+            $subline[] = MyNJILGA_Invoicing::money( $offStripe ) . ' paid outside Stripe';
+        }
+        if ( $refunded > 0 ) {
+            $subline[] = MyNJILGA_Invoicing::money( $refunded ) . ' refunded';
+        }
+
         echo '<div class="njilga-preview-card">';
         printf(
             '<div class="njilga-preview-head"><div><div class="njilga-preview-title">Payment History — %s</div><div class="njilga-preview-sub">%d dues year &middot; %s</div></div></div>',
             esc_html( $l['firm'] ),
             $l['year'],
-            esc_html( MyNJILGA_Invoicing::money( $l['total'] ) . ' total' )
+            esc_html( implode( ' · ', $subline ) )
         );
 
         if ( empty( $payments ) ) {

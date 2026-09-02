@@ -62,11 +62,14 @@ class MyNJILGA_Firm_Status_Page {
             return (string) ob_get_clean();
         }
 
-        // Members only ever see the mode the site is actually operating
-        // in — a test-mode invoice (and its uncollectable payment link)
-        // must never reach a firm.
-        $liveMode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
-        $rows     = MyNJILGA_Dues_Invoice_Table::get_for_companies( $companyIds, $liveMode );
+        // ALWAYS live, and deliberately not the staff mode toggle. Both
+        // directions of that toggle would be wrong here: a member can
+        // never pay a test invoice, so test rows must never show; and a
+        // firm with a real unpaid balance must not have its invoice and
+        // its Pay button vanish from this page — silently halting
+        // collection — because staff happen to have flipped the site
+        // into Test mode to try something in the admin.
+        $rows = MyNJILGA_Dues_Invoice_Table::get_for_companies( $companyIds, true );
         // Only real invoices — exceptions are staff-facing.
         $rows = array_values( array_filter( $rows, static function ( $r ) { return $r->status !== MyNJILGA_Dues_Invoice_Table::STATUS_EXCLUDED; } ) );
 

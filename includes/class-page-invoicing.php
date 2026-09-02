@@ -1244,7 +1244,9 @@ class MyNJILGA_Page_Invoicing {
                 return sprintf( 'Sweep complete: %d invoice%s across %d firm%s — %d member%s tagged unpaid, %d WordPress role%s removed, %d protected by a paid invoice.', $g( 'invoices' ), $g( 'invoices' ) === 1 ? '' : 's', $g( 'firms' ), $g( 'firms' ) === 1 ? '' : 's', $g( 'members' ), $g( 'members' ) === 1 ? '' : 's', $g( 'roles' ), $g( 'roles' ) === 1 ? '' : 's', $g( 'protected' ) );
             case 'synced':
                 $syncMsg = sprintf( 'Checked %d invoice%s — %d updated, %d needs attention.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'updated' ), $g( 'attention' ) );
-                if ( $g( 'orphans' ) > 0 ) {
+                if ( isset( $_GET['orphan_scan'] ) && $g( 'orphan_scan' ) === 0 ) {
+                    $syncMsg .= ' Stripe could not be fully read for invoices missing from this site, so that check was skipped — the previous result on Setup → Stripe still stands.';
+                } elseif ( $g( 'orphans' ) > 0 ) {
                     $syncMsg .= sprintf(
                         ' Also found %d invoice%s in Stripe with no record here — see Setup → Stripe for the details.',
                         $g( 'orphans' ),
@@ -1601,18 +1603,24 @@ JS;
         // invoice sitting in Stripe with no row here. Skipped for a
         // single-row Refresh, which has no business paging the whole
         // year's invoices at Stripe.
-        $orphans = 0;
+        $orphans     = 0;
+        $orphanScanOk = 1;
         if ( $onlyRowId <= 0 ) {
-            $scan    = MyNJILGA_Stripe_Reconciler::scan_for_orphans( $duesYear );
-            $orphans = count( $scan['orphans'] );
+            $scan = MyNJILGA_Stripe_Reconciler::scan_for_orphans( $duesYear );
+            // An abandoned scan must not read as "none found" — that is
+            // the difference between "Stripe holds nothing we don't" and
+            // "we couldn't ask".
+            $orphanScanOk = empty( $scan['ok'] ) ? 0 : 1;
+            $orphans      = count( $scan['orphans'] );
         }
 
         self::redirect( $duesYear, [
-            'msg'       => 'synced',
-            'count'     => $result['checked'],
-            'updated'   => $result['updated'],
-            'attention' => $result['needs_attention'],
-            'orphans'   => $orphans,
+            'msg'          => 'synced',
+            'count'        => $result['checked'],
+            'updated'      => $result['updated'],
+            'attention'    => $result['needs_attention'],
+            'orphans'      => $orphans,
+            'orphan_scan'  => $orphanScanOk,
         ] );
     }
 
@@ -1711,8 +1719,12 @@ JS;
             ] );
 
             MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
-                'amount_paid_cents' => (int) $row->amount_paid_cents + $amountCents,
-                'amount_due_cents'  => $remainderAfter,
+                'amount_paid_cents'     => (int) $row->amount_paid_cents + $amountCents,
+                'amount_due_cents'      => $remainderAfter,
+                // This money never touched Stripe, which is the whole
+                // point of the column: it is what a reconciliation
+                // against a Stripe payout will never account for.
+                'paid_off_stripe_cents' => (int) ( $row->paid_off_stripe_cents ?? 0 ) + $amountCents,
             ] );
         } else {
             $invoiceId = (string) ( $row->gateway_invoice_id ?? '' );
@@ -1750,8 +1762,9 @@ JS;
             // (The failure path above always exits, so $result['ok'] is
             // guaranteed true here.)
             MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
-                'amount_paid_cents' => (int) $row->amount_paid_cents + $balanceCents,
-                'amount_due_cents'  => 0,
+                'amount_paid_cents'     => (int) $row->amount_paid_cents + $balanceCents,
+                'amount_due_cents'      => 0,
+                'paid_off_stripe_cents' => (int) ( $row->paid_off_stripe_cents ?? 0 ) + $balanceCents,
             ] );
         }
 
