@@ -339,34 +339,84 @@ class MyNJILGA_Stripe_Webhook {
 
         // The more specific charge/payment_intent id, when present, is
         // preferred as this ledger entry's object reference — falling
-        // back to the invoice id itself when neither is present.
+        // back to the invoice id itself when neither is present. For an
+        // out-of-band payment (the branch below) both are always empty,
+        // so this naturally resolves to $invoiceId either way.
         $chargeId = self::extract_ref_id( $dataObject['charge'] ?? null );
         $piId     = self::extract_ref_id( $dataObject['payment_intent'] ?? null );
         $objectId = $chargeId !== '' ? $chargeId : ( $piId !== '' ? $piId : $invoiceId );
 
-        $detail = self::resolve_payment_method_detail( $dataObject, $invoiceId );
+        $metadata        = (array) ( $dataObject['metadata'] ?? [] );
+        $offStripeMethod = isset( $metadata['njilga_payment_method'] ) ? (string) $metadata['njilga_payment_method'] : '';
 
-        // Keys deliberately match MyNJILGA_Dues_Payments_Table::record()'s
-        // shape (minus invoice_row_id/livemode) — MyNJILGA_Payment_Listener::
-        // handle_invoice_paid(), which this do_action() cascades into, adds
-        // those two (it already looks the row up itself) and performs the
-        // actual ledger write, right alongside the settlement it already
-        // performs — one place writes the ledger row AND decides settlement
-        // for this event, so a duplicate fire can never do one without the
-        // other.
-        $payment = [
-            'stripe_object_id' => $objectId,
-            'kind'             => MyNJILGA_Dues_Payments_Table::KIND_PAYMENT,
-            'method'           => $detail['method'],
-            'amount_cents'     => (int) ( $dataObject['amount_paid'] ?? 0 ),
-            'status'           => 'succeeded',
-            'occurred_at'      => current_time( 'mysql' ),
-            'card_brand'       => $detail['card_brand'],
-            'last4'            => $detail['last4'],
-            'bank_name'        => $detail['bank_name'],
-            'receipt_url'      => $detail['receipt_url'],
-            'raw'              => self::trimmed_json( $dataObject ),
-        ];
+        if ( $offStripeMethod !== '' ) {
+            // Recorded through this migration's "Mark Paid" admin flow
+            // (MyNJILGA_Page_Invoicing::handle_mark_paid() ->
+            // mark_paid_out_of_band()) rather than a real card/ACH charge —
+            // there is no payment_intent to inspect for an out-of-band
+            // payment, so resolve_payment_method_detail()'s enrichment
+            // below would find nothing useful regardless. Build the
+            // ledger entry straight from the metadata that flow wrote.
+            $detail = [ 'method' => $offStripeMethod, 'card_brand' => null, 'last4' => null, 'bank_name' => null, 'receipt_url' => null ];
+
+            $reference = '';
+            if ( isset( $metadata['njilga_check_number'] ) && (string) $metadata['njilga_check_number'] !== '' ) {
+                $reference = (string) $metadata['njilga_check_number'];
+            } elseif ( isset( $metadata['njilga_wire_reference'] ) && (string) $metadata['njilga_wire_reference'] !== '' ) {
+                $reference = (string) $metadata['njilga_wire_reference'];
+            }
+
+            // The exact remainder this off-Stripe payment covers — never
+            // Stripe's own cumulative amount_paid, which would
+            // double-count a prior manually-recorded partial. The
+            // fallback below should essentially never fire once this
+            // flow always sets the metadata field, but stays as a
+            // defensive backstop rather than assuming.
+            $finalAmountCents = isset( $metadata['njilga_final_payment_amount_cents'] ) ? (int) $metadata['njilga_final_payment_amount_cents'] : 0;
+            $amountCents      = $finalAmountCents > 0 ? $finalAmountCents : (int) ( $dataObject['amount_paid'] ?? 0 );
+
+            $occurredAt = current_time( 'mysql' );
+            $checkDate  = isset( $metadata['njilga_check_date'] ) ? (string) $metadata['njilga_check_date'] : '';
+            $parsedDate = \DateTime::createFromFormat( 'Y-m-d', $checkDate );
+            if ( $parsedDate && $parsedDate->format( 'Y-m-d' ) === $checkDate ) {
+                $occurredAt = $checkDate . ' 00:00:00';
+            }
+
+            $payment = [
+                'stripe_object_id' => $objectId,
+                'kind'             => MyNJILGA_Dues_Payments_Table::KIND_PAYMENT,
+                'method'           => $offStripeMethod,
+                'amount_cents'     => $amountCents,
+                'status'           => 'succeeded',
+                'occurred_at'      => $occurredAt,
+                'reference'        => $reference !== '' ? $reference : null,
+                'raw'              => self::trimmed_json( $dataObject ),
+            ];
+        } else {
+            $detail = self::resolve_payment_method_detail( $dataObject, $invoiceId );
+
+            // Keys deliberately match MyNJILGA_Dues_Payments_Table::record()'s
+            // shape (minus invoice_row_id/livemode) — MyNJILGA_Payment_Listener::
+            // handle_invoice_paid(), which this do_action() cascades into, adds
+            // those two (it already looks the row up itself) and performs the
+            // actual ledger write, right alongside the settlement it already
+            // performs — one place writes the ledger row AND decides settlement
+            // for this event, so a duplicate fire can never do one without the
+            // other.
+            $payment = [
+                'stripe_object_id' => $objectId,
+                'kind'             => MyNJILGA_Dues_Payments_Table::KIND_PAYMENT,
+                'method'           => $detail['method'],
+                'amount_cents'     => (int) ( $dataObject['amount_paid'] ?? 0 ),
+                'status'           => 'succeeded',
+                'occurred_at'      => current_time( 'mysql' ),
+                'card_brand'       => $detail['card_brand'],
+                'last4'            => $detail['last4'],
+                'bank_name'        => $detail['bank_name'],
+                'receipt_url'      => $detail['receipt_url'],
+                'raw'              => self::trimmed_json( $dataObject ),
+            ];
+        }
 
         do_action( 'njilga_stripe_invoice_paid', $invoiceId, $payment );
 

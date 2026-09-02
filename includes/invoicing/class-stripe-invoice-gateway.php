@@ -495,10 +495,19 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             }
 
             $keyMap   = [
-                'payment_method' => 'njilga_payment_method',
-                'check_number'   => 'njilga_check_number',
-                'check_date'     => 'njilga_check_date',
-                'recorded_by'    => 'njilga_recorded_by',
+                'payment_method'             => 'njilga_payment_method',
+                'check_number'               => 'njilga_check_number',
+                'check_date'                 => 'njilga_check_date',
+                'recorded_by'                => 'njilga_recorded_by',
+                // Stripe migration run 4 (Mark Paid by check/cash/wire):
+                // the balance BEFORE this payment, i.e. exactly what this
+                // out-of-band payment covers — never Stripe's own
+                // cumulative amount_paid, which the webhook would
+                // otherwise log and double-count against any prior
+                // manually-recorded partial. See
+                // MyNJILGA_Page_Invoicing::handle_mark_paid() and
+                // class-stripe-webhook.php's handle_invoice_paid().
+                'final_payment_amount_cents' => 'njilga_final_payment_amount_cents',
             ];
             $metadata = [];
             foreach ( $keyMap as $metaKey => $stripeKey ) {

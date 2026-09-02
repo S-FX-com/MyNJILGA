@@ -167,19 +167,23 @@ class MyNJILGA_Admin_UI {
     /**
      * A form whose only control is one button — the plugin's standard way
      * of posting a single admin-post action (exports, "create tag", …).
+     * $size optionally adds a `.njilga-btn-{$size}` modifier (e.g. 'sm')
+     * alongside the variant class, for a single-button post embedded in a
+     * dense row (a table's Actions column) rather than standing alone.
      */
-    public static function action_form( string $action, string $label, array $fields = [], string $style = 'outline', string $icon = '', string $confirm = '' ): string {
+    public static function action_form( string $action, string $label, array $fields = [], string $style = 'outline', string $icon = '', string $confirm = '', string $size = '' ): string {
         $hidden = sprintf( '<input type="hidden" name="action" value="%s">', esc_attr( $action ) );
         foreach ( $fields as $k => $v ) {
             $hidden .= sprintf( '<input type="hidden" name="%s" value="%s">', esc_attr( (string) $k ), esc_attr( (string) $v ) );
         }
         return sprintf(
-            '<form method="post" action="%s" class="njilga-actionform"%s>%s%s<button type="submit" class="njilga-btn njilga-btn-%s">%s%s</button></form>',
+            '<form method="post" action="%s" class="njilga-actionform"%s>%s%s<button type="submit" class="njilga-btn njilga-btn-%s%s">%s%s</button></form>',
             esc_url( admin_url( 'admin-post.php' ) ),
             $confirm !== '' ? sprintf( ' onsubmit="return confirm(%s)"', esc_attr( "'" . esc_js( $confirm ) . "'" ) ) : '',
             $hidden,
             wp_nonce_field( $action, '_wpnonce', true, false ),
             esc_attr( $style ),
+            $size !== '' ? ' njilga-btn-' . esc_attr( $size ) : '',
             $icon !== '' ? self::icon( $icon ) : '',
             esc_html( $label )
         );

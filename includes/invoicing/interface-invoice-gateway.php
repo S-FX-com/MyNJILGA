@@ -109,6 +109,7 @@ interface MyNJILGA_Invoice_Gateway {
     /**
      * Mark an open invoice paid outside the gateway (check/cash/wire).
      * $meta carries payment_method/check_number/check_date/recorded_by
+     * and, when the payment zeroes the balance, final_payment_amount_cents
      * keys, free-form — gateway-specific what it does with them (e.g.
      * Stripe: pay the invoice out-of-band and note the detail on it).
      *
