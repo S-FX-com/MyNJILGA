@@ -185,7 +185,7 @@ Toolbar filters (dues year, status, payment method) narrow the underlying row se
 
 ## Connecting Stripe
 
-Stripe replaced FluentCart as the commerce backend for dues invoicing. A site coming from an older version of this plugin (or a brand-new install) needs to do this once before the Invoicing page can create anything:
+Stripe is the commerce backend for dues invoicing — invoices are created, finalized, hosted and collected there, and this plugin never handles a card number. Every install needs this done once before the Invoicing page can create anything:
 
 1. **Encrypt secrets at rest (recommended).** Generate a key once at a terminal:
    ```bash

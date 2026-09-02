@@ -25,11 +25,10 @@
  * FluentCRM tags are the source of truth for who owes what; WordPress
  * roles are a downstream effect of payment, never an input to pricing.
  *
- * Prices live HERE (in cents) and are what the invoice actually charges;
- * the product/variation reference is what the FluentCart line item points
- * at. The Settings page shows FluentCart's live price next to each mapped
- * variation and flags a mismatch, but the plugin never silently bills a
- * different number from the one the admin can see on this page.
+ * Prices live HERE (in cents) and are the only source of what the
+ * invoice charges — Stripe invoices are built from inline line items, so
+ * there is no catalog anywhere else that could disagree with the number
+ * the admin can see on this page.
  */
 class MyNJILGA_Dues_Settings {
 
@@ -90,8 +89,6 @@ class MyNJILGA_Dues_Settings {
                     'key'                  => 'past_president',
                     'label'                => 'Past President Membership (Exempt)',
                     'tag'                  => 'past-president',
-                    'product_id'           => 0,
-                    'variation_id'         => 0,
                     'price_cents'          => 0,
                     'role'                 => 'professional',
                     'tier_eligible'        => false,
@@ -102,8 +99,6 @@ class MyNJILGA_Dues_Settings {
                     'key'                  => 'senior_trustee',
                     'label'                => 'Senior Trustee Membership (Exempt)',
                     'tag'                  => 'senior-trustee',
-                    'product_id'           => 0,
-                    'variation_id'         => 0,
                     'price_cents'          => 0,
                     'role'                 => 'professional',
                     'tier_eligible'        => false,
@@ -114,8 +109,6 @@ class MyNJILGA_Dues_Settings {
                     'key'                  => 'law_student',
                     'label'                => 'Law Student Membership',
                     'tag'                  => 'law-student',
-                    'product_id'           => 0,
-                    'variation_id'         => 0,
                     'price_cents'          => 3000, // Confirmed by NJILGA 2026-08: students currently pay $30 (may become free later).
                     'role'                 => 'professional',
                     'tier_eligible'        => false,
@@ -126,8 +119,6 @@ class MyNJILGA_Dues_Settings {
                     'key'                  => 'emerging_professional',
                     'label'                => 'Emerging Professional Membership',
                     'tag'                  => 'emerging-professional',
-                    'product_id'           => 0,
-                    'variation_id'         => 0,
                     'price_cents'          => 5000, // Confirmed by NJILGA 2026-08: $50, flat (non-tier).
                     'role'                 => 'professional',
                     'tier_eligible'        => false,
@@ -138,16 +129,14 @@ class MyNJILGA_Dues_Settings {
                     'key'                  => 'professional',
                     'label'                => 'Professional Membership',
                     'tag'                  => 'professional',
-                    'product_id'           => 0,
-                    'variation_id'         => 0,
                     'price_cents'          => 12500,
                     'role'                 => 'professional',
                     'tier_eligible'        => true,
                     'applicant_selectable' => true,
                     'tiers'                => [
-                        [ 'key' => 'first',  'label' => '1st Member',  'from' => 1, 'to' => 1, 'price_cents' => 12500, 'variation_id' => 0 ],
-                        [ 'key' => '2_to_5', 'label' => 'Members 2–5', 'from' => 2, 'to' => 5, 'price_cents' => 7500,  'variation_id' => 0 ],
-                        [ 'key' => '6_plus', 'label' => 'Members 6+',  'from' => 6, 'to' => 0, 'price_cents' => 0,     'variation_id' => 0 ],
+                        [ 'key' => 'first',  'label' => '1st Member',  'from' => 1, 'to' => 1, 'price_cents' => 12500 ],
+                        [ 'key' => '2_to_5', 'label' => 'Members 2–5', 'from' => 2, 'to' => 5, 'price_cents' => 7500 ],
+                        [ 'key' => '6_plus', 'label' => 'Members 6+',  'from' => 6, 'to' => 0, 'price_cents' => 0 ],
                     ],
                 ],
             ],
@@ -155,8 +144,6 @@ class MyNJILGA_Dues_Settings {
                 'key'          => 'trustee_dinner',
                 'label'        => 'Trustee Dinner Assessment',
                 'price_cents'  => 20000,
-                'product_id'   => 0,
-                'variation_id' => 0,
                 // Ordered: the first qualifying tag a contact carries is the
                 // label shown on their assessment line.
                 'qualifiers'   => [
@@ -364,7 +351,6 @@ class MyNJILGA_Dues_Settings {
                 'from'         => max( 1, (int) ( $t['from'] ?? 1 ) ),
                 'to'           => max( 0, (int) ( $t['to'] ?? 0 ) ), // 0 = open-ended
                 'price_cents'  => max( 0, (int) ( $t['price_cents'] ?? 0 ) ),
-                'variation_id' => max( 0, (int) ( $t['variation_id'] ?? 0 ) ),
             ];
         }
         usort( $tiers, static function ( $a, $b ) { return $a['from'] <=> $b['from']; } );
@@ -373,8 +359,6 @@ class MyNJILGA_Dues_Settings {
             'key'                  => sanitize_key( (string) ( $cat['key'] ?? '' ) ),
             'label'                => (string) ( $cat['label'] ?? '' ),
             'tag'                  => sanitize_title( (string) ( $cat['tag'] ?? '' ) ),
-            'product_id'           => max( 0, (int) ( $cat['product_id'] ?? 0 ) ),
-            'variation_id'         => max( 0, (int) ( $cat['variation_id'] ?? 0 ) ),
             'price_cents'          => max( 0, (int) ( $cat['price_cents'] ?? 0 ) ),
             'role'                 => sanitize_key( (string) ( $cat['role'] ?? '' ) ),
             'tier_eligible'        => ! empty( $cat['tier_eligible'] ),

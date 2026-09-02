@@ -2,7 +2,7 @@
 /**
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
- * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (FluentCart + FluentCRM), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
+ * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
  * Version:     3.0.0
  * Author:      S-FX.com
  * License:     GPL-2.0+

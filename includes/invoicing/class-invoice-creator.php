@@ -157,11 +157,9 @@ class MyNJILGA_Invoice_Creator {
         }
 
         // Guard on the TOTAL, not on an empty item list: every member gets a
-        // line (including $0 ones). Stripe does not auto-settle a $0
-        // invoice the way FluentCart used to — this guard stays anyway
-        // because an empty invoice is meaningless paperwork, not a
-        // technical necessity: a firm that owes nothing this cycle
-        // shouldn't get an invoice at all, regardless of gateway.
+        // line (including $0 ones). This guard is a policy choice, not a
+        // technical necessity: an empty invoice is meaningless paperwork,
+        // so a firm that owes nothing this cycle shouldn't get one at all.
         if ( MyNJILGA_Dues_Roster::total_cents( $members ) <= 0 ) {
             return [ 'ok' => false, 'error' => 'Every roster member owes $0 — nothing to invoice.' ];
         }

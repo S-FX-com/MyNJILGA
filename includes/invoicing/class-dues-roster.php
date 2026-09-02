@@ -102,8 +102,6 @@ class MyNJILGA_Dues_Roster {
                     'title'            => self::dues_line_label( $m, $duesYear ),
                     'unit_price_cents' => (int) ( $m['dues_cents'] ?? 0 ),
                     'quantity'         => 1,
-                    'product_id'       => (int) ( $m['dues_product_id'] ?? 0 ),
-                    'variation_id'     => (int) ( $m['dues_variation_id'] ?? 0 ),
                     'line_meta'        => [
                         'contact_id' => $contactId,
                         'dues_year'  => $duesYear,
@@ -120,8 +118,6 @@ class MyNJILGA_Dues_Roster {
                     'title'            => self::assessment_line_label( $m ),
                     'unit_price_cents' => (int) $m['assessment_cents'],
                     'quantity'         => 1,
-                    'product_id'       => (int) ( $m['assessment_product_id'] ?? 0 ),
-                    'variation_id'     => (int) ( $m['assessment_variation_id'] ?? 0 ),
                     'line_meta'        => [
                         'contact_id' => $contactId,
                         'dues_year'  => $duesYear,

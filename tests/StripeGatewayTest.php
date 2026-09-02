@@ -80,8 +80,6 @@ class StripeGatewayTest extends NJILGA_TestCase {
                 'title'            => sprintf( 'Member %d — 2027 Professional Membership (1st Member)', $i ),
                 'unit_price_cents' => 12500,
                 'quantity'         => 1,
-                'product_id'       => 0,
-                'variation_id'     => 0,
                 'line_meta'        => [
                     'contact_id' => 100 + $i,
                     'dues_year'  => 2027,

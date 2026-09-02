@@ -487,18 +487,6 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
     }
 
     // -------------------------------------------------------------------------
-    // Catalog — none; Stripe gateway bills inline line items only
-    // -------------------------------------------------------------------------
-
-    public function list_products(): array {
-        return [];
-    }
-
-    public function check_variation( int $productId, int $variationId ): array {
-        return [ 'ok' => true, 'label' => 'Inline line item', 'price_cents' => 0 ];
-    }
-
-    // -------------------------------------------------------------------------
     // Payment
     // -------------------------------------------------------------------------
 

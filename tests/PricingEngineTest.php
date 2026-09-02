@@ -17,30 +17,15 @@ class MyNJILGA_Pricing_Engine_Test extends NJILGA_TestCase {
     // Fixtures
     // -------------------------------------------------------------------------
 
-    /**
-     * Seed config with product/variation ids filled in so we can assert
-     * they propagate onto priced members.
-     */
+    /** The seeded settings, as the engine receives them. */
     private function config( array $overrides = [] ): array {
         $defaults = MyNJILGA_Dues_Settings::defaults();
-        $categories = [];
-        foreach ( $defaults['categories'] as $i => $cat ) {
-            $cat['product_id']   = 100 + $i;
-            $cat['variation_id'] = 1000 + $i;
-            foreach ( $cat['tiers'] as $j => $tier ) {
-                $cat['tiers'][ $j ]['variation_id'] = 2000 + $j;
-            }
-            $categories[] = $cat;
-        }
-        $assessment = $defaults['assessment'];
-        $assessment['product_id']   = 300;
-        $assessment['variation_id'] = 3000;
 
         return array_merge( [
             'default_category' => $defaults['general']['default_category'],
             'inactive_tag'     => $defaults['general']['inactive_tag'],
-            'categories'       => $categories,
-            'assessment'       => $assessment,
+            'categories'       => $defaults['categories'],
+            'assessment'       => $defaults['assessment'],
         ], $overrides );
     }
 
@@ -272,8 +257,6 @@ class MyNJILGA_Pricing_Engine_Test extends NJILGA_TestCase {
 
         $this->assertSame( 20000, $m['assessment_cents'] );
         $this->assertSame( 'Officer', $m['assessment_qualifier'] ); // officer is listed before trustees
-        $this->assertSame( 300, $m['assessment_product_id'] );
-        $this->assertSame( 3000, $m['assessment_variation_id'] );
     }
 
     // -------------------------------------------------------------------------
@@ -324,22 +307,15 @@ class MyNJILGA_Pricing_Engine_Test extends NJILGA_TestCase {
         $this->assertSame( 20000, $m['assessment_cents'] );
     }
 
-    /** Product/variation references propagate: tier variation for tiered lines, category variation otherwise. */
-    public function test_product_references_propagate(): void {
+    /** The category's WordPress role rides along on every priced member (it is what payment grants). */
+    public function test_role_propagates_from_category(): void {
         $r = MyNJILGA_Pricing_Engine::price( [
             $this->contact( 1, 'Ann', 'Brown', [ 'professional' ] ),
-            $this->contact( 2, 'Bob', 'Clark', [ 'professional' ] ),
             $this->contact( 3, 'Lee', 'Law',   [ 'law-student' ] ),
         ], $this->config() );
 
-        $first = $this->member( $r, 1 );
-        $this->assertSame( 104, $first['dues_product_id'] );   // professional is 5th category (index 4)
-        $this->assertSame( 2000, $first['dues_variation_id'] ); // tier 'first'
-        $this->assertSame( 2001, $this->member( $r, 2 )['dues_variation_id'] ); // tier '2_to_5'
-        $law = $this->member( $r, 3 );
-        $this->assertSame( 102, $law['dues_product_id'] );
-        $this->assertSame( 1002, $law['dues_variation_id'] );
-        $this->assertSame( 'professional', $first['role'] );
+        $this->assertSame( 'professional', $this->member( $r, 1 )['role'] );
+        $this->assertSame( 'professional', $this->member( $r, 3 )['role'] );
     }
 
     /** Output order is the billing order: ranked, then flat-priced, then uncategorised, then inactive. */

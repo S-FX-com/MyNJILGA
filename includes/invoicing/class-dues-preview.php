@@ -269,8 +269,6 @@ class MyNJILGA_Dues_Preview {
         foreach ( $assessed as $m ) {
             $a = $m;
             $a['dues_cents']        = 0;
-            $a['dues_product_id']   = 0;
-            $a['dues_variation_id'] = 0;
             $a['dues_note']         = 'billed on firm invoice';
             $billTo = MyNJILGA_Dues_Snapshot::person( $m );
             $note   = '';

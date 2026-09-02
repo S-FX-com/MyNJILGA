@@ -15,8 +15,6 @@
  *   [ 'title'            => string,   // printed on the invoice
  *     'unit_price_cents' => int,
  *     'quantity'         => int,      // always 1 for dues
- *     'product_id'       => int,      // catalog product (0 = custom line)
- *     'variation_id'     => int,      // catalog variation (0 = custom line)
  *     'line_meta'        => array ]   // e.g. contact_id, dues_year, kind, category
  *
  * Bill-to (input to find_or_create_customer):
@@ -76,26 +74,6 @@ interface MyNJILGA_Invoice_Gateway {
      *   value verbatim, unmapped, for diagnostics.
      */
     public function invoice_status( string $invoiceId ): ?array;
-
-    /**
-     * Catalog listing for the Settings page pickers. OPTIONAL — a gateway
-     * with no catalog concept (Stripe, billing inline line items) returns
-     * [] and callers (the Settings page) must tolerate that: no product a
-     * dues line can be mapped to, so the price ($) field alone is what's
-     * charged.
-     *
-     * @return array<int,array{id:int,title:string,status:string,variations:array<int,array{id:int,title:string,price_cents:int,payment_type:string}>}>
-     */
-    public function list_products(): array;
-
-    /**
-     * Verify a product/variation pair exists and is purchasable. OPTIONAL
-     * — a catalog-less gateway returns array{ok:true,label:'Inline line
-     * item',price_cents:0}.
-     *
-     * @return array{ok:bool,label:string,price_cents:int,error?:string}
-     */
-    public function check_variation( int $productId, int $variationId ): array;
 
     /**
      * Register a callback fired once when an invoice becomes fully paid.

@@ -7,8 +7,8 @@
  * `invoice_kind` + `bill_to_contact_id`.
  *
  * The row's `roster_snapshot` (see MyNJILGA_Dues_Snapshot for the shape)
- * is the frozen roster/price list every later step reads — the FluentCart
- * order, the payment hook, the downgrade sweep, the Company Note — so the
+ * is the frozen roster/price list every later step reads — the Stripe
+ * invoice, the payment hook, the downgrade sweep, the Company Note — so the
  * roster billed and the roster credited on payment are always the same
  * fixed list.
  *
@@ -23,9 +23,10 @@
  *   1.0.0  firm-level rows, UNIQUE (company, year)
  *   1.1.0  + bill_to_contact_id, billing_mode, invoice_kind, last_error,
  *            queued_at; UNIQUE (company, year, invoice_kind, bill_to)
- *   1.2.0  Stripe migration: fluentcart_customer_id/order_id/order_uuid
- *            renamed (+ widened to VARCHAR) to gateway_customer_id/
- *            gateway_invoice_id/gateway_invoice_number; + gateway,
+ *   1.2.0  Stripe migration: the three pre-Stripe id columns dropped in
+ *            favour of gateway_customer_id/gateway_invoice_id/
+ *            gateway_invoice_number (VARCHAR — Stripe ids are strings,
+ *            never numeric); + gateway,
  *            livemode, hosted_invoice_url, invoice_pdf_url,
  *            amount_paid_cents, amount_due_cents, amount_refunded_cents,
  *            paid_off_stripe_cents, primary_method, due_date,
@@ -110,8 +111,8 @@ class MyNJILGA_Dues_Invoice_Table {
 
         // 1.2.0 (Stripe migration): same reasoning, twice over — the old
         // 4-column UNIQUE would collide a test-mode and a live-mode row for
-        // the same firm/year, and the old order_id KEY names the column
-        // being renamed below. dbDelta only ever ADDS a missing index; a
+        // the same firm/year, and the old order_id KEY names a column
+        // dropped below. dbDelta only ever ADDS a missing index; a
         // same-named index that already exists (even with different
         // columns) is left alone, so both have to be dropped explicitly
         // before dbDelta can lay the new ones down under those names.
@@ -130,23 +131,19 @@ class MyNJILGA_Dues_Invoice_Table {
                 }
             }
 
-            // old column => "new name + definition" for CHANGE COLUMN. A
-            // widening numeric-to-string CHANGE (e.g. BIGINT 1234 ->
-            // VARCHAR '1234') preserves existing values, so no separate
-            // data-copy UPDATE is needed for the rename itself.
-            $renames = [
-                'fluentcart_customer_id' => 'gateway_customer_id VARCHAR(64) NULL',
-                'fluentcart_order_id'    => 'gateway_invoice_id VARCHAR(64) NULL',
-                'fluentcart_order_uuid'  => 'gateway_invoice_number VARCHAR(64) NULL',
-            ];
-            foreach ( $renames as $oldColumn => $newDefinition ) {
+            // The three pre-Stripe id columns are dropped outright rather
+            // than renamed: nothing carries over from before the Stripe
+            // migration, and dbDelta lays down the new gateway_* columns
+            // below. Guarded on the old column's presence so a second run
+            // is a no-op (dbDelta itself never drops a column).
+            foreach ( [ 'fluentcart_customer_id', 'fluentcart_order_id', 'fluentcart_order_uuid' ] as $oldColumn ) {
                 $hasOldColumn = $wpdb->get_var( $wpdb->prepare(
                     "SELECT COUNT(1) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
                     $table,
                     $oldColumn
                 ) );
                 if ( (int) $hasOldColumn > 0 ) {
-                    $wpdb->query( "ALTER TABLE $table CHANGE COLUMN $oldColumn $newDefinition" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+                    $wpdb->query( "ALTER TABLE $table DROP COLUMN $oldColumn" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
                 }
             }
         }
@@ -201,17 +198,12 @@ class MyNJILGA_Dues_Invoice_Table {
             $wpdb->query( "UPDATE $table SET bill_to_contact_id = fluentcrm_owner_contact_id WHERE bill_to_contact_id = 0" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         }
 
-        // 1.2.0 backfill: every pre-migration row was created in what
-        // amounts to a single "live" world, so make that explicit rather
-        // than relying only on the column default. And only a row that
-        // actually got a real order created under FluentCart is a legacy
-        // fluentcart row — a draft/approved/excluded row that never had an
-        // order created keeps the new column's 'stripe' default, since if
-        // it's ever actually created going forward it goes through the new
-        // Stripe gateway.
+        // 1.2.0 backfill: every pre-migration row predates the test/live
+        // split, so pin them to live explicitly rather than relying only
+        // on the column default. `gateway` keeps its 'stripe' default —
+        // Stripe is the only gateway this plugin has ever shipped against.
         if ( $fromVersion !== '' && version_compare( $fromVersion, '1.2.0', '<' ) ) {
             $wpdb->query( "UPDATE $table SET livemode = 1" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-            $wpdb->query( "UPDATE $table SET gateway = 'fluentcart' WHERE gateway_invoice_id IS NOT NULL AND gateway_invoice_id != ''" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         }
     }
 

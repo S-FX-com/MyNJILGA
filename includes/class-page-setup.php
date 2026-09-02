@@ -1,11 +1,10 @@
 <?php
 /**
- * Setup — environment checks, the plugin's core tag checklist, and the
- * Dues & Billing audit: every tag slug the settings refer to (does it
- * exist on THIS FluentCRM instance?) and every mapped FluentCart product
- * (does it exist, is it published, does the price match?). This is the
- * "confirm and document the exact FluentCRM tag slugs against the live
- * instance" setup step (spec §3.3) made into a page.
+ * Setup — environment checks, the plugin's core tag checklist, the
+ * Dues & Billing tag audit (every tag slug the settings refer to — does
+ * it exist on THIS FluentCRM instance?), and Stripe connection health.
+ * This is the "confirm and document the exact FluentCRM tag slugs
+ * against the live instance" setup step (spec §3.3) made into a page.
  */
 class MyNJILGA_Page_Setup {
 
@@ -39,7 +38,6 @@ class MyNJILGA_Page_Setup {
         if ( MyNJILGA_Members_Data::fluentcrm_active() ) {
             self::render_tag_checklist();
             self::render_settings_tag_audit();
-            self::render_product_audit();
             self::render_all_tags();
         }
 
@@ -139,7 +137,7 @@ class MyNJILGA_Page_Setup {
         printf(
             '<tr><th>Action Scheduler (background invoice creation)</th><td>%s</td></tr>',
             function_exists( 'as_enqueue_async_action' )
-                ? MyNJILGA_Admin_UI::pill( 'Available', 'success' ) . ' <span class="njilga-dim">bundled with FluentCart / FluentCRM</span>'
+                ? MyNJILGA_Admin_UI::pill( 'Available', 'success' ) . ' <span class="njilga-dim">bundled with FluentCRM</span>'
                 : MyNJILGA_Admin_UI::pill( 'Not available', 'warning' ) . ' <span class="njilga-dim">invoices will be created inline in one request.</span>'
         );
 
@@ -240,62 +238,6 @@ class MyNJILGA_Page_Setup {
                 'error'
             );
         }
-    }
-
-    private static function render_product_audit(): void {
-        $gateway = MyNJILGA_Invoicing::gateway();
-        $s       = MyNJILGA_Dues_Settings::get();
-
-        MyNJILGA_Admin_UI::section( $gateway->name() . ' product mapping' );
-        if ( ! $gateway->is_available() ) {
-            MyNJILGA_Admin_UI::callout(
-                sprintf( '%s is not active — line items will be created as custom lines until products are mapped.', esc_html( $gateway->name() ) ),
-                'warning'
-            );
-            return;
-        }
-
-        // Mirrors render_settings_tag_audit()'s intro immediately above this
-        // section: this table only ever READS njilga_dues_settings — it has
-        // no pickers of its own. Say so and point at where the pickers
-        // actually are, or every-row-unmapped on a fresh install reads as
-        // broken instead of as "nobody has configured Settings yet."
-        printf(
-            '<p class="njilga-section-desc">Read-only — reflects the picks on the <a href="%s">Dues &amp; Billing settings</a> page. A row reading "Not mapped" means no product/variation has been chosen there yet, not that something is broken.</p>',
-            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) )
-        );
-
-        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Fee</th><th class="njilga-col-num">Charges</th><th>Mapped to</th><th>Status</th></tr></thead><tbody>';
-        $rows = [];
-        foreach ( $s['categories'] as $cat ) {
-            if ( ! empty( $cat['tier_eligible'] ) && ! empty( $cat['tiers'] ) ) {
-                foreach ( $cat['tiers'] as $t ) {
-                    $rows[] = [ $cat['label'] . ' — ' . $t['label'], (int) $t['price_cents'], (int) $cat['product_id'], (int) ( $t['variation_id'] ?: $cat['variation_id'] ) ];
-                }
-            } else {
-                $rows[] = [ $cat['label'], (int) $cat['price_cents'], (int) $cat['product_id'], (int) $cat['variation_id'] ];
-            }
-        }
-        $rows[] = [ $s['assessment']['label'], (int) $s['assessment']['price_cents'], (int) $s['assessment']['product_id'], (int) $s['assessment']['variation_id'] ];
-
-        foreach ( $rows as [ $label, $cents, $pid, $vid ] ) {
-            if ( $vid <= 0 ) {
-                $status = MyNJILGA_Admin_UI::validation( 'Not mapped — will be a custom line item', false );
-                $mapped = MyNJILGA_Admin_UI::blank();
-            } else {
-                $check  = $gateway->check_variation( $pid, $vid );
-                $mapped = esc_html( $check['label'] !== '' ? $check['label'] : "#$pid / #$vid" );
-                if ( ! $check['ok'] ) {
-                    $status = MyNJILGA_Admin_UI::validation( (string) ( $check['error'] ?? 'invalid' ), false );
-                } elseif ( (int) $check['price_cents'] !== $cents ) {
-                    $status = MyNJILGA_Admin_UI::validation( sprintf( 'Exists, but %s price is %s — invoices charge the Settings price', $gateway->name(), MyNJILGA_Invoicing::money( (int) $check['price_cents'] ) ), false );
-                } else {
-                    $status = MyNJILGA_Admin_UI::validation( 'OK', true );
-                }
-            }
-            printf( '<tr><td>%s</td><td class="njilga-col-num">%s</td><td>%s</td><td>%s</td></tr>', esc_html( $label ), esc_html( MyNJILGA_Invoicing::money( $cents ) ), $mapped, $status );
-        }
-        echo '</tbody></table></div></div>';
     }
 
     /**
