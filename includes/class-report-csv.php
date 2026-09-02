@@ -101,14 +101,16 @@ class MyNJILGA_Report_Csv {
     }
 
     // -------------------------------------------------------------------------
-    // Payments ledger (Stripe migration phase 4) — By-invoice/By-firm/Aging.
+    // Payments ledger (Stripe migration phase 4) — one export per view.
     // Data comes from MyNJILGA_Page_Payments's own build_lines()/
-    // group_by_firm()/aging_buckets(), the exact same source the on-screen
-    // tables render from, so an export always matches what's on screen.
+    // group_by_firm()/group_by_member()/aging_buckets(), the exact same
+    // source the on-screen tables render from, so an export always
+    // matches what's on screen.
     // -------------------------------------------------------------------------
 
     const PAYMENTS_VIEW_INVOICE = 'invoice';
     const PAYMENTS_VIEW_FIRM    = 'firm';
+    const PAYMENTS_VIEW_MEMBER  = 'member';
     const PAYMENTS_VIEW_AGING   = 'aging';
 
     /**
@@ -119,6 +121,7 @@ class MyNJILGA_Report_Csv {
         switch ( $view ) {
             case self::PAYMENTS_VIEW_INVOICE: self::stream_payments_by_invoice(); break;
             case self::PAYMENTS_VIEW_FIRM:    self::stream_payments_by_firm();    break;
+            case self::PAYMENTS_VIEW_MEMBER:  self::stream_payments_by_member();  break;
             case self::PAYMENTS_VIEW_AGING:   self::stream_payments_aging();      break;
             default:
                 wp_die( 'Unknown payments view.' );
@@ -184,6 +187,37 @@ class MyNJILGA_Report_Csv {
      * and stream_payments_by_firm() above) rather than subtotal rows —
      * Excel can pivot/subtotal this on the Bucket column itself.
      */
+    /**
+     * Long-format, one row per (member, dues year) — the same convention
+     * as stream_payments_by_firm() above. A member's per-year status is
+     * the strongest status among the invoices covering them that year
+     * (group_by_member()'s own precedence), so this is one row per thing
+     * that actually happened rather than one per invoice they appear on.
+     */
+    private static function stream_payments_by_member(): void {
+        $lines   = MyNJILGA_Page_Payments::build_lines();
+        $members = MyNJILGA_Page_Payments::group_by_member( $lines );
+        $fh      = self::open( 'payments-by-member' );
+
+        fputcsv( $fh, [ 'Member', 'Firm', 'Dues Year', 'Status' ] );
+        foreach ( $members as $m ) {
+            if ( empty( $m['years'] ) ) {
+                fputcsv( $fh, [ $m['name'], $m['firm'], '', '' ] );
+                continue;
+            }
+            foreach ( $m['years'] as $year => $status ) {
+                fputcsv( $fh, [
+                    $m['name'],
+                    $m['firm'],
+                    $year,
+                    MyNJILGA_Page_Payments::status_pill_parts( (string) $status )[0],
+                ] );
+            }
+        }
+        fclose( $fh );
+        exit;
+    }
+
     private static function stream_payments_aging(): void {
         $lines = MyNJILGA_Page_Payments::build_lines();
         $aging = MyNJILGA_Page_Payments::aging_buckets( $lines );
