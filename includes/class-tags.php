@@ -389,6 +389,21 @@ class MyNJILGA_Tags {
     }
 
     /**
+     * Design-system badge variant for a dues_label() value — the on-screen
+     * counterpart of dues_color(), which stays because the Excel exporter
+     * needs a literal hex. Returns '' when the label isn't a dues verdict.
+     */
+    public static function dues_variant( string $dues_label ): string {
+        if ( $dues_label === 'Dues Paid' ) {
+            return 'success';
+        }
+        if ( $dues_label === 'Unpaid Dues' ) {
+            return 'destructive';
+        }
+        return '';
+    }
+
+    /**
      * Payment column for the Membership by Firm report:
      *   "Paid by Invoice" if the paid-by-invoice tag is present,
      *   "Paid by Check"   if the paid-by-check tag is present,

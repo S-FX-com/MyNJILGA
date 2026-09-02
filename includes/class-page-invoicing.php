@@ -45,8 +45,8 @@ class MyNJILGA_Page_Invoicing {
         $duesYear = self::selected_year();
         $view     = isset( $_GET['view'] ) ? sanitize_key( $_GET['view'] ) : '';
 
-        echo '<div class="wrap njilga-inv">';
-        self::styles();
+        MyNJILGA_Admin_UI::styles();
+        echo '<div class="wrap njilga-ui">';
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
             echo '</div>';
@@ -185,7 +185,7 @@ class MyNJILGA_Page_Invoicing {
      * @param array<string,int> $totals status => cents
      */
     private static function render_summary( array $t, array $totals ): void {
-        self::stat_cards( [
+        MyNJILGA_Admin_UI::stat_cards( [
             [ 'label' => 'Law Firms',        'value' => $t['firms'],     'variant' => 'default', 'icon' => 'users' ],
             [ 'label' => 'Ready to Invoice', 'value' => $t['ready'],     'variant' => 'success', 'icon' => 'check-circle' ],
             [ 'label' => 'Invoices Created', 'value' => $t['created'],   'variant' => 'info',    'icon' => 'file' ],
@@ -210,29 +210,6 @@ class MyNJILGA_Page_Invoicing {
             esc_html( MyNJILGA_Invoicing::money( $outstanding ) )
         );
         printf( '<div class="njilga-progress"><div class="njilga-progress-bar" style="width:%d%%"></div></div>', $pct );
-        echo '</div>';
-    }
-
-    /**
-     * @param array<int,array{label:string,value:int,variant:string,icon:string}> $cards
-     */
-    private static function stat_cards( array $cards ): void {
-        echo '<div class="njilga-stats">';
-        foreach ( $cards as $card ) {
-            printf(
-                '<div class="njilga-stat njilga-stat-%s">
-                    <div class="njilga-stat-icon">%s</div>
-                    <div class="njilga-stat-body">
-                        <div class="njilga-stat-label">%s</div>
-                        <div class="njilga-stat-value">%s</div>
-                    </div>
-                 </div>',
-                esc_attr( $card['variant'] ),
-                self::icon( $card['icon'] ),
-                esc_html( $card['label'] ),
-                esc_html( (string) $card['value'] )
-            );
-        }
         echo '</div>';
     }
 
@@ -776,7 +753,7 @@ class MyNJILGA_Page_Invoicing {
         printf( '<p class="njilga-back"><a href="%s">&larr; Back to %d invoicing</a></p>', esc_url( self::page_url( $duesYear ) ), $duesYear );
         printf( '<h1 class="njilga-title njilga-title-danger">Confirm the %d downgrade sweep</h1>', $duesYear );
 
-        self::stat_cards( [
+        MyNJILGA_Admin_UI::stat_cards( [
             [ 'label' => 'Unpaid invoices',           'value' => (int) $p['invoices'],  'variant' => 'destructive', 'icon' => 'file' ],
             [ 'label' => 'Firms affected',            'value' => (int) $p['firms'],     'variant' => 'destructive', 'icon' => 'users' ],
             [ 'label' => 'Members downgraded',        'value' => (int) $p['members'],   'variant' => 'destructive', 'icon' => 'alert' ],
@@ -870,18 +847,11 @@ class MyNJILGA_Page_Invoicing {
     }
 
     private static function pill( string $text, string $variant ): string {
-        return sprintf(
-            '<span class="njilga-badge njilga-badge-%s">%s</span>',
-            esc_attr( $variant ),
-            esc_html( $text )
-        );
+        return MyNJILGA_Admin_UI::pill( $text, $variant );
     }
 
     private static function validation_cell( string $label, bool $ok ): string {
-        if ( $ok ) {
-            return '<span class="njilga-valid njilga-valid-ok">' . self::icon( 'check' ) . esc_html( $label ) . '</span>';
-        }
-        return '<span class="njilga-valid njilga-valid-warn">' . self::icon( 'alert' ) . esc_html( $label ) . '</span>';
+        return MyNJILGA_Admin_UI::validation( $label, $ok );
     }
 
     private static function bill_to_label( object $row ): string {
@@ -896,24 +866,11 @@ class MyNJILGA_Page_Invoicing {
     }
 
     // -------------------------------------------------------------------------
-    // Icons (lucide-style inline SVG)
+    // Icons — delegated to the design system.
     // -------------------------------------------------------------------------
 
     private static function icon( string $name ): string {
-        static $paths = [
-            'chevron'      => '<path d="m6 9 6 6 6-6"/>',
-            'check'        => '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
-            'alert'        => '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
-            'users'        => '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
-            'check-circle' => '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
-            'file'         => '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
-            'search'       => '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
-            'sliders'      => '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
-            'calendar'     => '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M16 2v4"/>',
-            'refresh'      => '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
-        ];
-        $body = $paths[ $name ] ?? '';
-        return '<svg class="njilga-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . $body . '</svg>';
+        return MyNJILGA_Admin_UI::icon( $name );
     }
 
     // -------------------------------------------------------------------------
@@ -1005,243 +962,15 @@ class MyNJILGA_Page_Invoicing {
     }
 
     // -------------------------------------------------------------------------
-    // Inline CSS / JS (shadcn/ui-inspired, scoped to .njilga-inv)
+    // Page behaviour (tabs / search / filter / paginate / expand / send).
+    // All styling comes from MyNJILGA_Admin_UI; see design.md.
     // -------------------------------------------------------------------------
-
-    private static function styles(): void {
-        echo <<<'CSS'
-<style>
-.njilga-inv{
-  --bg:#ffffff; --fg:#09090b; --muted:#f4f4f5; --muted-fg:#71717a;
-  --border:#e4e4e7; --primary:#18181b; --primary-fg:#fafafa; --accent:#f4f4f5;
-  --ring:#a1a1aa; --radius:8px;
-  --success-bg:#ecfdf3; --success-fg:#067647; --success-bd:#abefc6;
-  --info-bg:#eff6ff;    --info-fg:#1d4ed8;    --info-bd:#bfdbfe;
-  --warn-bg:#fff7ed;    --warn-fg:#c2410c;    --warn-bd:#fed7aa;
-  --danger-bg:#fef2f2;  --danger-fg:#b42318;  --danger-bd:#fecdca;
-  color:var(--fg);
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  max-width:1240px;
-}
-.njilga-inv *{box-sizing:border-box}
-.njilga-inv tr[hidden]{display:none}
-.njilga-inv [hidden]{display:none!important}
-.njilga-inv a{color:var(--info-fg)}
-.njilga-inv code{background:var(--muted);padding:1px 5px;border-radius:4px;font-size:12px}
-.njilga-icon{width:16px;height:16px;flex:0 0 auto;vertical-align:middle}
-
-/* Header */
-.njilga-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;margin:6px 0 2px}
-.njilga-title{font-size:26px;font-weight:700;line-height:1.2;margin:0;padding:0;color:var(--fg)}
-.njilga-title-danger{color:var(--danger-fg)}
-.njilga-subtitle{color:var(--muted-fg);font-size:14px;margin:6px 0 0}
-.njilga-header-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.njilga-header-note{color:var(--muted-fg);font-size:12.5px;margin:8px 0 18px;text-align:right}
-
-/* Year select */
-.njilga-year{display:flex;align-items:center;gap:6px;margin:0}
-.njilga-year-label{display:inline-flex;align-items:center;gap:5px;color:var(--muted-fg);font-size:12.5px;font-weight:500}
-
-/* Buttons */
-.njilga-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
-  height:38px;padding:0 15px;border-radius:6px;border:1px solid transparent;
-  font-size:13.5px;font-weight:500;line-height:1;cursor:pointer;text-decoration:none;
-  transition:background .12s,border-color .12s,opacity .12s;white-space:nowrap;background:none}
-.njilga-btn:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
-.njilga-btn-sm{height:32px;padding:0 11px;font-size:12.5px;border-radius:6px}
-.njilga-btn-primary{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
-.njilga-btn-primary:hover{background:#27272a}
-.njilga-btn-outline{background:var(--bg);color:var(--fg);border-color:var(--border)}
-.njilga-btn-outline:hover{background:var(--accent)}
-.njilga-btn-ghost{background:transparent;color:var(--fg)}
-.njilga-btn-ghost:hover{background:var(--accent)}
-.njilga-btn-danger{background:var(--danger-fg);color:#fff;border-color:var(--danger-fg)}
-.njilga-btn-danger:hover{background:#912018}
-.njilga-btn[disabled]{opacity:.5;cursor:not-allowed;pointer-events:none}
-
-/* Stat cards */
-.njilga-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:16px 0}
-.njilga-stat{display:flex;align-items:center;gap:14px;padding:16px 18px;background:var(--bg);
-  border:1px solid var(--border);border-radius:12px}
-.njilga-stat-icon{display:flex;align-items:center;justify-content:center;width:42px;height:42px;
-  border-radius:10px;background:var(--muted);color:var(--muted-fg)}
-.njilga-stat-icon .njilga-icon{width:20px;height:20px}
-.njilga-stat-label{color:var(--muted-fg);font-size:13px;font-weight:500}
-.njilga-stat-value{font-size:26px;font-weight:700;line-height:1.15;margin-top:2px}
-.njilga-stat-success .njilga-stat-icon{background:var(--success-bg);color:var(--success-fg)}
-.njilga-stat-info .njilga-stat-icon{background:var(--info-bg);color:var(--info-fg)}
-.njilga-stat-warning .njilga-stat-icon{background:var(--warn-bg);color:var(--warn-fg)}
-.njilga-stat-warning .njilga-stat-value{color:var(--warn-fg)}
-.njilga-stat-destructive .njilga-stat-icon{background:var(--danger-bg);color:var(--danger-fg)}
-.njilga-stat-destructive .njilga-stat-value{color:var(--danger-fg)}
-
-/* Progress */
-.njilga-progress-wrap{margin:6px 0 22px}
-.njilga-progress-top{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:8px}
-.njilga-progress-label{font-size:13px;color:var(--muted-fg);font-weight:500}
-.njilga-money-line{font-size:12.5px;color:var(--muted-fg)}
-.njilga-progress{height:8px;background:var(--muted);border-radius:999px;overflow:hidden}
-.njilga-progress-bar{height:100%;background:var(--primary);border-radius:999px;transition:width .3s}
-
-/* Card */
-.njilga-card{background:var(--bg);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px}
-.njilga-card-head{padding:16px 18px 0}
-.njilga-card-title{font-size:17px;font-weight:600;margin:0}
-
-/* Tabs */
-.njilga-tabs{display:flex;gap:4px;padding:10px 12px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
-.njilga-tab{display:inline-flex;align-items:center;gap:7px;padding:8px 12px;background:none;border:none;
-  border-bottom:2px solid transparent;color:var(--muted-fg);font-size:13.5px;font-weight:500;cursor:pointer;
-  margin-bottom:-1px}
-.njilga-tab:hover{color:var(--fg)}
-.njilga-tab.active{color:var(--fg);border-bottom-color:var(--primary)}
-.njilga-tab-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;
-  padding:0 6px;border-radius:999px;background:var(--muted);color:var(--muted-fg);font-size:11.5px;font-weight:600}
-.njilga-tab.active .njilga-tab-count{background:var(--primary);color:var(--primary-fg)}
-
-/* Toolbar */
-.njilga-toolbar{display:flex;align-items:center;gap:10px;padding:14px 18px;flex-wrap:wrap}
-.njilga-toolbar-spacer{flex:1 1 auto}
-.njilga-search{position:relative;flex:1 1 260px;max-width:380px}
-.njilga-search .njilga-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted-fg)}
-.njilga-search input{width:100%;height:38px;padding:0 12px 0 34px;border:1px solid var(--border);
-  border-radius:6px;font-size:13.5px;background:var(--bg);color:var(--fg)}
-.njilga-search input:focus{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px rgba(161,161,170,.25)}
-.njilga-select{height:38px;padding:0 30px 0 12px;border:1px solid var(--border);border-radius:6px;
-  font-size:13.5px;background:var(--bg) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 9px center;
-  color:var(--fg);cursor:pointer;-webkit-appearance:none;appearance:none}
-.njilga-select:focus{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px rgba(161,161,170,.25)}
-.njilga-select-sm{height:32px;font-size:12.5px}
-
-/* Bulk bar */
-.njilga-bulkbar{display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--muted);
-  border-top:1px solid var(--border);border-bottom:1px solid var(--border);flex-wrap:wrap}
-.njilga-bulkbar-check{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:500}
-.njilga-bulkbar-sep{width:1px;height:18px;background:var(--border)}
-.njilga-bulkbar-total{font-size:13px;color:var(--muted-fg)}
-.njilga-bulkbar-total strong{color:var(--fg)}
-.njilga-bulkbar #njilga-bulkcreate{margin-left:auto}
-
-/* Table */
-.njilga-tablewrap{overflow-x:auto}
-.njilga-table{width:100%;border-collapse:collapse;font-size:13.5px}
-.njilga-table thead th{text-align:left;padding:11px 14px;color:var(--muted-fg);font-weight:500;
-  font-size:12.5px;border-bottom:1px solid var(--border);white-space:nowrap;background:var(--bg)}
-.njilga-table tbody td{padding:12px 14px;border-bottom:1px solid var(--border);vertical-align:middle}
-.njilga-row:hover td{background:#fafafa}
-.njilga-col-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.njilga-col-check{width:40px}
-.njilga-col-actions{white-space:nowrap}
-.njilga-col-expand{width:44px;text-align:center}
-.njilga-inv input[type=checkbox]{width:16px;height:16px;accent-color:var(--primary);cursor:pointer;margin:0}
-.njilga-firmcell{min-width:220px}
-.njilga-firmname{display:inline-flex;align-items:center;gap:8px;background:none;border:none;padding:0;
-  font-size:14px;font-weight:600;color:var(--fg);cursor:pointer;text-align:left;flex-wrap:wrap}
-.njilga-firmname:hover .njilga-firm-label{text-decoration:underline}
-.njilga-subline{display:block;color:var(--muted-fg);font-size:12px;margin-top:3px}
-.njilga-subline-warn{color:var(--warn-fg);display:inline-flex;align-items:center;gap:4px}
-.njilga-subline-warn .njilga-icon{width:13px;height:13px}
-.njilga-dim{color:var(--muted-fg)}
-.njilga-inline-status{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
-.njilga-chevron{background:none;border:none;cursor:pointer;color:var(--muted-fg);padding:6px;border-radius:6px;
-  display:inline-flex;transition:transform .18s,background .12s}
-.njilga-chevron:hover{background:var(--accent);color:var(--fg)}
-.njilga-row.open .njilga-chevron{transform:rotate(180deg)}
-
-/* Badges */
-.njilga-badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;
-  font-size:11.5px;font-weight:600;line-height:1.5;border:1px solid transparent;white-space:nowrap}
-.njilga-badge-success{background:var(--success-bg);color:var(--success-fg);border-color:var(--success-bd)}
-.njilga-badge-info{background:var(--info-bg);color:var(--info-fg);border-color:var(--info-bd)}
-.njilga-badge-warning{background:var(--warn-bg);color:var(--warn-fg);border-color:var(--warn-bd)}
-.njilga-badge-destructive{background:var(--danger-bg);color:var(--danger-fg);border-color:var(--danger-bd)}
-.njilga-badge-muted{background:var(--muted);color:var(--muted-fg);border-color:var(--border)}
-.njilga-badge-outline{background:var(--bg);color:var(--muted-fg);border-color:var(--border)}
-
-/* Validation cell */
-.njilga-valid{display:inline-flex;align-items:center;gap:6px;font-size:13px}
-.njilga-valid .njilga-icon{width:15px;height:15px}
-.njilga-valid-ok{color:var(--success-fg)}
-.njilga-valid-warn{color:var(--warn-fg)}
-
-/* Preview */
-.njilga-preview>td{background:#fafafa;padding:0!important}
-.njilga-preview-card{padding:18px 20px;border-top:1px dashed var(--border)}
-.njilga-preview-head{display:flex;justify-content:space-between;gap:16px;margin-bottom:12px}
-.njilga-preview-title{font-size:15px;font-weight:600}
-.njilga-preview-sub{color:var(--muted-fg);font-size:12.5px;margin-top:2px}
-.njilga-preview-note{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--warn-fg);margin-bottom:8px}
-.njilga-preview-note .njilga-icon{width:14px;height:14px}
-.njilga-preview-error{color:var(--danger-fg)}
-.njilga-preview-empty{margin:4px 0}
-.njilga-preview-table{width:100%;max-width:620px;border-collapse:collapse;font-size:13px;background:var(--bg);
-  border:1px solid var(--border);border-radius:8px;overflow:hidden}
-.njilga-preview-table th{text-align:left;padding:9px 12px;color:var(--muted-fg);font-weight:500;font-size:12px;
-  background:var(--muted);border-bottom:1px solid var(--border)}
-.njilga-preview-table td{padding:9px 12px;border-bottom:1px solid var(--border)}
-.njilga-preview-table tbody tr:last-child td{border-bottom:none}
-.njilga-preview-total td{font-weight:700;background:var(--muted)}
-.njilga-roster{margin-top:12px;max-width:620px}
-.njilga-roster>summary{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:12.5px;
-  font-weight:500;color:var(--info-fg);list-style:none;padding:4px 0}
-.njilga-roster>summary::-webkit-details-marker{display:none}
-.njilga-roster>summary .njilga-icon{width:14px;height:14px}
-.njilga-roster-table{margin-top:8px}
-.njilga-roster-unbilled td{color:var(--muted-fg)}
-
-/* Table foot / pager */
-.njilga-tablefoot{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 18px;flex-wrap:wrap}
-.njilga-showing{color:var(--muted-fg);font-size:12.5px}
-.njilga-pagectl{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-.njilga-per-label{display:inline-flex;align-items:center;gap:8px;color:var(--muted-fg);font-size:12.5px}
-.njilga-pager{display:flex;gap:4px}
-.njilga-pgbtn{min-width:32px;height:32px;padding:0 9px;border:1px solid var(--border);background:var(--bg);
-  color:var(--fg);border-radius:6px;font-size:12.5px;cursor:pointer}
-.njilga-pgbtn:hover:not([disabled]):not(.cur){background:var(--accent)}
-.njilga-pgbtn.cur{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
-.njilga-pgbtn[disabled]{opacity:.4;cursor:not-allowed}
-.njilga-pgellip{display:inline-flex;align-items:center;padding:0 4px;color:var(--muted-fg)}
-.njilga-noresults{padding:40px 18px;text-align:center;color:var(--muted-fg);font-size:13.5px}
-
-/* Callouts (notices) */
-.njilga-callout{border:1px solid var(--border);border-radius:8px;padding:2px 14px;margin:12px 0;background:var(--bg)}
-.njilga-callout p{margin:10px 0}
-.njilga-callout-success{background:var(--success-bg);border-color:var(--success-bd);color:var(--success-fg)}
-.njilga-callout-info{background:var(--info-bg);border-color:var(--info-bd);color:var(--info-fg)}
-.njilga-callout-warning{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn-fg)}
-.njilga-callout-error{background:var(--danger-bg);border-color:var(--danger-bd);color:var(--danger-fg)}
-.njilga-callout a{color:inherit;text-decoration:underline}
-.njilga-list{list-style:disc;padding-left:22px;margin:6px 0}
-
-/* Empty state */
-.njilga-empty{padding:52px 24px;text-align:center}
-.njilga-empty-icon{display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;
-  border-radius:12px;background:var(--muted);color:var(--muted-fg);margin-bottom:14px}
-.njilga-empty-icon .njilga-icon{width:26px;height:26px}
-.njilga-empty-title{font-size:18px;font-weight:600;margin:0 0 8px}
-.njilga-empty-text{color:var(--muted-fg);font-size:13.5px;max-width:520px;margin:0 auto 18px}
-.njilga-empty .njilga-generate{display:flex;justify-content:center}
-
-/* Danger card / downgrade */
-.njilga-danger-card{background:var(--danger-bg);border:1px solid var(--danger-bd);border-radius:12px;
-  padding:18px 20px;margin:24px 0;max-width:860px}
-.njilga-danger-card p{margin:0 0 12px}
-.njilga-danger-head{display:flex;align-items:center;gap:9px;color:var(--danger-fg);margin-bottom:8px}
-.njilga-danger-head h2{margin:0;font-size:17px;font-weight:600}
-.njilga-danger-head .njilga-icon{width:19px;height:19px}
-.njilga-back{margin:6px 0 12px}
-.njilga-ack{display:flex;align-items:center;gap:9px;margin:14px 0;font-size:13.5px}
-.njilga-confirm-actions{display:flex;gap:10px;flex-wrap:wrap}
-.njilga-generate{margin:0}
-</style>
-CSS;
-    }
 
     private static function scripts(): void {
         echo <<<'JS'
 <script>
 (function(){
-  var root=document.querySelector('.njilga-inv');
+  var root=document.querySelector('.njilga-ui');
   if(!root) return;
   var table=document.getElementById('njilga-table');
   if(!table) return;

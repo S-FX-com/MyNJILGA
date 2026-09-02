@@ -9,25 +9,26 @@ class MyNJILGA_Page_Companies {
             wp_die( 'Access denied.' );
         }
 
-        echo '<div class="wrap"><h1>Companies</h1>';
+        MyNJILGA_Admin_UI::styles();
+        echo '<div class="wrap njilga-ui">';
+        MyNJILGA_Admin_Menu::render_back_to_reports();
+        MyNJILGA_Admin_UI::page_header( 'Companies', 'Firms bucketed by how many of their FluentCRM contacts carry the Dues Paid tag.' );
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
-            echo '</div>';
+            MyNJILGA_Admin_UI::close();
             return;
         }
 
         if ( ! MyNJILGA_Members_Data::companies_module_active() ) {
-            echo '<div class="notice notice-warning"><p>The FluentCRM <strong>Companies</strong> module is not active on this site. Enable it under FluentCRM → Settings → Modules.</p></div></div>';
+            MyNJILGA_Admin_UI::callout( 'The FluentCRM <strong>Companies</strong> module is not active on this site. Enable it under FluentCRM → Settings → Modules.', 'warning' );
+            MyNJILGA_Admin_UI::close();
             return;
         }
 
-        MyNJILGA_Admin_Menu::render_back_to_reports();
         MyNJILGA_Admin_Menu::render_stats_panel();
 
-        $data = MyNJILGA_Members_Data::get_companies_bucketed();
+        $data         = MyNJILGA_Members_Data::get_companies_bucketed();
         $bucket_order = [ '1', '2-5', '6+', '0' ];
-
-        echo '<p style="color:#646970">Companies are bucketed by how many of their FluentCRM contacts carry the <strong>Dues Paid</strong> tag.</p>';
 
         MyNJILGA_Admin_Menu::render_csv_button( 'companies', 'Download Companies CSV' );
 
@@ -35,19 +36,14 @@ class MyNJILGA_Page_Companies {
             $companies = $data['buckets'][ $key ] ?? [];
             $label     = $data['bucket_labels'][ $key ];
 
-            printf(
-                '<h2 style="margin-top:24px;%s">%s <span style="color:#888;font-weight:400">(%d)</span></h2>',
-                $key === '0' ? 'color:#888' : '',
-                esc_html( $label ),
-                count( $companies )
-            );
+            MyNJILGA_Admin_UI::section( $label, '', count( $companies ) );
 
             if ( empty( $companies ) ) {
-                echo '<p style="color:#999;font-style:italic">None.</p>';
+                echo '<p class="njilga-dim"><em>None.</em></p>';
                 continue;
             }
 
-            echo '<table class="widefat striped"><thead><tr>
+            echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
                     <th>Company</th><th>Member</th><th>Status</th>
                   </tr></thead><tbody>';
 
@@ -55,7 +51,7 @@ class MyNJILGA_Page_Companies {
                 $rowspan = max( 1, count( $c['members'] ) );
                 if ( empty( $c['members'] ) ) {
                     printf(
-                        '<tr><td><strong>%s</strong> <span style="color:#888">(0 / 0)</span></td><td colspan="2" style="color:#999;font-style:italic">No contacts</td></tr>',
+                        '<tr><td><strong>%s</strong> <span class="njilga-dim">(0 / 0)</span></td><td colspan="2" class="njilga-dim"><em>No contacts</em></td></tr>',
                         esc_html( $c['name'] )
                     );
                     continue;
@@ -65,7 +61,7 @@ class MyNJILGA_Page_Companies {
                     echo '<tr>';
                     if ( $first ) {
                         printf(
-                            '<td rowspan="%d" style="vertical-align:top"><strong>%s</strong><br><span style="color:#888;font-size:11px">%d paid / %d total</span></td>',
+                            '<td rowspan="%d" class="njilga-rowhead"><strong>%s</strong><br><span class="njilga-dim" style="font-size:12px">%d paid / %d total</span></td>',
                             $rowspan,
                             esc_html( $c['name'] ),
                             $c['paid_count'],
@@ -78,15 +74,15 @@ class MyNJILGA_Page_Companies {
                         esc_url( $m['url'] ),
                         esc_html( $m['name'] ),
                         $m['is_paid']
-                            ? '<strong style="color:#1d6f42">Paid</strong>'
-                            : '<strong style="color:#d63638">Unpaid</strong>'
+                            ? MyNJILGA_Admin_UI::pill( 'Paid', 'success' )
+                            : MyNJILGA_Admin_UI::pill( 'Unpaid', 'destructive' )
                     );
                 }
             }
 
-            echo '</tbody></table>';
+            echo '</tbody></table></div></div>';
         }
 
-        echo '</div>';
+        MyNJILGA_Admin_UI::close();
     }
 }

@@ -103,10 +103,7 @@ class MyNJILGA_Admin_Menu {
      * at the top of each individual report now that they're not in the menu.
      */
     public static function render_back_to_reports(): void {
-        printf(
-            '<p style="margin:4px 0 12px"><a href="%s" style="text-decoration:none">&larr; All Reports</a></p>',
-            esc_url( self::url( self::SLUG_REPORTS ) )
-        );
+        MyNJILGA_Admin_UI::back_link( self::url( self::SLUG_REPORTS ), 'All Reports' );
     }
 
     /**
@@ -123,14 +120,14 @@ class MyNJILGA_Admin_Menu {
 
         $s = MyNJILGA_Members_Data::report_stats();
 
-        self::render_stat_tiles( [
-            [ 'Paid Members',             $s['paid_members'],       '#1d6f42' ],
-            [ 'Unpaid Members',           $s['unpaid_members'],     '#d63638' ],
-            [ 'Firms w/ Paid Members',    $s['firms_with_paid'],    '#1d6f42' ],
-            [ 'Firms w/ No Paid Members', $s['firms_without_paid'], '#d63638' ],
-            [ 'Paid Trustees',            $s['paid_trustees'],      '#1d6f42' ],
-            [ 'Unpaid Trustees',          $s['unpaid_trustees'],    '#d63638' ],
-            [ 'Exempt',                   $s['exempt'],             '#2271b1' ],
+        MyNJILGA_Admin_UI::stat_cards( [
+            [ 'label' => 'Paid Members',             'value' => $s['paid_members'],       'variant' => 'success',     'icon' => 'check-circle' ],
+            [ 'label' => 'Unpaid Members',           'value' => $s['unpaid_members'],     'variant' => 'destructive', 'icon' => 'alert' ],
+            [ 'label' => 'Firms w/ Paid Members',    'value' => $s['firms_with_paid'],    'variant' => 'success',     'icon' => 'building' ],
+            [ 'label' => 'Firms w/ No Paid Members', 'value' => $s['firms_without_paid'], 'variant' => 'destructive', 'icon' => 'building' ],
+            [ 'label' => 'Paid Trustees',            'value' => $s['paid_trustees'],      'variant' => 'success',     'icon' => 'award' ],
+            [ 'label' => 'Unpaid Trustees',          'value' => $s['unpaid_trustees'],    'variant' => 'destructive', 'icon' => 'award' ],
+            [ 'label' => 'Exempt',                   'value' => $s['exempt'],             'variant' => 'info',        'icon' => 'user' ],
         ] );
     }
 
@@ -148,12 +145,11 @@ class MyNJILGA_Admin_Menu {
 
         $s = MyNJILGA_Members_Data::report_stats();
 
-        echo '<h2 style="margin:8px 0 4px">Overview</h2>';
-        self::render_stat_tiles( [
-            [ 'Paid Members',   $s['paid_members'],   '#1d6f42' ],
-            [ 'Unpaid Members', $s['unpaid_members'], '#d63638' ],
-            [ 'Paid Trustees',  $s['paid_trustees'],  '#1d6f42' ],
-            [ 'Exempt',         $s['exempt'],         '#2271b1' ],
+        MyNJILGA_Admin_UI::stat_cards( [
+            [ 'label' => 'Paid Members',   'value' => $s['paid_members'],   'variant' => 'success',     'icon' => 'check-circle' ],
+            [ 'label' => 'Unpaid Members', 'value' => $s['unpaid_members'], 'variant' => 'destructive', 'icon' => 'alert' ],
+            [ 'label' => 'Paid Trustees',  'value' => $s['paid_trustees'],  'variant' => 'success',     'icon' => 'award' ],
+            [ 'label' => 'Exempt',         'value' => $s['exempt'],         'variant' => 'info',        'icon' => 'user' ],
         ] );
     }
 
@@ -165,19 +161,11 @@ class MyNJILGA_Admin_Menu {
      * @param array<int,array{0:string,1:int,2:string}> $tiles
      */
     public static function render_stat_tiles( array $tiles ): void {
-        echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:12px 0 24px">';
+        $cards = [];
         foreach ( $tiles as $tile ) {
-            printf(
-                '<div style="padding:14px 16px;background:#fff;border:1px solid #c3c4c7;border-left:4px solid %s;border-radius:4px">
-                    <div style="font-size:28px;font-weight:600;line-height:1.1">%d</div>
-                    <div style="color:#646970;font-size:13px">%s</div>
-                 </div>',
-                esc_attr( $tile[2] ),
-                (int) $tile[1],
-                esc_html( $tile[0] )
-            );
+            $cards[] = [ 'label' => (string) $tile[0], 'value' => (int) $tile[1], 'variant' => 'default', 'icon' => 'users' ];
         }
-        echo '</div>';
+        MyNJILGA_Admin_UI::stat_cards( $cards );
     }
 
     /**
@@ -189,7 +177,7 @@ class MyNJILGA_Admin_Menu {
         if ( MyNJILGA_Members_Data::fluentcrm_active() ) {
             return false;
         }
-        echo '<div class="notice notice-error"><p><strong>FluentCRM is not active.</strong> Install and activate FluentCRM, then reload this page.</p></div>';
+        MyNJILGA_Admin_UI::callout( '<strong>FluentCRM is not active.</strong> Install and activate FluentCRM, then reload this page.', 'error' );
         return true;
     }
 
@@ -203,18 +191,9 @@ class MyNJILGA_Admin_Menu {
      * list page renders one of these above its table.
      */
     public static function render_csv_button( string $type, string $label = 'Download CSV' ): void {
-        printf(
-            '<form method="post" action="%s" style="margin:0 0 12px">
-                <input type="hidden" name="action" value="my_njilga_export_csv">
-                <input type="hidden" name="type" value="%s">
-                %s
-                <button type="submit" class="button">%s</button>
-             </form>',
-            esc_url( admin_url( 'admin-post.php' ) ),
-            esc_attr( $type ),
-            wp_nonce_field( 'my_njilga_export_csv', '_wpnonce', true, false ),
-            esc_html( $label )
-        );
+        echo '<div class="njilga-actions">'
+            . MyNJILGA_Admin_UI::action_form( 'my_njilga_export_csv', $label, [ 'type' => $type ], 'outline', 'download' )
+            . '</div>';
     }
 
     /**
@@ -223,18 +202,9 @@ class MyNJILGA_Admin_Menu {
      * exporter can't carry the bold firm headings this report needs).
      */
     public static function render_firms_export_button( string $scope = 'all', string $label = 'Export to Excel' ): void {
-        printf(
-            '<form method="post" action="%s" style="margin:0 0 12px">
-                <input type="hidden" name="action" value="my_njilga_export_firms">
-                <input type="hidden" name="scope" value="%s">
-                %s
-                <button type="submit" class="button button-primary">%s</button>
-             </form>',
-            esc_url( admin_url( 'admin-post.php' ) ),
-            esc_attr( $scope === 'active' ? 'active' : 'all' ),
-            wp_nonce_field( 'my_njilga_export_firms', '_wpnonce', true, false ),
-            esc_html( $label )
-        );
+        echo '<div class="njilga-actions">'
+            . MyNJILGA_Admin_UI::action_form( 'my_njilga_export_firms', $label, [ 'scope' => $scope === 'active' ? 'active' : 'all' ], 'primary', 'download' )
+            . '</div>';
     }
 
     /**
@@ -243,15 +213,6 @@ class MyNJILGA_Admin_Menu {
      * Trustees, Companies, Membership by Firm).
      */
     public static function render_summary_export_button( string $label = 'Download Executive Summary (Excel)' ): void {
-        printf(
-            '<form method="post" action="%s" style="margin:0">
-                <input type="hidden" name="action" value="my_njilga_export_summary">
-                %s
-                <button type="submit" class="button button-primary">%s</button>
-             </form>',
-            esc_url( admin_url( 'admin-post.php' ) ),
-            wp_nonce_field( 'my_njilga_export_summary', '_wpnonce', true, false ),
-            esc_html( $label )
-        );
+        echo MyNJILGA_Admin_UI::action_form( 'my_njilga_export_summary', $label, [], 'primary', 'download' );
     }
 }

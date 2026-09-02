@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (FluentCart + FluentCRM), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
- * Version:     2.10.0
+ * Version:     2.11.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -41,6 +41,7 @@ require_once NJILGA_REPORT_DIR . 'includes/class-members-data.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-csv.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-xls.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-summary.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-admin-ui.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-admin-menu.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-dashboard.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-reports.php';

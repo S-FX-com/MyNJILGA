@@ -12,20 +12,22 @@ class MyNJILGA_Page_Reports {
             wp_die( 'Access denied.' );
         }
 
-        echo '<div class="wrap"><h1>Reports</h1>';
+        MyNJILGA_Admin_UI::open(
+            'Reports',
+            'Membership KPIs across every report, with per-report CSV and Excel exports.'
+        );
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
-            echo '</div>';
+            MyNJILGA_Admin_UI::close();
             return;
         }
 
         MyNJILGA_Admin_Menu::render_stats_panel();
 
-        echo '<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:16px 20px;margin:0 0 20px;background:#fff;border:1px solid #c3c4c7;border-left:4px solid #2271b1;border-radius:6px">
-                <div>
-                    <div style="font-size:15px;font-weight:600;margin-bottom:2px">Executive Summary</div>
-                    <div style="color:#646970;font-size:13px">One Excel file combining every report below — overview KPIs, active paid members, trustees, companies, and membership by firm.</div>
-                </div>';
+        echo '<div class="njilga-banner"><div>
+                <div class="njilga-banner-title">Executive Summary</div>
+                <div class="njilga-banner-desc">One Excel file combining every report below — overview KPIs, active paid members, trustees, companies, and membership by firm.</div>
+              </div>';
         MyNJILGA_Admin_Menu::render_summary_export_button();
         echo '</div>';
 
@@ -33,44 +35,47 @@ class MyNJILGA_Page_Reports {
             [
                 'title' => 'Active Paid Members',
                 'desc'  => 'Every contact carrying the Dues Paid tag, with firm, email, trustee role, and payment method.',
+                'icon'  => 'check-circle',
                 'url'   => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_MEMBERS ),
             ],
             [
                 'title' => 'Trustees',
                 'desc'  => 'Trustees, Senior Trustees, and Past Presidents, with dues status and payment method.',
+                'icon'  => 'award',
                 'url'   => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_TRUSTEES ),
             ],
             [
                 'title' => 'Companies',
                 'desc'  => 'Firms bucketed by how many paid members they have (1 / 2–5 / 6+ / none).',
+                'icon'  => 'building',
                 'url'   => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_COMPANIES ),
             ],
             [
                 'title' => 'Membership by Firm — All Membership',
                 'desc'  => 'Every firm with at least one contact, grouped, with each contact’s dues and roles. Exports to Excel.',
+                'icon'  => 'users',
                 'url'   => add_query_arg( 'scope', 'all', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_FIRMS ) ),
             ],
             [
                 'title' => 'Membership by Firm — Active Membership Only',
                 'desc'  => 'Only firms that have active (Dues Paid) members, showing just those active members. Exports to Excel.',
+                'icon'  => 'users',
                 'url'   => add_query_arg( 'scope', 'active', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_FIRMS ) ),
             ],
         ];
 
-        echo '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-top:8px">';
+        echo '<div class="njilga-linkcards">';
         foreach ( $cards as $card ) {
             printf(
-                '<a href="%s" style="display:block;padding:20px;background:#fff;border:1px solid #c3c4c7;border-radius:6px;text-decoration:none;color:inherit">
-                    <div style="font-size:16px;font-weight:600;margin-bottom:6px">%s &rarr;</div>
-                    <div style="color:#646970;font-size:13px;line-height:1.5">%s</div>
-                 </a>',
+                '<a class="njilga-linkcard" href="%s"><span class="njilga-linkcard-icon">%s</span><span><span class="njilga-linkcard-title">%s &rarr;</span><span class="njilga-linkcard-desc">%s</span></span></a>',
                 esc_url( $card['url'] ),
+                MyNJILGA_Admin_UI::icon( $card['icon'] ),
                 esc_html( $card['title'] ),
                 esc_html( $card['desc'] )
             );
         }
         echo '</div>';
 
-        echo '</div>';
+        MyNJILGA_Admin_UI::close();
     }
 }
