@@ -34,6 +34,14 @@
  */
 class MyNJILGA_Stripe_Webhook {
 
+    /**
+     * Ledger `reference` for an invoice closed out with Stripe's own
+     * "Mark as paid" — Stripe tells us nothing about how it was actually
+     * paid, so this says where the record came from instead of implying
+     * a cheque number nobody typed.
+     */
+    const MARKED_PAID_IN_STRIPE = 'Marked paid in Stripe';
+
     const HOOK_PROCESS = 'njilga_stripe_process_webhook_event';
     const AS_GROUP      = 'njilga-dues';
 
@@ -328,6 +336,27 @@ class MyNJILGA_Stripe_Webhook {
     /**
      * @param array<string,mixed> $dataObject The Invoice object.
      */
+    /**
+     * How much money ONE out-of-band settlement actually moved.
+     *
+     * Stripe's amount_paid is CUMULATIVE for the invoice, so it is the
+     * wrong number the moment any of the balance was already recorded
+     * here: a $100 check logged in the admin followed by "Mark as paid"
+     * in the Stripe Dashboard would otherwise book the full $200 again
+     * on top of the $100, and the firm would show as having paid $300.
+     * The balance still outstanding on our row immediately before the
+     * event is exactly what this payment covered.
+     *
+     * Falls back to Stripe's figure only when we have no balance on file
+     * to reason from (a row whose amounts were never populated).
+     *
+     * @param int $localBalanceCents  amount_due_cents on the row before this event.
+     * @param int $stripeAmountPaid   The invoice's cumulative amount_paid.
+     */
+    public static function off_stripe_amount_cents( int $localBalanceCents, int $stripeAmountPaid ): int {
+        return $localBalanceCents > 0 ? $localBalanceCents : max( 0, $stripeAmountPaid );
+    }
+
     private static function handle_invoice_paid( string $eventId, array $dataObject, bool $livemode ): void {
         $row = self::resolve_invoice_row( 'invoice.paid', $dataObject );
         if ( ! $row ) {
@@ -392,6 +421,36 @@ class MyNJILGA_Stripe_Webhook {
                 'reference'        => $reference !== '' ? $reference : null,
                 'raw'              => self::trimmed_json( $dataObject ),
             ];
+        } elseif ( ! empty( $dataObject['paid_out_of_band'] ) ) {
+            // Settled OUTSIDE Stripe but not through this plugin's Mark
+            // Paid screen — i.e. someone clicked "Mark as paid" in the
+            // Stripe Dashboard, which is the normal way to close out a
+            // cheque that arrived in the post. There is no charge or
+            // payment_intent to inspect, and Stripe records no method
+            // detail of its own, so the honest record is "other, settled
+            // off Stripe" rather than a guess at cheque/wire/cash.
+            $detail = [ 'method' => 'other', 'card_brand' => null, 'last4' => null, 'bank_name' => null, 'receipt_url' => null ];
+
+            $offStripeCents = self::off_stripe_amount_cents(
+                (int) ( $row->amount_due_cents ?? 0 ),
+                (int) ( $dataObject['amount_paid'] ?? 0 )
+            );
+
+            // Stripe's own timestamp for when it was marked paid, not
+            // whenever this delivery happened to be processed.
+            $paidAt     = (int) ( $dataObject['status_transitions']['paid_at'] ?? 0 );
+            $occurredAt = $paidAt > 0 ? gmdate( 'Y-m-d H:i:s', $paidAt ) : current_time( 'mysql' );
+
+            $payment = [
+                'stripe_object_id' => $objectId,
+                'kind'             => MyNJILGA_Dues_Payments_Table::KIND_PAYMENT,
+                'method'           => 'other',
+                'amount_cents'     => $offStripeCents,
+                'status'           => 'succeeded',
+                'occurred_at'      => $occurredAt,
+                'reference'        => self::MARKED_PAID_IN_STRIPE,
+                'raw'              => self::trimmed_json( $dataObject ),
+            ];
         } else {
             $detail = self::resolve_payment_method_detail( $dataObject, $invoiceId );
 
@@ -422,13 +481,25 @@ class MyNJILGA_Stripe_Webhook {
 
         // Not something handle_invoice_paid() does — the row update below
         // is this class's own responsibility.
-        MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
+        $rowFields = [
             'amount_paid_cents' => (int) ( $dataObject['amount_paid'] ?? 0 ),
             'amount_due_cents'  => (int) ( $dataObject['amount_remaining'] ?? 0 ),
             'primary_method'    => $detail['method'],
             'stripe_status'     => (string) ( $dataObject['status'] ?? '' ),
             'last_synced_at'    => current_time( 'mysql' ),
-        ] );
+        ];
+
+        // Money settled off Stripe needs recording as such, or a firm
+        // closed out by cheque looks — to anyone reconciling this page
+        // against a Stripe payout — like money Stripe should have sent
+        // and didn't. Only for the Dashboard route: this plugin's own
+        // Mark Paid screen already wrote the column before calling
+        // Stripe, so adding it again here would double it.
+        if ( isset( $offStripeCents ) ) {
+            $rowFields['paid_off_stripe_cents'] = (int) ( $row->paid_off_stripe_cents ?? 0 ) + $offStripeCents;
+        }
+
+        MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, $rowFields );
 
         self::finish_processed( $eventId, (int) $row->id );
     }
