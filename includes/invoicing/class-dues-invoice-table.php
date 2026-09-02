@@ -21,11 +21,21 @@
  *   1.0.0  firm-level rows, UNIQUE (company, year)
  *   1.1.0  + bill_to_contact_id, billing_mode, invoice_kind, last_error,
  *            queued_at; UNIQUE (company, year, invoice_kind, bill_to)
+ *   1.2.0  Stripe migration: fluentcart_customer_id/order_id/order_uuid
+ *            renamed (+ widened to VARCHAR) to gateway_customer_id/
+ *            gateway_invoice_id/gateway_invoice_number; + gateway,
+ *            livemode, hosted_invoice_url, invoice_pdf_url,
+ *            amount_paid_cents, amount_due_cents, amount_refunded_cents,
+ *            paid_off_stripe_cents, primary_method, due_date,
+ *            finalized_at, processing_at, voided_at, last_synced_at,
+ *            stripe_status; UNIQUE (company, year, invoice_kind, bill_to,
+ *            livemode) — a test-mode and a live-mode row for the same
+ *            firm/year must not collide.
  */
 class MyNJILGA_Dues_Invoice_Table {
 
     const OPTION_DB_VERSION = 'njilga_dues_db_version';
-    const DB_VERSION        = '1.1.0';
+    const DB_VERSION        = '1.2.0';
 
     const STATUS_DRAFT      = 'draft';
     const STATUS_APPROVED   = 'approved';
@@ -85,6 +95,49 @@ class MyNJILGA_Dues_Invoice_Table {
             }
         }
 
+        // 1.2.0 (Stripe migration): same reasoning, twice over — the old
+        // 4-column UNIQUE would collide a test-mode and a live-mode row for
+        // the same firm/year, and the old order_id KEY names the column
+        // being renamed below. dbDelta only ever ADDS a missing index; a
+        // same-named index that already exists (even with different
+        // columns) is left alone, so both have to be dropped explicitly
+        // before dbDelta can lay the new ones down under those names.
+        // Column renames (dbDelta cannot rename or retype a column) are
+        // guarded the same way, on the OLD column name's presence, so a
+        // second run of this block is a safe no-op.
+        if ( $fromVersion !== '' && version_compare( $fromVersion, '1.2.0', '<' ) ) {
+            foreach ( [ 'firm_year_kind_billto', 'order_id' ] as $oldIndex ) {
+                $hasOldIndex = $wpdb->get_var( $wpdb->prepare(
+                    "SELECT COUNT(1) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = %s AND index_name = %s",
+                    $table,
+                    $oldIndex
+                ) );
+                if ( (int) $hasOldIndex > 0 ) {
+                    $wpdb->query( "ALTER TABLE $table DROP INDEX $oldIndex" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+                }
+            }
+
+            // old column => "new name + definition" for CHANGE COLUMN. A
+            // widening numeric-to-string CHANGE (e.g. BIGINT 1234 ->
+            // VARCHAR '1234') preserves existing values, so no separate
+            // data-copy UPDATE is needed for the rename itself.
+            $renames = [
+                'fluentcart_customer_id' => 'gateway_customer_id VARCHAR(64) NULL',
+                'fluentcart_order_id'    => 'gateway_invoice_id VARCHAR(64) NULL',
+                'fluentcart_order_uuid'  => 'gateway_invoice_number VARCHAR(64) NULL',
+            ];
+            foreach ( $renames as $oldColumn => $newDefinition ) {
+                $hasOldColumn = $wpdb->get_var( $wpdb->prepare(
+                    "SELECT COUNT(1) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
+                    $table,
+                    $oldColumn
+                ) );
+                if ( (int) $hasOldColumn > 0 ) {
+                    $wpdb->query( "ALTER TABLE $table CHANGE COLUMN $oldColumn $newDefinition" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+                }
+            }
+        }
+
         $sql = "CREATE TABLE $table (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             dues_year SMALLINT UNSIGNED NOT NULL,
@@ -93,23 +146,39 @@ class MyNJILGA_Dues_Invoice_Table {
             bill_to_contact_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
             billing_mode VARCHAR(20) NOT NULL DEFAULT 'firm',
             invoice_kind VARCHAR(20) NOT NULL DEFAULT 'combined',
-            fluentcart_customer_id BIGINT UNSIGNED NULL,
-            fluentcart_order_id BIGINT UNSIGNED NULL,
-            fluentcart_order_uuid VARCHAR(64) NULL,
+            gateway VARCHAR(20) NOT NULL DEFAULT 'stripe',
+            livemode TINYINT(1) NOT NULL DEFAULT 1,
+            gateway_customer_id VARCHAR(64) NULL,
+            gateway_invoice_id VARCHAR(64) NULL,
+            gateway_invoice_number VARCHAR(64) NULL,
+            hosted_invoice_url VARCHAR(512) NULL,
+            invoice_pdf_url VARCHAR(512) NULL,
             status VARCHAR(20) NOT NULL DEFAULT 'draft',
             total_amount_cents INT UNSIGNED NOT NULL DEFAULT 0,
+            amount_paid_cents INT UNSIGNED NOT NULL DEFAULT 0,
+            amount_due_cents INT UNSIGNED NOT NULL DEFAULT 0,
+            amount_refunded_cents INT UNSIGNED NOT NULL DEFAULT 0,
+            paid_off_stripe_cents INT UNSIGNED NOT NULL DEFAULT 0,
+            primary_method VARCHAR(24) NULL,
+            stripe_status VARCHAR(24) NULL,
             roster_snapshot LONGTEXT NOT NULL,
             last_error TEXT NULL,
             created_at DATETIME NOT NULL,
             approved_at DATETIME NULL,
             queued_at DATETIME NULL,
             sent_at DATETIME NULL,
+            due_date DATE NULL,
+            finalized_at DATETIME NULL,
+            processing_at DATETIME NULL,
             paid_at DATETIME NULL,
             downgraded_at DATETIME NULL,
+            voided_at DATETIME NULL,
+            last_synced_at DATETIME NULL,
             PRIMARY KEY  (id),
-            UNIQUE KEY firm_year_kind_billto (fluentcrm_company_id, dues_year, invoice_kind, bill_to_contact_id),
-            KEY order_id (fluentcart_order_id),
-            KEY year_status (dues_year, status)
+            UNIQUE KEY firm_year_kind_billto (fluentcrm_company_id, dues_year, invoice_kind, bill_to_contact_id, livemode),
+            KEY gateway_invoice (gateway_invoice_id),
+            KEY year_status (dues_year, status),
+            KEY year_mode_status (dues_year, livemode, status)
         ) $charset_collate;";
 
         dbDelta( $sql );
@@ -117,6 +186,19 @@ class MyNJILGA_Dues_Invoice_Table {
         // 1.0.0 rows: the firm invoice was billed to the Owner.
         if ( $fromVersion !== '' && version_compare( $fromVersion, '1.1.0', '<' ) ) {
             $wpdb->query( "UPDATE $table SET bill_to_contact_id = fluentcrm_owner_contact_id WHERE bill_to_contact_id = 0" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        }
+
+        // 1.2.0 backfill: every pre-migration row was created in what
+        // amounts to a single "live" world, so make that explicit rather
+        // than relying only on the column default. And only a row that
+        // actually got a real order created under FluentCart is a legacy
+        // fluentcart row — a draft/approved/excluded row that never had an
+        // order created keeps the new column's 'stripe' default, since if
+        // it's ever actually created going forward it goes through the new
+        // Stripe gateway.
+        if ( $fromVersion !== '' && version_compare( $fromVersion, '1.2.0', '<' ) ) {
+            $wpdb->query( "UPDATE $table SET livemode = 1" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            $wpdb->query( "UPDATE $table SET gateway = 'fluentcart' WHERE gateway_invoice_id IS NOT NULL AND gateway_invoice_id != ''" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         }
     }
 
@@ -133,7 +215,9 @@ class MyNJILGA_Dues_Invoice_Table {
     public static function get_by_order_id( int $orderId ) {
         global $wpdb;
         $table = self::table_name();
-        return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE fluentcart_order_id = %d", $orderId ) ); // phpcs:ignore
+        // %s (not %d): gateway_invoice_id is VARCHAR since 1.2.0 — an int
+        // still stringifies fine against it.
+        return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE gateway_invoice_id = %s", $orderId ) ); // phpcs:ignore
     }
 
     /**
@@ -374,15 +458,18 @@ class MyNJILGA_Dues_Invoice_Table {
         $wpdb->update(
             self::table_name(),
             [
-                'fluentcart_customer_id' => $customerId,
-                'fluentcart_order_id'    => $orderId,
-                'fluentcart_order_uuid'  => $orderUuid,
+                'gateway_customer_id'    => $customerId,
+                'gateway_invoice_id'     => $orderId,
+                'gateway_invoice_number' => $orderUuid,
                 'status'                 => self::STATUS_CREATED,
                 'last_error'             => null,
                 'queued_at'              => null,
             ],
             [ 'id' => $id ],
-            [ '%d', '%d', '%s', '%s', '%s', '%s' ],
+            // '%s' for all three: now VARCHAR columns, even though the
+            // values passed in are still typed int/string per this
+            // method's (unchanged, for now) signature.
+            [ '%s', '%s', '%s', '%s', '%s', '%s' ],
             [ '%d' ]
         );
     }

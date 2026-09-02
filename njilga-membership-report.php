@@ -59,6 +59,9 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-connection.php
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-pricing-engine.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-snapshot.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-invoice-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-payments-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-events-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-customer-map.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/interface-invoice-gateway.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-fluentcart-invoice-gateway.php';
@@ -91,8 +94,14 @@ add_filter( 'submenu_file', [ 'MyNJILGA_Admin_Menu', 'highlight_submenu' ] );
 // activation, never on an auto-update of an already-active plugin.
 register_activation_hook( __FILE__, [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
 register_activation_hook( __FILE__, [ 'MyNJILGA_Applications_Table', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Dues_Payments_Table', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Stripe_Events_Table', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Stripe_Customer_Map', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Applications_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Dues_Payments_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Stripe_Events_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Stripe_Customer_Map', 'maybe_upgrade' ] );
 
 // Background invoice creation (Action Scheduler chunks) — the hook must be
 // registered on every request so the scheduler's worker can find it.
