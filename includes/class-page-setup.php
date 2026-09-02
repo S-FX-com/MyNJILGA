@@ -42,7 +42,9 @@ class MyNJILGA_Page_Setup {
         }
 
         self::render_stripe_reconciliation_section();
+        self::render_stripe_events();
         self::render_stripe_needs_attention();
+        self::render_stripe_orphans();
 
         self::render_shortcodes();
 
@@ -244,8 +246,14 @@ class MyNJILGA_Page_Setup {
      * Stripe migration phase 4 (reconciler) — connection health for the
      * active mode, plus a collapsed diagnostic log of recent Stripe API
      * requests. What the reconciler and the Invoicing page's "Sync with
-     * Stripe" button rely on being healthy; the invoices that couldn't be
-     * resolved automatically are their own section (render_stripe_needs_attention()).
+     * Stripe" button rely on being healthy; what Stripe has sent back the
+     * other way is the next section (render_stripe_events()), and the
+     * invoices that couldn't be resolved automatically the one after that
+     * (render_stripe_needs_attention()).
+     *
+     * Two lists, both amber: health() is the hard one — anything in it
+     * also blocks invoice creation through the gateway's
+     * readiness_errors() — and health_warnings() the soft one.
      */
     private static function render_stripe_reconciliation_section(): void {
         MyNJILGA_Admin_UI::section(
@@ -253,13 +261,21 @@ class MyNJILGA_Page_Setup {
             'Connection health for the active Stripe mode, and a diagnostic log of recent Stripe API activity.'
         );
 
-        $healthErrors = MyNJILGA_Stripe_Connection::health();
-        if ( empty( $healthErrors ) ) {
+        $healthErrors   = MyNJILGA_Stripe_Connection::health();
+        $healthWarnings = MyNJILGA_Stripe_Connection::health_warnings();
+
+        if ( empty( $healthErrors ) && empty( $healthWarnings ) ) {
             MyNJILGA_Admin_UI::callout( 'Stripe connection is healthy.', 'success' );
-        } else {
-            foreach ( $healthErrors as $err ) {
-                MyNJILGA_Admin_UI::callout( esc_html( $err ), 'warning' );
-            }
+        }
+        foreach ( $healthErrors as $err ) {
+            MyNJILGA_Admin_UI::callout( esc_html( $err ), 'warning' );
+        }
+        // The soft findings — a webhook endpoint that has gone quiet, ACH
+        // not enabled on the account. Amber like the errors above (both
+        // want a human), but unlike health() these never block invoice
+        // creation, and each one says so in its own text.
+        foreach ( $healthWarnings as $warning ) {
+            MyNJILGA_Admin_UI::callout( esc_html( $warning ), 'warning' );
         }
 
         self::render_stripe_request_log();
@@ -291,6 +307,210 @@ class MyNJILGA_Page_Setup {
         }
 
         echo '</tbody></table></div></div></details>';
+    }
+
+    /**
+     * The njilga_stripe_events audit trail (spec §5.4) — what Stripe has
+     * actually told this site, readable without leaving WordPress. The
+     * request log above is the outbound half (calls we made); this is the
+     * inbound half (events Stripe delivered), so it is a plain visible
+     * table rather than a collapsed diagnostic: it is the section staff
+     * come here to read.
+     *
+     * Scoped to the active mode, like every other Stripe read surface in
+     * this plugin, and capped rather than paginated — the table only ever
+     * holds the last PRUNE_AFTER_DAYS days anyway.
+     */
+    private static function render_stripe_events(): void {
+        $livemode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+        $events   = MyNJILGA_Stripe_Events_Table::recent( MyNJILGA_Stripe_Events_Table::RECENT_LIMIT, $livemode );
+
+        MyNJILGA_Admin_UI::section(
+            'Stripe webhook events',
+            sprintf(
+                'Every webhook event Stripe has delivered to this site in the active mode, newest first — what arrived, whether it was processed, and which invoice it resolved to. Showing the most recent %d; rows older than %d days are pruned by the daily reconcile job.',
+                MyNJILGA_Stripe_Events_Table::RECENT_LIMIT,
+                MyNJILGA_Stripe_Events_Table::PRUNE_AFTER_DAYS
+            )
+        );
+
+        if ( empty( $events ) ) {
+            self::render_stripe_events_empty();
+            return;
+        }
+
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table njilga-table-compact"><thead><tr>
+                <th>Received</th><th>Event</th><th>Outcome</th><th>Invoice</th><th>Message</th>
+              </tr></thead><tbody>';
+
+        foreach ( $events as $event ) {
+            $message = (string) ( $event->message ?? '' );
+            printf(
+                '<tr><td class="njilga-nowrap">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                esc_html( (string) $event->received_at ),
+                sprintf(
+                    '<code>%s</code><span class="njilga-subline">%s</span>',
+                    esc_html( (string) $event->type ),
+                    esc_html( (string) $event->event_id )
+                ),
+                self::stripe_event_outcome( $event ),
+                self::stripe_event_invoice( $event ),
+                $message !== '' ? esc_html( $message ) : MyNJILGA_Admin_UI::blank()
+            );
+        }
+
+        echo '</tbody></table></div></div>';
+    }
+
+    private static function render_stripe_events_empty(): void {
+        echo '<div class="njilga-card njilga-empty">';
+        echo '<div class="njilga-empty-icon">' . MyNJILGA_Admin_UI::icon( 'inbox' ) . '</div>';
+        echo '<h2 class="njilga-empty-title">No webhook events yet</h2>';
+        printf(
+            '<p class="njilga-empty-text">Stripe has not delivered a webhook event to this site in the active mode. They start arriving as soon as an invoice is finalized, sent or paid &mdash; if that has already happened, check the endpoint on the <a href="%s">Payments settings</a> tab and under Developers &rarr; Webhooks in the Stripe Dashboard.</p>',
+            esc_url( add_query_arg( 'tab', 'payments', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) )
+        );
+        echo '</div>';
+    }
+
+    /**
+     * What happened to one event: `received` means the row was accepted
+     * but processing hasn't finished (the async Action Scheduler job
+     * hasn't run yet, or died mid-flight) — `processed`, `ignored` and
+     * `failed` are the outcomes MyNJILGA_Stripe_Webhook writes once it
+     * has, with the time it finished underneath.
+     *
+     * @param object $event One njilga_stripe_events row.
+     */
+    private static function stripe_event_outcome( $event ): string {
+        $status   = (string) $event->status;
+        $variants = [
+            MyNJILGA_Stripe_Events_Table::STATUS_PROCESSED => 'success',
+            MyNJILGA_Stripe_Events_Table::STATUS_RECEIVED  => 'info',
+            MyNJILGA_Stripe_Events_Table::STATUS_IGNORED   => 'muted',
+            MyNJILGA_Stripe_Events_Table::STATUS_FAILED    => 'destructive',
+        ];
+
+        $out         = MyNJILGA_Admin_UI::pill( ucfirst( $status ), $variants[ $status ] ?? 'muted' );
+        $processedAt = (string) ( $event->processed_at ?? '' );
+        if ( $processedAt !== '' ) {
+            $out .= sprintf( '<span class="njilga-subline">%s</span>', esc_html( $processedAt ) );
+        }
+        return $out;
+    }
+
+    /**
+     * The invoice row an event resolved to, if any. njilga_stripe_events
+     * stores only the row id, so each one is looked up in the invoice
+     * table — memoized, because several events routinely name the same
+     * invoice and the list is capped at RECENT_LIMIT rows either way.
+     * An event that resolved to nothing (an unhandled type, a Stripe
+     * object belonging to no invoice of ours, a row since pruned) falls
+     * back to the raw Stripe object id, which staff can still paste
+     * straight into the Stripe Dashboard.
+     *
+     * @param object $event One njilga_stripe_events row.
+     */
+    private static function stripe_event_invoice( $event ): string {
+        static $rows = [];
+
+        $rowId = (int) ( $event->invoice_row_id ?? 0 );
+        if ( $rowId > 0 ) {
+            if ( ! array_key_exists( $rowId, $rows ) ) {
+                $rows[ $rowId ] = MyNJILGA_Dues_Invoice_Table::get( $rowId );
+            }
+            if ( $rows[ $rowId ] ) {
+                return sprintf(
+                    '<strong>%s</strong><span class="njilga-subline">Dues year %d</span>',
+                    esc_html( MyNJILGA_Dues_Snapshot::company_name( $rows[ $rowId ] ) ),
+                    (int) $rows[ $rowId ]->dues_year
+                );
+            }
+        }
+
+        $objectId = (string) ( $event->object_id ?? '' );
+        return $objectId !== '' ? sprintf( '<code>%s</code>', esc_html( $objectId ) ) : MyNJILGA_Admin_UI::blank();
+    }
+
+    /**
+     * The other direction of the same drift check: invoices that exist in
+     * STRIPE with no row here at all, found by
+     * MyNJILGA_Stripe_Reconciler::scan_for_orphans() (the daily job, and
+     * the Invoicing page's full "Sync with Stripe"). Needs attention above
+     * can only ever list rows we have; these have none, which is why they
+     * get their own section and their own storage.
+     *
+     * This is the dangerous direction: a firm can pay one of these and
+     * nothing here would ever notice.
+     */
+    private static function render_stripe_orphans(): void {
+        $report = MyNJILGA_Stripe_Reconciler::orphan_report();
+        $years  = $report['years'];
+
+        MyNJILGA_Admin_UI::section(
+            'In Stripe, not here',
+            'Invoices Stripe holds for this plugin in the active mode with no matching record on this site — usually an invoice created at Stripe whose local write then failed, or one made by hand in the Stripe Dashboard. Checked by the daily reconcile job and by "Sync with Stripe" on the Invoicing page.'
+        );
+
+        if ( $report['checked_at'] === '' ) {
+            MyNJILGA_Admin_UI::callout( 'Not checked yet — run "Sync with Stripe" on the Invoicing page, or wait for the daily reconcile job.', 'info' );
+            return;
+        }
+
+        if ( empty( $years ) ) {
+            MyNJILGA_Admin_UI::callout(
+                sprintf( 'Every invoice Stripe holds for this plugin has a record here. Last checked %s.', esc_html( $report['checked_at'] ) ),
+                'success'
+            );
+            return;
+        }
+
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
+                <th class="njilga-col-num">Dues year</th><th>Invoice</th><th>Customer</th><th>Status</th><th class="njilga-col-num">Total</th><th class="njilga-col-num">Paid</th><th></th>
+              </tr></thead><tbody>';
+
+        ksort( $years );
+        foreach ( $years as $year => $orphans ) {
+            foreach ( $orphans as $o ) {
+                $number = (string) ( $o['number'] ?? '' );
+                $link   = (string) ( $o['hosted_url'] ?? '' );
+                printf(
+                    '<tr><td class="njilga-col-num">%d</td><td>%s<span class="njilga-subline">%s</span></td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td><td class="njilga-col-num">%s</td><td>%s</td></tr>',
+                    (int) $year,
+                    esc_html( $number !== '' ? $number : '—' ),
+                    esc_html( (string) ( $o['id'] ?? '' ) ),
+                    esc_html( (string) ( $o['customer'] ?? '' ) ?: '—' ),
+                    MyNJILGA_Admin_UI::pill( ucfirst( (string) ( $o['status'] ?? '' ) ), ( (string) ( $o['status'] ?? '' ) === 'paid' ) ? 'destructive' : 'warning' ),
+                    esc_html( MyNJILGA_Invoicing::money( (int) ( $o['total_cents'] ?? 0 ) ) ),
+                    esc_html( MyNJILGA_Invoicing::money( (int) ( $o['paid_cents'] ?? 0 ) ) ),
+                    $link !== '' ? sprintf( '<a href="%s" target="_blank" rel="noopener">Open in Stripe</a>', esc_url( $link ) ) : MyNJILGA_Admin_UI::blank()
+                );
+            }
+        }
+        echo '</tbody></table></div></div>';
+
+        // A PAID orphan is the worst case in this table: money collected
+        // that no membership was ever granted for, so it is called out
+        // rather than left for someone to spot in the Status column.
+        $paid = 0;
+        foreach ( $years as $orphans ) {
+            foreach ( $orphans as $o ) {
+                if ( (string) ( $o['status'] ?? '' ) === 'paid' ) {
+                    $paid++;
+                }
+            }
+        }
+        if ( $paid > 0 ) {
+            MyNJILGA_Admin_UI::callout(
+                sprintf(
+                    '<strong>%d of these %s already been paid.</strong> Money was collected for %s this site has no record of, so no dues tags or roles were granted for it. Reconcile by hand before the year closes.',
+                    $paid,
+                    $paid === 1 ? 'has' : 'have',
+                    $paid === 1 ? 'an invoice' : 'invoices'
+                ),
+                'error'
+            );
+        }
     }
 
     /**

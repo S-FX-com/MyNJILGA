@@ -63,6 +63,11 @@ class MyNJILGA_Stripe_Connection {
 
     const HEALTH_TRANSIENT_PREFIX = 'njilga_stripe_health_';
 
+    // The spec's soft "at least one relevant event received in the last
+    // 90 days" window, used by health_warnings(). Plain int for the same
+    // reason as HEALTH_CACHE_TTL_SECONDS above.
+    const EVENT_SILENCE_DAYS = 90;
+
     /** @var array<string,mixed>|null */
     private static $cache = null;
 
@@ -568,13 +573,103 @@ class MyNJILGA_Stripe_Connection {
             return [ 'The webhook endpoint on file is not enabled in Stripe — check Developers → Webhooks in the Stripe Dashboard.' ];
         }
 
-        // TODO(phase: schema + reconciler): once the njilga_stripe_events
-        // table exists (built later in this migration), add a soft check
-        // here — "at least one relevant webhook event received in the
-        // last 90 days" — as its own warning-level entry. Do not query
-        // that table yet; it doesn't exist in this phase.
+        // The spec's "at least one relevant event received in the last 90
+        // days" check is NOT in this list — it lives in
+        // health_warnings(), together with the ACH-availability check.
+        // Everything returned from here travels on through
+        // MyNJILGA_Stripe_Invoice_Gateway::readiness_errors() and BLOCKS
+        // invoice creation (MyNJILGA_Invoice_Creator, MyNJILGA_Page_Invoicing),
+        // which is exactly wrong for a soft warning: a quiet webhook or an
+        // account without ACH must never stop staff invoicing.
 
         return [];
+    }
+
+    /**
+     * SOFT, advisory findings for the given (or active) mode — same shape
+     * as health() (a plain list of strings) and rendered the same way by
+     * the Setup page, but deliberately kept OUT of health() because
+     * nothing here is a reason to stop creating invoices. Empty array
+     * means "nothing worth mentioning".
+     *
+     * Both checks are one-way: each warns only on a positive finding and
+     * stays silent on anything it cannot establish — a connection with no
+     * events yet because it was made this morning, an API call that failed
+     * or wasn't permitted — so a healthy-but-unknowable connection never
+     * raises a false alarm.
+     *
+     * @return array<int,string>
+     */
+    public static function health_warnings( ?string $mode = null ): array {
+        $mode = self::normalize_mode( $mode );
+
+        // Nothing advisory to add about a connection health() already has
+        // something louder to say about.
+        if ( ! self::is_connected( $mode ) ) {
+            return [];
+        }
+        $secretKey = self::decrypted_secret_key( $mode );
+        if ( $secretKey === null || $secretKey === '' ) {
+            return [];
+        }
+
+        $warnings = [];
+
+        $silence = self::event_silence_warning( $mode );
+        if ( $silence !== '' ) {
+            $warnings[] = $silence;
+        }
+
+        if ( self::cached_ach_check( $mode, $secretKey )['state'] === 'off' ) {
+            $warnings[] = 'ACH Direct Debit is switched off in this account\'s Stripe payment method settings, but every invoice this plugin creates asks for card AND ACH — so firms may only ever see the card option on the hosted invoice page. Check Settings → Payment methods in the Stripe Dashboard. Invoices can still be created.';
+        }
+
+        return $warnings;
+    }
+
+    /**
+     * The "has Stripe gone quiet?" half of health_warnings(): warn when
+     * nothing has landed in njilga_stripe_events for this mode in the last
+     * EVENT_SILENCE_DAYS days. '' = nothing to say.
+     *
+     * A mode with no events at all is the normal state of a connection
+     * made five minutes ago, so that case warns only once the CONNECTION
+     * itself is older than the window — and a mode whose connected_at was
+     * never recorded proves nothing either way, so it stays silent rather
+     * than guess.
+     *
+     * The cutoff is built exactly the way
+     * MyNJILGA_Stripe_Events_Table::prune_older_than() builds its own —
+     * strtotime() over current_time( 'timestamp' ) — so it lines up with
+     * how received_at (and connected_at) were written in the first place.
+     */
+    private static function event_silence_warning( string $mode ): string {
+        $cutoff = strtotime( '-' . self::EVENT_SILENCE_DAYS . ' days', current_time( 'timestamp' ) );
+        $lastAt = MyNJILGA_Stripe_Events_Table::last_received_at( $mode === self::MODE_LIVE );
+
+        if ( $lastAt === null ) {
+            $connectedAt = (string) self::get()[ $mode ]['connected_at'];
+            $connectedTs = ( $connectedAt !== '' ) ? strtotime( $connectedAt ) : false;
+            if ( $connectedTs === false || $connectedTs >= $cutoff ) {
+                return '';
+            }
+            return sprintf(
+                'No Stripe webhook event has ever been received in %s mode, and this key has been connected since %s. Payments may not be updating automatically — check the endpoint under Developers → Webhooks in the Stripe Dashboard. Invoices can still be created.',
+                $mode,
+                $connectedAt
+            );
+        }
+
+        $lastTs = strtotime( $lastAt );
+        if ( $lastTs === false || $lastTs >= $cutoff ) {
+            return '';
+        }
+
+        return sprintf(
+            'No Stripe webhook event has arrived in the last %d days — the most recent was %s. Payments may not be updating automatically — check the endpoint under Developers → Webhooks in the Stripe Dashboard. Invoices can still be created.',
+            self::EVENT_SILENCE_DAYS,
+            $lastAt
+        );
     }
 
     /**
@@ -598,5 +693,82 @@ class MyNJILGA_Stripe_Connection {
         ];
         set_transient( $transientKey, $result, self::HEALTH_CACHE_TTL_SECONDS );
         return $result;
+    }
+
+    /**
+     * GET /v1/payment_method_configurations — is `us_bank_account` (ACH)
+     * actually available on this account? MyNJILGA_Stripe_Invoice_Gateway
+     * asks Stripe for card AND us_bank_account on every invoice it
+     * creates, so an account without ACH quietly serves a card-only
+     * hosted invoice page with nothing said anywhere.
+     *
+     * Cached the same way cached_account_check() caches its own probe —
+     * one transient per mode under HEALTH_TRANSIENT_PREFIX, same
+     * HEALTH_CACHE_TTL_SECONDS, failures cached too — so
+     * health_warnings() stays as cheap to call on every page render as
+     * health() is. The 'ach_' segment only keeps the two keys apart;
+     * there is deliberately no second caching mechanism here.
+     *
+     * @return array{state:string,error:string} state: 'on' | 'off' | 'unknown'
+     */
+    private static function cached_ach_check( string $mode, string $secretKey ): array {
+        $transientKey = self::HEALTH_TRANSIENT_PREFIX . 'ach_' . $mode;
+        $cached       = get_transient( $transientKey );
+        if ( is_array( $cached ) && isset( $cached['state'] ) ) {
+            return $cached;
+        }
+
+        $resp   = ( new MyNJILGA_Stripe_Client( $secretKey ) )->request( 'GET', '/payment_method_configurations' );
+        $result = [
+            // A call that failed says NOTHING about whether ACH is on —
+            // a restricted key without read access to this resource, a
+            // network blip and a genuinely ACH-less account must not look
+            // alike. 'unknown' never warns.
+            'state' => $resp['ok'] ? self::ach_state_from_body( (array) $resp['body'] ) : 'unknown',
+            'error' => $resp['ok'] ? '' : (string) $resp['error'],
+        ];
+        set_transient( $transientKey, $result, self::HEALTH_CACHE_TTL_SECONDS );
+        return $result;
+    }
+
+    /**
+     * Reads 'on' / 'off' / 'unknown' out of a
+     * /v1/payment_method_configurations response. Each configuration
+     * carries one entry per payment method — `available` (can this
+     * account offer it at all) plus `display_preference.value` (is it
+     * switched on) — and an account may have several configurations, so
+     * ACH being live in ANY of them is enough for the invoices this
+     * plugin creates.
+     *
+     * Everything unrecognizable is 'unknown', never 'off': an account
+     * with no configurations at all falls back to Stripe's own defaults
+     * (nothing to read here), and a payload that doesn't mention
+     * us_bank_account is API drift rather than evidence ACH is missing.
+     *
+     * @param array<string,mixed> $body
+     */
+    private static function ach_state_from_body( array $body ): string {
+        $configs = ( isset( $body['data'] ) && is_array( $body['data'] ) ) ? $body['data'] : [];
+        if ( empty( $configs ) ) {
+            return 'unknown';
+        }
+
+        $sawKey = false;
+        foreach ( $configs as $config ) {
+            if ( ! is_array( $config ) || ! isset( $config['us_bank_account'] ) || ! is_array( $config['us_bank_account'] ) ) {
+                continue;
+            }
+            $sawKey     = true;
+            $entry      = $config['us_bank_account'];
+            $switchedOn = ( (string) ( $entry['display_preference']['value'] ?? '' ) === 'on' );
+            // `available` is absent on some payload shapes; treat only an
+            // explicit false as "the account can't offer this".
+            $available  = ! array_key_exists( 'available', $entry ) || ! empty( $entry['available'] );
+            if ( $switchedOn && $available ) {
+                return 'on';
+            }
+        }
+
+        return $sawKey ? 'off' : 'unknown';
     }
 }

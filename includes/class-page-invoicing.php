@@ -1164,6 +1164,14 @@ class MyNJILGA_Page_Invoicing {
         foreach ( $gateway->readiness_errors() as $err ) {
             printf( '<div class="njilga-callout njilga-callout-warning"><p><strong>%s isn\'t ready to create invoices:</strong> %s</p></div>', esc_html( $gateway->name() ), esc_html( $err ) );
         }
+        // Soft findings (a webhook gone quiet, ACH switched off at
+        // Stripe) don't block anything, but this is the page where
+        // invoices get made — the ACH one in particular is about what a
+        // firm will see on the invoice about to be sent, so it belongs
+        // here and not only on Setup.
+        foreach ( MyNJILGA_Stripe_Connection::health_warnings() as $warning ) {
+            printf( '<div class="njilga-callout njilga-callout-info"><p>%s</p></div>', esc_html( $warning ) );
+        }
     }
 
     private static function render_notice(): void {
