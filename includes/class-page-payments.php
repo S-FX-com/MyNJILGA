@@ -787,6 +787,7 @@ class MyNJILGA_Page_Payments {
         }
 
         echo '</tbody></table></div></div>';
+        echo '<div class="njilga-noresults" id="njilga-pay-firm-noresults" hidden>No firms match your filters.</div>';
         echo '<p class="njilga-help">Each year chip: green = fully paid, amber = partially paid, red = unpaid and still active, grey = written off (voided/uncollectible/downgraded) with nothing ever collected.</p>';
     }
 
@@ -837,6 +838,7 @@ class MyNJILGA_Page_Payments {
         }
 
         echo '</tbody></table></div></div>';
+        echo '<div class="njilga-noresults" id="njilga-pay-member-noresults" hidden>No members match your filters.</div>';
     }
 
     // -------------------------------------------------------------------------
@@ -858,6 +860,7 @@ class MyNJILGA_Page_Payments {
                 continue;
             }
             $any = true;
+            echo '<div class="njilga-aging-bucket" data-bucket-section="' . esc_attr( $key ) . '">';
             MyNJILGA_Admin_UI::section(
                 $bucket['label'],
                 sprintf( 'Subtotal %s across %d invoice%s', MyNJILGA_Invoicing::money( (int) $bucket['subtotalCents'] ), count( $bucket['lines'] ), count( $bucket['lines'] ) === 1 ? '' : 's' ),
@@ -870,15 +873,20 @@ class MyNJILGA_Page_Payments {
                 self::render_aging_row( $l );
             }
             echo '</tbody></table></div></div>';
+            echo '</div>';
         }
 
         if ( ! $any ) {
-            echo '<div class="njilga-card njilga-empty"><p class="njilga-empty-text">Nothing outstanding right now.</p></div>';
+            echo '<div class="njilga-card njilga-empty">';
+            echo '<div class="njilga-empty-icon">' . self::icon( 'check-circle' ) . '</div>';
+            echo '<h2 class="njilga-empty-title">Nothing outstanding</h2>';
+            echo '<p class="njilga-empty-text">Every invoice in this mode is settled — nothing owed, nothing overdue.</p>';
+            echo '</div>';
             return;
         }
 
         printf(
-            '<div class="njilga-banner"><span class="njilga-banner-title">Grand Total Outstanding</span><span class="njilga-banner-total">%s</span></div>',
+            '<div class="njilga-banner"><span class="njilga-banner-title">Grand Total Outstanding</span><span class="njilga-banner-total" id="njilga-pay-aging-grandtotal">%s</span></div>',
             esc_html( MyNJILGA_Invoicing::money( (int) $aging['grandTotalCents'] ) )
         );
     }
@@ -892,12 +900,13 @@ class MyNJILGA_Page_Payments {
         $invoiceNo   = $l['invoiceNo'] !== '' ? $l['invoiceNo'] : ( $l['invoiceId'] !== '' ? '…' . substr( $l['invoiceId'], -8 ) : '—' );
 
         printf(
-            '<tr class="njilga-row" data-firm="%s" data-year="%d" data-status="%s" data-method="%s" data-overdue="%s">',
+            '<tr class="njilga-row" data-firm="%s" data-year="%d" data-status="%s" data-method="%s" data-overdue="%s" data-due-cents="%d">',
             esc_attr( strtolower( $l['firm'] ) ),
             $l['year'],
             esc_attr( $l['status'] ),
             esc_attr( $l['method'] ),
-            ( $l['ageBucket'] !== '' && $l['ageBucket'] !== 'notyet' ) ? '1' : '0'
+            ( $l['ageBucket'] !== '' && $l['ageBucket'] !== 'notyet' ) ? '1' : '0',
+            $l['due']
         );
         printf( '<td class="njilga-firmcell"><span class="njilga-firmname">%s</span></td>', esc_html( $l['firm'] ) );
         printf( '<td>%s</td>', esc_html( $invoiceNo ) );
@@ -1061,8 +1070,30 @@ class MyNJILGA_Page_Payments {
     return true;
   }
 
+  // ---- tab state (stat cards need to know which view is on screen — see below) ----
+  function activeTab(){
+    var t=root.querySelector('.njilga-tabs .njilga-tab.active');
+    return t?t.dataset.tab:'invoice';
+  }
+
   // ---- stat cards ----
+  // By-invoice/Aging are one row per invoice, so the stat cards can use
+  // the full filter predicate. By-firm/By-member are roster views scoped
+  // to just Year + search (see the filter-scope note above applyFirm/
+  // applyMember) — when one of those tabs is on screen the cards must
+  // agree with what the visible table is actually narrowed to, not
+  // silently apply Status/Method/paid-date/Overdue-only filters that
+  // view doesn't honor.
   var invRows=Array.prototype.slice.call(document.querySelectorAll('#njilga-pay-inv-table tbody tr.njilga-row'));
+  function statRowOk(r){
+    var tab=activeTab();
+    if(tab==='firm'||tab==='member'){
+      if(state.years.size && !state.years.has(r.dataset.year)) return false;
+      if(state.q && r.dataset.firm!==undefined && r.dataset.firm.indexOf(state.q)===-1) return false;
+      return true;
+    }
+    return commonOk(r)&&dateOk(r);
+  }
   function recomputeStats(){
     var wrap=document.getElementById('njilga-pay-stats');
     if(!wrap) return;
@@ -1070,7 +1101,7 @@ class MyNJILGA_Page_Payments {
     if(!vals.length) return;
     var outstanding=0,collected=0,inflight=0,pastdue=0,writtenoff=0;
     invRows.forEach(function(r){
-      if(!commonOk(r)||!dateOk(r)) return;
+      if(!statRowOk(r)) return;
       var due=parseInt(r.dataset.dueCents||'0',10);
       var paid=parseInt(r.dataset.paidCents||'0',10);
       var status=r.dataset.status;
@@ -1156,15 +1187,39 @@ class MyNJILGA_Page_Payments {
   });
 
   // ---- Aging: filter rows within each bucket, no repagination ----
-  var agingRows=Array.prototype.slice.call(document.querySelectorAll('[data-panel="aging"] tr.njilga-row'));
+  // Each bucket's heading count/subtotal and the grand-total banner are
+  // server-rendered from the UNFILTERED set — recompute them from
+  // whatever's actually still visible, and drop a bucket entirely once
+  // nothing in it survives the filter.
+  var agingBuckets=Array.prototype.slice.call(document.querySelectorAll('[data-panel="aging"] [data-bucket-section]'));
+  var agingGrandTotalEl=document.getElementById('njilga-pay-aging-grandtotal');
   function applyAging(){
-    agingRows.forEach(function(r){ r.hidden=!commonOk(r); });
+    var grand=0;
+    agingBuckets.forEach(function(section){
+      var rows=Array.prototype.slice.call(section.querySelectorAll('tr.njilga-row'));
+      var visible=0,subtotal=0;
+      rows.forEach(function(r){
+        var show=commonOk(r);
+        r.hidden=!show;
+        if(show){ visible++; subtotal+=parseInt(r.dataset.dueCents||'0',10); }
+      });
+      grand+=subtotal;
+      section.hidden=(visible===0);
+      var countEl=section.querySelector('.njilga-section-count');
+      if(countEl) countEl.textContent=visible;
+      var descEl=section.querySelector('.njilga-section-desc');
+      if(descEl) descEl.textContent='Subtotal '+money(subtotal)+' across '+visible+' invoice'+(visible===1?'':'s');
+    });
+    if(agingGrandTotalEl) agingGrandTotalEl.textContent=money(grand);
   }
 
   // ---- By-firm / By-member: year-chip + firm/member search only ----
   var firmRows=Array.prototype.slice.call(document.querySelectorAll('#njilga-pay-firm-table tbody tr.njilga-row'));
   var memberRows=Array.prototype.slice.call(document.querySelectorAll('#njilga-pay-member-table tbody tr.njilga-row'));
-  function applyChipRows(rows,matchExtra){
+  var firmNoResultsEl=document.getElementById('njilga-pay-firm-noresults');
+  var memberNoResultsEl=document.getElementById('njilga-pay-member-noresults');
+  function applyChipRows(rows,matchExtra,noResultsEl){
+    var visible=0;
     rows.forEach(function(r){
       var firmOk = !state.q || r.dataset.firm.indexOf(state.q)>-1 || (matchExtra && matchExtra(r));
       var chips=r.querySelectorAll('.njilga-chip-year');
@@ -1174,11 +1229,14 @@ class MyNJILGA_Page_Payments {
         c.hidden=!show;
         if(show) anyVisible=true;
       });
-      r.hidden = !(firmOk && anyVisible);
+      var show=(firmOk && anyVisible);
+      r.hidden = !show;
+      if(show) visible++;
     });
+    if(noResultsEl) noResultsEl.hidden=(visible!==0);
   }
-  function applyFirm(){ applyChipRows(firmRows,null); }
-  function applyMember(){ applyChipRows(memberRows,function(r){ return r.dataset.member && r.dataset.member.indexOf(state.q)>-1; }); }
+  function applyFirm(){ applyChipRows(firmRows,null,firmNoResultsEl); }
+  function applyMember(){ applyChipRows(memberRows,function(r){ return r.dataset.member && r.dataset.member.indexOf(state.q)>-1; },memberNoResultsEl); }
 
   function applyAll(){
     readState();
@@ -1212,6 +1270,7 @@ class MyNJILGA_Page_Payments {
       root.querySelectorAll('.njilga-tabs .njilga-tab').forEach(function(t){ t.classList.remove('active'); });
       tab.classList.add('active');
       root.querySelectorAll('[data-panel]').forEach(function(p){ p.hidden=(p.dataset.panel!==tab.dataset.tab); });
+      recomputeStats();
     });
   });
 

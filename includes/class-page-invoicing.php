@@ -1032,6 +1032,13 @@ class MyNJILGA_Page_Invoicing {
             esc_html( MyNJILGA_Invoicing::money( $balance ) )
         );
 
+        if ( ! empty( $row->hosted_invoice_url ) ) {
+            MyNJILGA_Admin_UI::callout(
+                'Recording a partial payment here only updates this record — it does not reduce what Stripe\'s hosted invoice page still asks the firm for. If they might pay the rest online using the original link, let them know the remaining balance directly so they don\'t pay the full original amount again.',
+                'warning'
+            );
+        }
+
         echo '<div class="njilga-field"><label>Method</label><div class="njilga-radio-list">';
         foreach ( [ 'check' => 'Check', 'cash' => 'Cash', 'wire' => 'Wire', 'other' => 'Other' ] as $val => $label ) {
             printf(
