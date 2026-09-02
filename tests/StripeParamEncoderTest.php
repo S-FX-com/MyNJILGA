@@ -41,6 +41,30 @@ class StripeParamEncoderTest extends NJILGA_TestCase {
         );
     }
 
+    /**
+     * Three levels deep, through an array of objects — the actual shape
+     * of the gateway's add_lines payload, where every line carries its
+     * own metadata map (lines[n][metadata][k]). Nested keys stay bracketed
+     * and index order is preserved all the way down.
+     */
+    public function testThreeLevelNestingThroughArrayOfObjects(): void {
+        $params = [
+            'lines' => [
+                [ 'amount' => 12500, 'metadata' => [ 'njilga_contact_id' => 101, 'njilga_kind' => 'dues' ] ],
+                [ 'amount' => 20000, 'metadata' => [ 'njilga_contact_id' => 102, 'njilga_kind' => 'assessment' ] ],
+            ],
+        ];
+        $this->assertSame(
+            'lines%5B0%5D%5Bamount%5D=12500'
+            . '&lines%5B0%5D%5Bmetadata%5D%5Bnjilga_contact_id%5D=101'
+            . '&lines%5B0%5D%5Bmetadata%5D%5Bnjilga_kind%5D=dues'
+            . '&lines%5B1%5D%5Bamount%5D=20000'
+            . '&lines%5B1%5D%5Bmetadata%5D%5Bnjilga_contact_id%5D=102'
+            . '&lines%5B1%5D%5Bmetadata%5D%5Bnjilga_kind%5D=assessment',
+            MyNJILGA_Stripe_Client::encode_params( $params )
+        );
+    }
+
     public function testBooleansEncodeAsLiteralStrings(): void {
         $this->assertSame(
             'archived=true&active=false',

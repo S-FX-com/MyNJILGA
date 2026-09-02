@@ -384,24 +384,9 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
-     * Ids of rows that carry a last_error (creation/send failures), for
-     * the dashboard's "needs attention" list.
-     *
-     * @return array<int,object>
-     */
-    public static function get_with_errors( int $duesYear ): array {
-        global $wpdb;
-        $table = self::table_name();
-        return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT * FROM $table WHERE dues_year = %d AND last_error IS NOT NULL AND last_error <> '' ORDER BY id ASC",
-            $duesYear
-        ) );
-    }
-
-    /**
      * Every row, across every dues year, in the given mode, carrying a
      * last_error and not excluded — the Setup page's Stripe reconciliation
-     * "Needs attention" panel. Unlike get_with_errors(), not scoped to one
+     * "Needs attention" panel. Not scoped to one
      * dues year: a payment-event or reconciler flag belongs on that list
      * regardless of which year or stage the row is in.
      *

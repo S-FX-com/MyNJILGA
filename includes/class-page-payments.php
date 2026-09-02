@@ -25,6 +25,11 @@
  * three views from it, and are public so the CSV/XLS exporters
  * (MyNJILGA_Report_Csv/MyNJILGA_Report_Xls) can reuse exactly the same
  * data the on-screen tables show.
+ *
+ * The money arithmetic those views rest on — the five stat-card figures
+ * and the aging subtotals/counts — is NOT here: it lives in the pure
+ * MyNJILGA_Ledger_Totals, which takes the same line arrays and is unit
+ * tested without WordPress (tests/LedgerTotalsTest.php).
  */
 class MyNJILGA_Page_Payments {
 
@@ -48,29 +53,19 @@ class MyNJILGA_Page_Payments {
         MyNJILGA_Dues_Invoice_Table::STATUS_DOWNGRADED,
     ];
 
-    /** Statuses where the balance is settled one way or another — nothing left to collect, ever. */
-    const TERMINAL_STATUSES = [
-        MyNJILGA_Dues_Invoice_Table::STATUS_PAID,
-        MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED,
-        MyNJILGA_Dues_Invoice_Table::STATUS_UNCOLLECTIBLE,
-        MyNJILGA_Dues_Invoice_Table::STATUS_DOWNGRADED,
-    ];
-
-    /** Written off without ever collecting anything — distinct from a live, still-collectible balance. */
-    const WRITEOFF_STATUSES = [
-        MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED,
-        MyNJILGA_Dues_Invoice_Table::STATUS_UNCOLLECTIBLE,
-    ];
+    /**
+     * The status sets and bucket labels the ledger arithmetic turns on
+     * are defined WITH that arithmetic, in the pure MyNJILGA_Ledger_Totals
+     * (whose inlined literals a unit test pins back to
+     * MyNJILGA_Dues_Invoice_Table's STATUS_* values). Aliased here so this
+     * page — and anything reading them off it — still finds them under
+     * the old names, from one definition.
+     */
+    const TERMINAL_STATUSES   = MyNJILGA_Ledger_Totals::TERMINAL_STATUSES;
+    const WRITEOFF_STATUSES   = MyNJILGA_Ledger_Totals::WRITEOFF_STATUSES;
+    const AGING_BUCKET_LABELS = MyNJILGA_Ledger_Totals::AGING_BUCKET_LABELS;
 
     const METHODS = [ 'card', 'us_bank_account', 'check', 'cash', 'wire', 'other' ];
-
-    const AGING_BUCKET_LABELS = [
-        'notyet' => 'Not Yet Due',
-        '0-30'   => '0–30 Days',
-        '31-60'  => '31–60 Days',
-        '61-90'  => '61–90 Days',
-        '90+'    => '90+ Days',
-    ];
 
     /**
      * A member-year's most advanced touching invoice status wins (lowest
@@ -180,9 +175,9 @@ class MyNJILGA_Page_Payments {
      * intent ("every read in the Invoicing UI filters on the currently
      * active mode") applies here too — this page is an Invoicing UI read
      * surface just as much as the Invoicing page itself, even though it
-     * lives on a different admin page. MyNJILGA_Dues_Invoice_Table::
-     * get_by_year() has no livemode parameter, so the filter is applied
-     * here rather than widening that shared table class for one caller.
+     * lives on a different admin page. Scoped to the active Stripe mode
+     * in SQL — a test-mode row must never appear in a live ledger, and
+     * the money on this page is summed from exactly these rows.
      *
      * @return array<int,array<string,mixed>>
      */
@@ -191,10 +186,7 @@ class MyNJILGA_Page_Payments {
 
         $lines = [];
         foreach ( MyNJILGA_Dues_Invoice_Table::years() as $year ) {
-            foreach ( MyNJILGA_Dues_Invoice_Table::get_by_year( $year, self::RELEVANT_STATUSES ) as $row ) {
-                if ( (bool) $row->livemode !== $wantLive ) {
-                    continue;
-                }
+            foreach ( MyNJILGA_Dues_Invoice_Table::get_by_year( $year, self::RELEVANT_STATUSES, $wantLive ) as $row ) {
                 $lines[] = self::to_line( $row );
             }
         }
@@ -372,42 +364,22 @@ class MyNJILGA_Page_Payments {
     /**
      * Outstanding invoices (status NOT IN paid/voided/uncollectible/
      * downgraded) grouped into fixed age buckets by days since due_date.
+     * The arithmetic itself is MyNJILGA_Ledger_Totals'; this stays public
+     * because both exporters (MyNJILGA_Report_Csv/MyNJILGA_Report_Xls)
+     * reach the Aging view through it.
      *
      * @param array<int,array<string,mixed>> $lines
      * @return array{buckets:array<string,array{label:string,lines:array<int,array<string,mixed>>,subtotalCents:int}>,grandTotalCents:int}
      */
     public static function aging_buckets( array $lines ): array {
-        $buckets = [];
-        foreach ( self::AGING_BUCKET_LABELS as $key => $label ) {
-            $buckets[ $key ] = [ 'label' => $label, 'lines' => [], 'subtotalCents' => 0 ];
-        }
-
-        $grand = 0;
-        foreach ( $lines as $l ) {
-            if ( in_array( $l['status'], self::TERMINAL_STATUSES, true ) ) {
-                continue; // Settled one way or another — not an aging concern.
-            }
-            $bucket = $l['ageBucket'] !== '' ? $l['ageBucket'] : 'notyet'; // No due date on file — treat as not yet due rather than drop it.
-            if ( ! isset( $buckets[ $bucket ] ) ) {
-                $bucket = 'notyet';
-            }
-            $buckets[ $bucket ]['lines'][] = $l;
-            $buckets[ $bucket ]['subtotalCents'] += $l['due'];
-            $grand += $l['due'];
-        }
-
-        return [ 'buckets' => $buckets, 'grandTotalCents' => $grand ];
+        return MyNJILGA_Ledger_Totals::aging_buckets( $lines );
     }
 
     /**
      * @param array{buckets:array<string,array<string,mixed>>,grandTotalCents:int} $aging
      */
     private static function aging_outstanding_count( array $aging ): int {
-        $n = 0;
-        foreach ( $aging['buckets'] as $b ) {
-            $n += count( $b['lines'] );
-        }
-        return $n;
+        return MyNJILGA_Ledger_Totals::outstanding_count( $aging );
     }
 
     // -------------------------------------------------------------------------
@@ -419,50 +391,23 @@ class MyNJILGA_Page_Payments {
      * paint; scripts() recomputes these same five totals client-side —
      * from the identical predicate the By-invoice/Aging rows are shown
      * or hidden by — every time a toolbar filter changes, so the cards
-     * always describe exactly the row set currently on screen.
+     * always describe exactly the row set currently on screen. The
+     * arithmetic (including why "Written off" reads the still-outstanding
+     * balance rather than the invoice total) lives in the pure
+     * MyNJILGA_Ledger_Totals; this method only paints it.
      *
      * @param array<int,array<string,mixed>> $lines
      */
     private static function render_stat_cards( array $lines ): void {
-        $outstanding = 0;
-        $collected   = 0;
-        $inFlight    = 0;
-        $pastDue     = 0;
-        // "Written off" reads amount_due_cents (the balance that was
-        // STILL outstanding at the moment of voiding/uncollectible), not
-        // total_amount_cents — a firm that paid part of the invoice
-        // before it was written off already had that portion counted
-        // under Collected, and total_amount_cents would double-count it
-        // here. amount_due_cents is exactly the money actually lost.
-        $writtenOff = 0;
-
-        foreach ( $lines as $l ) {
-            if ( ! in_array( $l['status'], self::WRITEOFF_STATUSES, true ) ) {
-                $outstanding += $l['due'];
-            }
-            $collected += $l['paid'];
-            if ( $l['status'] === MyNJILGA_Dues_Invoice_Table::STATUS_PROCESSING ) {
-                $inFlight += $l['due'];
-            }
-            // ageBucket is only ever non-empty/non-'notyet' for a row
-            // that is BOTH past its due date AND not in TERMINAL_STATUSES
-            // (paid/voided/uncollectible/downgraded) — see to_line() —
-            // which is exactly the "past due" rule.
-            if ( $l['ageBucket'] !== '' && $l['ageBucket'] !== 'notyet' ) {
-                $pastDue += $l['due'];
-            }
-            if ( in_array( $l['status'], self::WRITEOFF_STATUSES, true ) ) {
-                $writtenOff += $l['due'];
-            }
-        }
+        $stats = MyNJILGA_Ledger_Totals::stats( $lines );
 
         echo '<div id="njilga-pay-stats">';
         MyNJILGA_Admin_UI::stat_cards( [
-            [ 'label' => 'Outstanding', 'value' => MyNJILGA_Invoicing::money( $outstanding ), 'variant' => $outstanding > 0 ? 'warning' : 'default', 'icon' => 'file' ],
-            [ 'label' => 'Collected',   'value' => MyNJILGA_Invoicing::money( $collected ),   'variant' => 'success', 'icon' => 'check-circle' ],
-            [ 'label' => 'In Flight',   'value' => MyNJILGA_Invoicing::money( $inFlight ),    'variant' => 'info',    'icon' => 'refresh' ],
-            [ 'label' => 'Past Due',    'value' => MyNJILGA_Invoicing::money( $pastDue ),     'variant' => 'destructive', 'icon' => 'alert' ],
-            [ 'label' => 'Written Off', 'value' => MyNJILGA_Invoicing::money( $writtenOff ),  'variant' => 'muted',   'icon' => 'inbox' ],
+            [ 'label' => 'Outstanding', 'value' => MyNJILGA_Invoicing::money( $stats['outstandingCents'] ), 'variant' => $stats['outstandingCents'] > 0 ? 'warning' : 'default', 'icon' => 'file' ],
+            [ 'label' => 'Collected',   'value' => MyNJILGA_Invoicing::money( $stats['collectedCents'] ),   'variant' => 'success', 'icon' => 'check-circle' ],
+            [ 'label' => 'In Flight',   'value' => MyNJILGA_Invoicing::money( $stats['inFlightCents'] ),    'variant' => 'info',    'icon' => 'refresh' ],
+            [ 'label' => 'Past Due',    'value' => MyNJILGA_Invoicing::money( $stats['pastDueCents'] ),     'variant' => 'destructive', 'icon' => 'alert' ],
+            [ 'label' => 'Written Off', 'value' => MyNJILGA_Invoicing::money( $stats['writtenOffCents'] ),  'variant' => 'muted',   'icon' => 'inbox' ],
         ] );
         echo '</div>';
     }
@@ -811,6 +756,10 @@ class MyNJILGA_Page_Payments {
      * @param array<int,array<string,mixed>> $members
      */
     private static function render_by_member( array $members ): void {
+        echo '<div class="njilga-actions">'
+            . MyNJILGA_Admin_UI::action_form( 'my_njilga_export_payments', 'Download CSV', [ 'view' => 'member' ], 'outline', 'download' )
+            . '</div>';
+
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap">';
         echo '<table class="njilga-table" id="njilga-pay-member-table"><thead><tr><th>Member</th><th>Firm</th><th>Dues Years</th></tr></thead><tbody>';
 
@@ -928,7 +877,11 @@ class MyNJILGA_Page_Payments {
         switch ( $status ) {
             case MyNJILGA_Dues_Invoice_Table::STATUS_CREATED:       return [ 'Invoice Created', 'info' ];
             case MyNJILGA_Dues_Invoice_Table::STATUS_SENT:          return [ 'Sent', 'info' ];
-            case MyNJILGA_Dues_Invoice_Table::STATUS_PROCESSING:    return [ 'Processing', 'info' ];
+            // Amber, and named for what it is: an ACH debit that has been
+            // submitted and settled nothing yet, which can take days. The
+            // submit date rides in the equivalent pill on the Invoicing
+            // page, where the "is this stuck?" question gets acted on.
+            case MyNJILGA_Dues_Invoice_Table::STATUS_PROCESSING:    return [ 'ACH Clearing', 'warning' ];
             case MyNJILGA_Dues_Invoice_Table::STATUS_PAID:          return [ 'Paid', 'success' ];
             case MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED:        return [ 'Voided', 'muted' ];
             case MyNJILGA_Dues_Invoice_Table::STATUS_UNCOLLECTIBLE: return [ 'Uncollectible', 'destructive' ];

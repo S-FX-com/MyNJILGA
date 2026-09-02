@@ -57,6 +57,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-settings.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-client.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-connection.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-pricing-engine.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-ledger-totals.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-snapshot.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-invoice-table.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-payments-table.php';
