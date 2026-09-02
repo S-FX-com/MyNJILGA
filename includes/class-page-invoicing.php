@@ -713,8 +713,14 @@ class MyNJILGA_Page_Invoicing {
             // webhook event, or the reconciler catching up to it) — not
             // yet settled, not an error either.
             case $T::STATUS_PROCESSING:
-                $val = $hasError ? [ (string) $row->last_error, false ] : [ 'Payment in progress (ACH)', true ];
-                return self::verdict( 'created', 'processing', [ 'Processing', 'info' ], $val, false );
+                // Amber, not blue, and it says what is actually happening:
+                // money has been submitted but nothing has settled, and an
+                // ACH debit can take days. The submit date is the thing
+                // staff want ("is this stuck?"), so it rides in the pill.
+                $submitted = substr( (string) ( $row->processing_at ?? '' ), 0, 10 );
+                $pillLabel = $submitted !== '' ? 'ACH clearing since ' . $submitted : 'ACH clearing';
+                $val       = $hasError ? [ (string) $row->last_error, false ] : [ 'Payment in progress (ACH)', true ];
+                return self::verdict( 'created', 'processing', [ $pillLabel, 'warning' ], $val, false );
 
             case $T::STATUS_PAID:
                 return self::verdict( 'created', 'paid', [ 'Paid', 'success' ], [ 'Complete', true ], false );
@@ -1229,7 +1235,15 @@ class MyNJILGA_Page_Invoicing {
             case 'downgraded':
                 return sprintf( 'Sweep complete: %d invoice%s across %d firm%s — %d member%s tagged unpaid, %d WordPress role%s removed, %d protected by a paid invoice.', $g( 'invoices' ), $g( 'invoices' ) === 1 ? '' : 's', $g( 'firms' ), $g( 'firms' ) === 1 ? '' : 's', $g( 'members' ), $g( 'members' ) === 1 ? '' : 's', $g( 'roles' ), $g( 'roles' ) === 1 ? '' : 's', $g( 'protected' ) );
             case 'synced':
-                return sprintf( 'Checked %d invoice%s — %d updated, %d needs attention.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'updated' ), $g( 'attention' ) );
+                $syncMsg = sprintf( 'Checked %d invoice%s — %d updated, %d needs attention.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'updated' ), $g( 'attention' ) );
+                if ( $g( 'orphans' ) > 0 ) {
+                    $syncMsg .= sprintf(
+                        ' Also found %d invoice%s in Stripe with no record here — see Setup → Stripe for the details.',
+                        $g( 'orphans' ),
+                        $g( 'orphans' ) === 1 ? '' : 's'
+                    );
+                }
+                return $syncMsg;
             case 'marked_paid':
                 $methodLabel = ucfirst( $gs( 'method' ) );
                 return $g( 'full' )
@@ -1575,11 +1589,22 @@ JS;
         $onlyRowId = isset( $_POST['single'] ) ? (int) $_POST['single'] : 0;
         $result    = MyNJILGA_Stripe_Reconciler::sync_year( $duesYear, null, $onlyRowId > 0 ? $onlyRowId : null );
 
+        // A full-year sync also looks the other way down the road: an
+        // invoice sitting in Stripe with no row here. Skipped for a
+        // single-row Refresh, which has no business paging the whole
+        // year's invoices at Stripe.
+        $orphans = 0;
+        if ( $onlyRowId <= 0 ) {
+            $scan    = MyNJILGA_Stripe_Reconciler::scan_for_orphans( $duesYear );
+            $orphans = count( $scan['orphans'] );
+        }
+
         self::redirect( $duesYear, [
             'msg'       => 'synced',
             'count'     => $result['checked'],
             'updated'   => $result['updated'],
             'attention' => $result['needs_attention'],
+            'orphans'   => $orphans,
         ] );
     }
 

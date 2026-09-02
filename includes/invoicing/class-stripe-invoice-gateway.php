@@ -124,7 +124,7 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             if ( $mapped !== null ) {
                 $getResp = $client->request( 'GET', '/customers/' . rawurlencode( $mapped ) );
                 if ( $getResp['ok'] && empty( $getResp['body']['deleted'] ) ) {
-                    return $this->sync_customer_identity( $client, $mapped, $getResp['body'], $email, $companyName );
+                    return $this->sync_customer_identity( $client, $mapped, $getResp['body'], $email, $companyName, $contactId );
                 }
                 // Deleted in Stripe, or the GET itself failed — the
                 // mapping is stale either way; clear it and fall through
@@ -143,7 +143,7 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
                 $found   = $searchResp['body']['data'][0];
                 $foundId = (string) $found['id'];
                 MyNJILGA_Stripe_Customer_Map::set( $companyId, $mode, $foundId );
-                return $this->sync_customer_identity( $client, $foundId, $found, $email, $companyName );
+                return $this->sync_customer_identity( $client, $foundId, $found, $email, $companyName, $contactId );
             }
 
             $createResp = $client->request( 'POST', '/customers', [
@@ -219,18 +219,29 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
     }
 
     /**
-     * PATCHes a found/mapped Customer when its stored email or name has
-     * drifted from what we have now, then returns its id either way.
+     * PATCHes a found/mapped Customer when its stored email, name or
+     * owner-contact metadata has drifted from what we have now, then
+     * returns its id either way.
      *
-     * @param array<string,mixed> $body Customer object as returned by Stripe.
+     * @param array<string,mixed> $body   Customer object as returned by Stripe.
+     * @param int                 $ownerContactId 0 when unknown — never written as 0 over a real value.
      */
-    private function sync_customer_identity( MyNJILGA_Stripe_Client $client, string $customerId, array $body, string $email, string $companyName ): string {
+    private function sync_customer_identity( MyNJILGA_Stripe_Client $client, string $customerId, array $body, string $email, string $companyName, int $ownerContactId = 0 ): string {
         $drift = [];
         if ( $email !== '' && (string) ( $body['email'] ?? '' ) !== $email ) {
             $drift['email'] = $email;
         }
         if ( $companyName !== '' && (string) ( $body['name'] ?? '' ) !== $companyName ) {
             $drift['name'] = $companyName;
+        }
+        // The firm keeps one Customer for life, so the contact billing for
+        // it changes over the years — this is the metadata that would
+        // otherwise still name whoever was Owner the day it was created.
+        if ( $ownerContactId > 0 ) {
+            $storedOwner = (int) ( $body['metadata']['njilga_owner_contact_id'] ?? 0 );
+            if ( $storedOwner !== $ownerContactId ) {
+                $drift['metadata'] = [ 'njilga_owner_contact_id' => $ownerContactId ];
+            }
         }
         if ( ! empty( $drift ) ) {
             $client->request( 'POST', '/customers/' . rawurlencode( $customerId ), $drift );
@@ -649,10 +660,10 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
     }
 
     /**
-     * @return array{invoices:array<int,array<string,mixed>>,has_more:bool,next_starting_after:?string}
+     * @return array{invoices:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string}
      */
-    public function list_our_invoices( int $duesYear, ?string $startingAfter ): array {
-        $empty = [ 'invoices' => [], 'has_more' => false, 'next_starting_after' => null ];
+    public function list_our_invoices( int $duesYear, ?string $cursor ): array {
+        $empty = [ 'invoices' => [], 'has_more' => false, 'next_cursor' => null ];
         try {
             $client = $this->client();
             if ( $client === null ) {
@@ -667,8 +678,13 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
                 'query' => "metadata['source']:'my-njilga' AND metadata['njilga_dues_year']:'" . $duesYear . "'",
                 'limit' => 100,
             ];
-            if ( $startingAfter !== null && $startingAfter !== '' ) {
-                $params['starting_after'] = $startingAfter;
+            // Search pages with an opaque `page` token echoed back as
+            // `next_page` — NOT with the `starting_after` object id that
+            // Stripe's plain list endpoints use. Sending starting_after
+            // here is silently ignored, which would re-request page one
+            // forever.
+            if ( $cursor !== null && $cursor !== '' ) {
+                $params['page'] = $cursor;
             }
 
             $resp = $client->request( 'GET', '/invoices/search', $params );
@@ -676,13 +692,13 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
                 return $empty;
             }
 
-            $data = array_values( (array) ( $resp['body']['data'] ?? [] ) );
-            $last = ! empty( $data ) ? end( $data ) : null;
+            $data     = array_values( (array) ( $resp['body']['data'] ?? [] ) );
+            $nextPage = isset( $resp['body']['next_page'] ) ? (string) $resp['body']['next_page'] : '';
 
             return [
-                'invoices'            => $data,
-                'has_more'            => (bool) ( $resp['body']['has_more'] ?? false ),
-                'next_starting_after' => ( is_array( $last ) && isset( $last['id'] ) ) ? (string) $last['id'] : null,
+                'invoices'    => $data,
+                'has_more'    => (bool) ( $resp['body']['has_more'] ?? false ),
+                'next_cursor' => $nextPage !== '' ? $nextPage : null,
             ];
         } catch ( \Throwable $e ) {
             return $empty;

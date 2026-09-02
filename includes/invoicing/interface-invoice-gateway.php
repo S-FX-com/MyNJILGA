@@ -119,9 +119,12 @@ interface MyNJILGA_Invoice_Gateway {
 
     /**
      * Page through the gateway's invoices tagged as belonging to this
-     * plugin/year. A later phase's reconciler is the only consumer.
+     * plugin/year, so the reconciler can spot invoices that exist at the
+     * gateway with no row here. $cursor is opaque: pass null for the
+     * first page, then whatever the previous call returned as
+     * next_cursor until has_more is false.
      *
-     * @return array{invoices:array<int,array<string,mixed>>,has_more:bool,next_starting_after:?string}
+     * @return array{invoices:array<int,array<string,mixed>>,has_more:bool,next_cursor:?string}
      */
-    public function list_our_invoices( int $duesYear, ?string $startingAfter ): array;
+    public function list_our_invoices( int $duesYear, ?string $cursor ): array;
 }

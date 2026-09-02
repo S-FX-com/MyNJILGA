@@ -51,6 +51,13 @@ class MyNJILGA_Stripe_Reconciler {
 
     const HOOK_DAILY = 'njilga_stripe_reconcile_daily';
 
+    /**
+     * Where scan_for_orphans() leaves its findings for the Setup page to
+     * render. Keyed by mode ('live'/'test') so a test-mode scan never
+     * overwrites what the live scan found, and vice versa.
+     */
+    const OPTION_ORPHANS = 'njilga_stripe_orphan_invoices';
+
     // -------------------------------------------------------------------------
     // PART A — the sync algorithm
     // -------------------------------------------------------------------------
@@ -93,7 +100,7 @@ class MyNJILGA_Stripe_Reconciler {
             MyNJILGA_Dues_Invoice_Table::STATUS_CREATED,
             MyNJILGA_Dues_Invoice_Table::STATUS_SENT,
             MyNJILGA_Dues_Invoice_Table::STATUS_PROCESSING,
-        ] );
+        ], $livemode );
 
         foreach ( $rows as $row ) {
             if ( (bool) $row->livemode !== $livemode ) {
@@ -379,6 +386,142 @@ class MyNJILGA_Stripe_Reconciler {
     }
 
     // -------------------------------------------------------------------------
+    // PART A.2 — the other direction: invoices in Stripe with no row here
+    // -------------------------------------------------------------------------
+
+    /**
+     * sync_year() walks OUR rows and asks Stripe about each. That can only
+     * ever find drift on invoices we already know about — an invoice that
+     * exists in Stripe with no row here is invisible to it, and that is
+     * the dangerous direction: a firm can pay an invoice this plugin will
+     * never notice, never settle membership for, and never show in the
+     * ledger. It happens when create_order() finalized at Stripe and the
+     * local write then failed, or when someone creates an invoice by hand
+     * in the Stripe dashboard.
+     *
+     * So: page every invoice Stripe has tagged as ours for the year, in
+     * the active mode, and record the ones whose id matches no row. The
+     * findings go in an option for the Setup page to render — there is no
+     * row to hang a last_error on, which is the whole point.
+     *
+     * Deliberately NOT called from sync_year(): that runs per-row from the
+     * Invoicing page's Refresh button too, and this is a whole-year scan
+     * of a separate API. The daily job and the manual full sync call it.
+     *
+     * @return array{scanned:int,orphans:array<int,array<string,mixed>>,error:string}
+     */
+    public static function scan_for_orphans( int $duesYear ): array {
+        $out = [ 'scanned' => 0, 'orphans' => [], 'error' => '' ];
+
+        $gateway = MyNJILGA_Invoicing::gateway();
+        if ( ! $gateway->is_available() ) {
+            $out['error'] = $gateway->name() . ' is not connected — nothing to scan.';
+            return $out;
+        }
+
+        $livemode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+
+        // Every id we know about for this year and mode, in ANY status —
+        // a paid or voided row is still perfectly well accounted for, so
+        // matching only open rows would report half the year as orphaned.
+        $known = [];
+        foreach ( MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [], $livemode ) as $row ) {
+            $id = (string) ( $row->gateway_invoice_id ?? '' );
+            if ( $id !== '' ) {
+                $known[ $id ] = true;
+            }
+        }
+
+        $cursor = null;
+        $pages  = 0;
+        do {
+            $page = $gateway->list_our_invoices( $duesYear, $cursor );
+            foreach ( $page['invoices'] as $invoice ) {
+                $id = (string) ( $invoice['id'] ?? '' );
+                if ( $id === '' ) {
+                    continue;
+                }
+                $out['scanned']++;
+
+                // Stripe's search index is eventually consistent, so a
+                // just-created invoice can be missing from these results
+                // — which only ever UNDER-reports orphans, never invents
+                // one. A draft is skipped outright: create_order()
+                // deletes its own abandoned drafts, and a draft has
+                // collected nothing.
+                if ( isset( $known[ $id ] ) || (string) ( $invoice['status'] ?? '' ) === 'draft' ) {
+                    continue;
+                }
+
+                $out['orphans'][] = [
+                    'id'          => $id,
+                    'number'      => (string) ( $invoice['number'] ?? '' ),
+                    'status'      => (string) ( $invoice['status'] ?? '' ),
+                    'total_cents' => (int) ( $invoice['total'] ?? 0 ),
+                    'paid_cents'  => (int) ( $invoice['amount_paid'] ?? 0 ),
+                    'customer'    => (string) ( $invoice['customer_name'] ?? ( $invoice['customer_email'] ?? '' ) ),
+                    'hosted_url'  => (string) ( $invoice['hosted_invoice_url'] ?? '' ),
+                    'row_id_meta' => (int) ( $invoice['metadata']['njilga_row_id'] ?? 0 ),
+                ];
+            }
+
+            $cursor = $page['next_cursor'];
+            $pages++;
+            // A hard stop so a pagination bug at either end can never spin
+            // this job: 20 pages of 100 is far more than a year of dues.
+        } while ( ! empty( $page['has_more'] ) && $cursor !== null && $pages < 20 );
+
+        self::record_orphans( $duesYear, $livemode, $out['orphans'] );
+
+        return $out;
+    }
+
+    /**
+     * Merge one year's findings into the stored per-mode report, replacing
+     * whatever that year said last time (an orphan that has since been
+     * reconciled must disappear, not linger forever).
+     *
+     * @param array<int,array<string,mixed>> $orphans
+     */
+    private static function record_orphans( int $duesYear, bool $livemode, array $orphans ): void {
+        $stored = get_option( self::OPTION_ORPHANS, [] );
+        $stored = is_array( $stored ) ? $stored : [];
+        $key    = $livemode ? 'live' : 'test';
+
+        $modeReport = isset( $stored[ $key ] ) && is_array( $stored[ $key ] ) ? $stored[ $key ] : [];
+        $years      = isset( $modeReport['years'] ) && is_array( $modeReport['years'] ) ? $modeReport['years'] : [];
+
+        if ( empty( $orphans ) ) {
+            unset( $years[ (string) $duesYear ] );
+        } else {
+            $years[ (string) $duesYear ] = $orphans;
+        }
+
+        $stored[ $key ] = [
+            'checked_at' => current_time( 'mysql' ),
+            'years'      => $years,
+        ];
+        update_option( self::OPTION_ORPHANS, $stored, false );
+    }
+
+    /**
+     * The stored orphan report for the active mode, for the Setup page.
+     *
+     * @return array{checked_at:string,years:array<string,array<int,array<string,mixed>>>}
+     */
+    public static function orphan_report(): array {
+        $stored = get_option( self::OPTION_ORPHANS, [] );
+        $stored = is_array( $stored ) ? $stored : [];
+        $key    = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE ) ? 'live' : 'test';
+        $report = isset( $stored[ $key ] ) && is_array( $stored[ $key ] ) ? $stored[ $key ] : [];
+
+        return [
+            'checked_at' => (string) ( $report['checked_at'] ?? '' ),
+            'years'      => isset( $report['years'] ) && is_array( $report['years'] ) ? $report['years'] : [],
+        ];
+    }
+
+    // -------------------------------------------------------------------------
     // PART B — scheduled daily job
     // -------------------------------------------------------------------------
 
@@ -415,6 +558,19 @@ class MyNJILGA_Stripe_Reconciler {
 
             foreach ( $years as $year ) {
                 self::sync_year( $year );
+            }
+
+            // Orphan scanning covers the current dues year even when it
+            // has no open rows — the worst case for an orphan is a year
+            // where the local write failed for EVERY invoice, which is
+            // exactly the year that wouldn't appear in $years at all.
+            $scanYears = $years;
+            $current   = MyNJILGA_Invoicing::default_dues_year();
+            if ( ! in_array( $current, $scanYears, true ) ) {
+                $scanYears[] = $current;
+            }
+            foreach ( $scanYears as $year ) {
+                self::scan_for_orphans( $year );
             }
         } catch ( \Throwable $e ) {
             // sync_year() already isolates per-row failures into its own
