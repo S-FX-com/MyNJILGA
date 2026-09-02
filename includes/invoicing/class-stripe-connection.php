@@ -10,7 +10,8 @@
  * key, account identity, and webhook endpoint — plus which mode is
  * currently ACTIVE and the flat invoice-shaping settings (currency, days
  * until due, collection method, footer, auto-advance, whether Stripe
- * itself emails the invoice).
+ * itself emails the invoice, and the remittance address printed in the
+ * unpaid-invoice email for check payments).
  *
  * Secrets at rest: `secret_key` and `webhook_secret` are encrypted with
  * sodium_crypto_secretbox when NJILGA_STRIPE_KEY is defined in
@@ -99,6 +100,7 @@ class MyNJILGA_Stripe_Connection {
             'footer'             => '',
             'auto_advance'       => false,
             'stripe_sends_email' => false,
+            'remittance_address' => '',
         ];
     }
 
@@ -131,7 +133,7 @@ class MyNJILGA_Stripe_Connection {
             $merged[ $m ] = array_merge( $defaults[ $m ], is_array( $stored[ $m ] ?? null ) ? $stored[ $m ] : [] );
         }
 
-        foreach ( [ 'currency', 'days_until_due', 'collection_method', 'footer', 'auto_advance', 'stripe_sends_email' ] as $k ) {
+        foreach ( [ 'currency', 'days_until_due', 'collection_method', 'footer', 'auto_advance', 'stripe_sends_email', 'remittance_address' ] as $k ) {
             if ( array_key_exists( $k, $stored ) ) {
                 $merged[ $k ] = $stored[ $k ];
             }

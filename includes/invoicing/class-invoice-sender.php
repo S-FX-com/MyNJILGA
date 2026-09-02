@@ -62,6 +62,10 @@ class MyNJILGA_Invoice_Sender {
             $blocks[] = $covers;
         }
         $blocks[] = 'Pay online here: ' . $link;
+        $remittanceAddress = trim( (string) MyNJILGA_Stripe_Connection::setting( 'remittance_address', '' ) );
+        if ( $remittanceAddress !== '' ) {
+            $blocks[] = 'Pay online at the link above, or mail a check to: ' . $remittanceAddress;
+        }
         $blocks[] = "Thank you,\nNJILGA";
 
         $subject = $isAssess

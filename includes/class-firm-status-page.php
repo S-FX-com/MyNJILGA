@@ -116,8 +116,9 @@ class MyNJILGA_Firm_Status_Page {
         $members  = $snapshot['members'];
         $billTo   = MyNJILGA_Dues_Snapshot::bill_to( $row );
         $kind     = MyNJILGA_Dues_Snapshot::invoice_kind( $row );
-        $payable  = in_array( $row->status, [ MyNJILGA_Dues_Invoice_Table::STATUS_CREATED, MyNJILGA_Dues_Invoice_Table::STATUS_SENT ], true ) && ! empty( $row->hosted_invoice_url );
+        $payable  = in_array( $row->status, [ MyNJILGA_Dues_Invoice_Table::STATUS_CREATED, MyNJILGA_Dues_Invoice_Table::STATUS_SENT, MyNJILGA_Dues_Invoice_Table::STATUS_PROCESSING ], true ) && ! empty( $row->hosted_invoice_url );
         $link     = $payable ? (string) ( $row->hosted_invoice_url ?? '' ) : '';
+        $pdfLink  = $payable ? (string) ( $row->invoice_pdf_url ?? '' ) : '';
 
         [ $statusLabel, $statusClass ] = self::status_label( $row );
 
@@ -159,15 +160,58 @@ class MyNJILGA_Firm_Status_Page {
         echo '</tbody></table>';
 
         if ( $link !== '' ) {
-            printf( '<p class="njilga-status__actions"><a class="njilga-status__pay" href="%s">Pay this invoice — %s</a> <span class="njilga-status__muted">Anyone at the firm can pay; payment marks everyone listed above as current.</span></p>', esc_url( $link ), esc_html( MyNJILGA_Invoicing::money( (int) $row->total_amount_cents ) ) );
+            printf(
+                '<p class="njilga-status__actions"><a class="njilga-status__pay" href="%s">Pay this invoice — %s</a>%s <span class="njilga-status__muted">Anyone at the firm can pay; payment marks everyone listed above as current.</span></p>',
+                esc_url( $link ),
+                esc_html( MyNJILGA_Invoicing::money( (int) $row->total_amount_cents ) ),
+                $pdfLink !== '' ? sprintf( ' <a class="njilga-status__pdf" href="%s">Download PDF</a>', esc_url( $pdfLink ) ) : ''
+            );
         } elseif ( $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_PAID ) {
-            printf( '<p class="njilga-status__meta">Paid on %s. Thank you!</p>', esc_html( (string) $row->paid_at ) );
+            printf(
+                '<p class="njilga-status__meta">%s%s</p>',
+                esc_html( self::paid_message( $row ) ),
+                ! empty( $row->invoice_pdf_url ) ? sprintf( ' <a href="%s">View invoice (PDF)</a>', esc_url( (string) $row->invoice_pdf_url ) ) : ''
+            );
         } elseif ( $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_DOWNGRADED ) {
             echo '<p class="njilga-status__meta">This invoice was never paid and the cycle has closed. Please contact NJILGA to reinstate membership.</p>';
+        } elseif ( $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_PROCESSING ) {
+            echo '<p class="njilga-status__meta">Your payment is being processed and should clear within a few business days.</p>';
+        } elseif ( in_array( $row->status, [ MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED, MyNJILGA_Dues_Invoice_Table::STATUS_UNCOLLECTIBLE ], true ) ) {
+            echo '<p class="njilga-status__meta">This invoice is no longer active. Please contact NJILGA with any questions.</p>';
         } else {
             echo '<p class="njilga-status__meta">This invoice is being prepared by NJILGA — the payment link will appear here once it\'s issued.</p>';
         }
         echo '</div>';
+    }
+
+    /**
+     * "Paid by card on {date}." style copy for a paid invoice row — coarse
+     * method label, front-end phrasing only (doesn't need to match the
+     * Payments ledger page's method_label()/method_label_full()).
+     */
+    private static function paid_message( object $row ): string {
+        $date   = (string) $row->paid_at;
+        $method = (string) ( $row->primary_method ?? '' );
+        $phrase = self::method_phrase( $method );
+        return $phrase !== ''
+            ? sprintf( 'Paid by %s on %s. Thank you!', $phrase, $date )
+            : sprintf( 'Paid on %s. Thank you!', $date );
+    }
+
+    /**
+     * Coarse method -> human phrase for paid_message(). '' for
+     * unknown/other so the caller falls back to the generic "Paid on
+     * {date}." copy instead of an awkward "Paid by  on {date}.".
+     */
+    private static function method_phrase( string $method ): string {
+        $phrases = [
+            'card'            => 'card',
+            'us_bank_account' => 'bank transfer',
+            'check'           => 'check',
+            'cash'            => 'cash',
+            'wire'            => 'wire transfer',
+        ];
+        return $phrases[ $method ] ?? '';
     }
 
     /**
@@ -180,8 +224,14 @@ class MyNJILGA_Firm_Status_Page {
             case MyNJILGA_Dues_Invoice_Table::STATUS_SENT:
             case MyNJILGA_Dues_Invoice_Table::STATUS_CREATED:
                 return [ 'Awaiting payment', 'unpaid' ];
+            case MyNJILGA_Dues_Invoice_Table::STATUS_PROCESSING:
+                return [ 'Payment processing', 'processing' ];
             case MyNJILGA_Dues_Invoice_Table::STATUS_DOWNGRADED:
                 return [ 'Not paid — lapsed', 'unpaid' ];
+            case MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED:
+                return [ 'Voided', 'unpaid' ];
+            case MyNJILGA_Dues_Invoice_Table::STATUS_UNCOLLECTIBLE:
+                return [ 'Written off', 'unpaid' ];
             default:
                 return [ 'In preparation', 'none' ];
         }
@@ -202,12 +252,14 @@ class MyNJILGA_Firm_Status_Page {
             .njilga-status__pill{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.8em;font-weight:600;margin-top:4px}
             .njilga-status__pill--paid{background:#edfaef;color:#1d6f42}
             .njilga-status__pill--unpaid{background:#fcf0f1;color:#d63638}
+            .njilga-status__pill--processing{background:#fcf9e8;color:#996800}
             .njilga-status__pill--none{background:#f0f0f1;color:#646970}
             .njilga-status__table{width:100%;border-collapse:collapse;margin-top:12px;font-size:.95em}
             .njilga-status__table th,.njilga-status__table td{text-align:left;padding:6px 8px;border-bottom:1px solid #f0f0f1}
             .njilga-status__table tr.is-you td{background:#f0f6fc}
             .njilga-status__actions{margin:14px 0 0}
             .njilga-status__pay{display:inline-block;padding:10px 18px;border-radius:4px;background:#1d6f42;color:#fff!important;text-decoration:none;font-weight:600;margin-right:10px}
+            .njilga-status__pdf{display:inline-block;padding:10px 18px;border-radius:4px;border:1px solid #dcdcde;color:#1d2327!important;text-decoration:none;font-weight:600;margin-right:10px}
         </style>';
     }
 

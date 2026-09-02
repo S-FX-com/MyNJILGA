@@ -409,6 +409,11 @@ class MyNJILGA_Page_Settings {
             esc_textarea( (string) $s['footer'] )
         );
 
+        printf(
+            '<tr><th scope="row"><label for="pmt-remittance">Remittance address (for check payments)</label></th><td><textarea id="pmt-remittance" name="remittance_address" rows="3" class="large-text">%s</textarea><p class="njilga-help">Printed in the unpaid-invoice email so staff can edit it without a deploy.</p></td></tr>',
+            esc_textarea( (string) $s['remittance_address'] )
+        );
+
         echo '</tbody></table></div>';
         echo '<div class="njilga-actions"><button type="submit" class="njilga-btn njilga-btn-primary">Save Payment Settings</button></div>';
         echo '</form>';
@@ -930,8 +935,9 @@ class MyNJILGA_Page_Settings {
         $in = wp_unslash( $_POST );
         $s  = MyNJILGA_Stripe_Connection::get();
 
-        $s['days_until_due'] = max( 1, min( 365, (int) ( $in['days_until_due'] ?? 30 ) ) );
-        $s['footer']         = sanitize_textarea_field( (string) ( $in['footer'] ?? '' ) );
+        $s['days_until_due']     = max( 1, min( 365, (int) ( $in['days_until_due'] ?? 30 ) ) );
+        $s['footer']             = sanitize_textarea_field( (string) ( $in['footer'] ?? '' ) );
+        $s['remittance_address'] = sanitize_textarea_field( (string) ( $in['remittance_address'] ?? '' ) );
 
         MyNJILGA_Stripe_Connection::save( $s );
 
