@@ -36,6 +36,15 @@ WordPress's styles can't bleed into ours.
 5. **Colour carries meaning**, never decoration: green = good/paid/found,
    amber = needs a human, red = failed/unpaid/destructive, blue =
    in-flight or informational, grey = not applicable.
+6. **A rule that restyles an input must outrank the generic input rule
+   and come after it.** The base control styles are written as
+   `.njilga-ui input[type=text]` — a class *and* an attribute selector —
+   so a plain `.njilga-search input` or `.njilga-input-sm` silently loses
+   and its padding/height is dropped. Write `.njilga-ui input.njilga-…`
+   (or `.njilga-ui .wrapper input`) and place it below the generic block.
+   Reach for that, never `!important`: both places that once needed this
+   were bugs, one visible (the search icon overlapping its placeholder),
+   one papered over with three `!important`s.
 
 ---
 
