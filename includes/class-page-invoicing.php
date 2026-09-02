@@ -1698,6 +1698,21 @@ JS;
             if ( ! $result['ok'] ) {
                 self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => $result['error'] ?? MyNJILGA_Invoicing::gateway()->name() . ' could not mark the invoice paid.' ] );
             }
+
+            // Reflect the payment locally right away — NOT status (that
+            // stays exclusively the njilga_stripe_invoice_paid webhook
+            // cascade's call, per this migration's single-settlement-
+            // trigger design; no tag/role is granted here). Without this,
+            // the row shows its stale pre-payment balance until the
+            // webhook (or the next reconcile) catches up, and a second
+            // Mark Paid attempt in that window would pass the "no balance
+            // outstanding" guard and log a real duplicate manual payment.
+            // (The failure path above always exits, so $result['ok'] is
+            // guaranteed true here.)
+            MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
+                'amount_paid_cents' => (int) $row->amount_paid_cents + $balanceCents,
+                'amount_due_cents'  => 0,
+            ] );
         }
 
         MyNJILGA_Invoicing_Notes::log(

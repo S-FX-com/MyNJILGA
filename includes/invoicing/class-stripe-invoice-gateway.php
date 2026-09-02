@@ -175,13 +175,27 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
      *
      * @param array<string,mixed> $billTo
      */
+    /**
+     * Escapes a value for safe interpolation into a single-quoted literal
+     * in Stripe's Search Query Language (used by /v1/customers/search and
+     * /v1/invoices/search) — a raw value containing a single quote could
+     * otherwise break out of the intended field:'value' filter and widen
+     * the search (e.g. via an injected boolean operator) to match records
+     * beyond the one intended. Backslash first, then the quote itself, so
+     * an existing backslash in the value isn't misread as escaping the
+     * character that follows it.
+     */
+    private static function escape_search_value( string $value ): string {
+        return str_replace( [ '\\', "'" ], [ '\\\\', "\\'" ], $value );
+    }
+
     private function find_or_create_customer_by_email( MyNJILGA_Stripe_Client $client, string $email, array $billTo ): ?string {
         if ( $email === '' ) {
             return null;
         }
 
         $searchResp = $client->request( 'GET', '/customers/search', [
-            'query' => "email:'" . $email . "'",
+            'query' => "email:'" . self::escape_search_value( $email ) . "'",
             'limit' => 1,
         ] );
         if ( $searchResp['ok'] && ! empty( $searchResp['body']['data'][0]['id'] ) ) {
@@ -317,17 +331,26 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
 
             // Draft invoice now exists in Stripe — every failure from here
             // on leaves an orphaned draft unless we clean it up (see
-            // abandon_draft()).
-            foreach ( array_chunk( $lineItems, 50 ) as $chunk ) {
+            // abandon_draft()). Every call from here on carries its own
+            // idempotency key — MyNJILGA_Stripe_Client retries once on a
+            // 5xx/transport failure with the SAME request body, and
+            // without a key a retried add_lines call would silently
+            // duplicate that chunk's line items (doubling the invoice
+            // total) rather than being recognized as the same attempt.
+            foreach ( array_chunk( $lineItems, 50 ) as $i => $chunk ) {
                 $addResp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ) . '/add_lines', [
                     'lines' => $this->to_stripe_lines( $chunk ),
+                ], [
+                    'idempotency_key' => $idempotencyKey . '-lines-' . $i,
                 ] );
                 if ( ! $addResp['ok'] ) {
                     return $this->abandon_draft( $client, $invoiceId, $addResp['error'] !== '' ? $addResp['error'] : 'Stripe rejected one or more invoice line items.' );
                 }
             }
 
-            $finalizeResp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ) . '/finalize' );
+            $finalizeResp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ) . '/finalize', [], [
+                'idempotency_key' => $idempotencyKey . '-finalize',
+            ] );
             if ( ! $finalizeResp['ok'] ) {
                 return $this->abandon_draft( $client, $invoiceId, $finalizeResp['error'] !== '' ? $finalizeResp['error'] : 'Stripe could not finalize the invoice.' );
             }
@@ -521,8 +544,21 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
                 }
             }
 
+            // Derived from the actual metadata content, not just the
+            // invoice id: a client-level retry of THIS SAME attempt (lost
+            // response, transport blip) reuses the key and Stripe returns
+            // its cached result instead of erroring — which matters here,
+            // since a false "could not mark paid" after the pay call
+            // actually succeeded would otherwise send staff back to Mark
+            // Paid believing nothing happened. A genuinely different
+            // later attempt (corrected check number/amount) gets a fresh
+            // key rather than colliding with a stale one.
+            $idempotencySuffix = md5( (string) wp_json_encode( $metadata ) );
+
             if ( ! empty( $metadata ) ) {
-                $updateResp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ), [ 'metadata' => $metadata ] );
+                $updateResp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ), [ 'metadata' => $metadata ], [
+                    'idempotency_key' => 'njilga-payoob-meta-' . $invoiceId . '-' . $idempotencySuffix,
+                ] );
                 if ( ! $updateResp['ok'] ) {
                     return [ 'ok' => false, 'error' => $updateResp['error'] !== '' ? $updateResp['error'] : 'Could not record payment metadata on the invoice.' ];
                 }
@@ -537,7 +573,9 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             // settle() call here: it would double-settle once the webhook
             // catches up, or settle before Stripe has actually confirmed
             // the pay call succeeded.
-            $payResp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ) . '/pay', [ 'paid_out_of_band' => true ] );
+            $payResp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ) . '/pay', [ 'paid_out_of_band' => true ], [
+                'idempotency_key' => 'njilga-payoob-pay-' . $invoiceId . '-' . $idempotencySuffix,
+            ] );
             if ( ! $payResp['ok'] ) {
                 return [ 'ok' => false, 'error' => $payResp['error'] !== '' ? $payResp['error'] : 'Stripe could not mark the invoice paid.' ];
             }
@@ -558,7 +596,9 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
                 return [ 'ok' => false, 'error' => 'Stripe is not connected.' ];
             }
 
-            $resp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ) . '/void' );
+            $resp = $client->request( 'POST', '/invoices/' . rawurlencode( $invoiceId ) . '/void', [], [
+                'idempotency_key' => 'njilga-void-' . $invoiceId,
+            ] );
             if ( ! $resp['ok'] ) {
                 return [ 'ok' => false, 'error' => $resp['error'] !== '' ? $resp['error'] : 'Stripe could not void the invoice.' ];
             }
