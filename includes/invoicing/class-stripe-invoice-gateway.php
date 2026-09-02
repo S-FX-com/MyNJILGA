@@ -257,8 +257,9 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
      * @param array<int,array<string,mixed>> $lineItems
      * @param array<string,mixed>            $context Free-form: dues_year, company_id, company_name,
      *                                                 invoice_row_id, invoice_kind, bill_to_contact_id (optional),
-     *                                                 plus test-only overrides mode/collection_method/
-     *                                                 days_until_due/currency/footer.
+     *                                                 due_timestamp (optional — an explicit due date, which
+     *                                                 replaces days_until_due), plus test-only overrides
+     *                                                 mode/collection_method/days_until_due/currency/footer.
      * @return array{ok:bool,invoice_id?:string,invoice_number?:string,hosted_url?:string,pdf_url?:string,due_date?:string,error?:string}
      */
     public function create_order( string $customerId, array $lineItems, array $context ): array {
@@ -283,6 +284,12 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             $mode             = isset( $context['mode'] ) ? (string) $context['mode'] : MyNJILGA_Stripe_Connection::active_mode();
             $collectionMethod = isset( $context['collection_method'] ) ? (string) $context['collection_method'] : (string) MyNJILGA_Stripe_Connection::setting( 'collection_method', 'send_invoice' );
             $daysUntilDue     = isset( $context['days_until_due'] ) ? (int) $context['days_until_due'] : (int) MyNJILGA_Stripe_Connection::setting( 'days_until_due', 30 );
+            // Stripe accepts days_until_due OR due_date on a send_invoice
+            // invoice, never both — sending both is a 400. A caller that
+            // knows the actual date (MyNJILGA_Invoice_Creator does: dues
+            // fall due at year end) passes due_timestamp and wins; anyone
+            // who doesn't still gets the rolling N-day window.
+            $dueTimestamp     = isset( $context['due_timestamp'] ) ? (int) $context['due_timestamp'] : 0;
             $currency         = isset( $context['currency'] ) ? (string) $context['currency'] : (string) MyNJILGA_Stripe_Connection::setting( 'currency', 'usd' );
             $footer           = isset( $context['footer'] ) ? (string) $context['footer'] : (string) MyNJILGA_Stripe_Connection::setting( 'footer', '' );
 
@@ -302,7 +309,6 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             $createParams = [
                 'customer'                       => $customerId,
                 'collection_method'              => $collectionMethod,
-                'days_until_due'                 => $daysUntilDue,
                 // ALWAYS false regardless of the stored auto_advance
                 // setting (a possible future toggle) — this plugin
                 // controls finalization itself, via the explicit
@@ -325,6 +331,12 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
                     'source'                    => 'my-njilga',
                 ],
             ];
+
+            if ( $dueTimestamp > 0 ) {
+                $createParams['due_date'] = $dueTimestamp;
+            } else {
+                $createParams['days_until_due'] = $daysUntilDue;
+            }
 
             $idempotencyKey = sprintf( 'njilga-inv-%d-%d-%s', $invoiceRowId, $duesYear, $mode );
 
