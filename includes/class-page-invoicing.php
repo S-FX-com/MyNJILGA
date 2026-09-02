@@ -261,6 +261,8 @@ class MyNJILGA_Page_Invoicing {
                 <option value="blocked">Blocked</option>
                 <option value="error">Error</option>
                 <option value="downgraded">Downgraded</option>
+                <option value="voided">Voided</option>
+                <option value="uncollectible">Uncollectible</option>
               </select>';
         echo '<div class="njilga-toolbar-spacer"></div>';
         self::render_generate_form( $duesYear, 'Refresh Firms', 'outline' );
@@ -441,6 +443,8 @@ class MyNJILGA_Page_Invoicing {
 
             case 'paid':
             case 'downgraded':
+            case 'voided':
+            case 'uncollectible':
                 return $link !== ''
                     ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View Invoice</a>', esc_url( $link ) )
                     : '<span class="njilga-dim">—</span>';
@@ -638,6 +642,14 @@ class MyNJILGA_Page_Invoicing {
 
             case $T::STATUS_DOWNGRADED:
                 return self::verdict( 'created', 'downgraded', [ 'Downgraded', 'destructive' ], [ 'Unpaid — swept', false ], false );
+
+            // Terminal in Stripe — staff voided it, or it was written off.
+            // Neither is retryable; both are things worth a look.
+            case $T::STATUS_VOIDED:
+                return self::verdict( 'attention', 'voided', [ 'Voided', 'muted' ], [ 'Voided — no longer collectible', false ], false );
+
+            case $T::STATUS_UNCOLLECTIBLE:
+                return self::verdict( 'attention', 'uncollectible', [ 'Uncollectible', 'destructive' ], [ 'Written off', false ], false );
 
             default:
                 return self::verdict( 'attention', 'error', [ ucfirst( $status ), 'muted' ], [ '—', false ], false );

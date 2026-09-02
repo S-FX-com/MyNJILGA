@@ -293,17 +293,26 @@ class MyNJILGA_Dues_Invoice_Table {
      * assessment-only invoices (an unpaid dinner assessment doesn't lapse
      * a membership). Used by the downgrade sweep.
      *
+     * Also excludes STATUS_VOIDED and STATUS_UNCOLLECTIBLE (staff already
+     * closed these out — sweeping them again is meaningless) and
+     * STATUS_PROCESSING (an ACH payment in flight is not an unpaid firm;
+     * it settles, or doesn't, on the eventual invoice.paid/payment_failed
+     * outcome, never by lapsing mid-clearing).
+     *
      * @return array<int,object>
      */
     public static function get_unpaid_for_sweep( int $duesYear ): array {
         global $wpdb;
         $table = self::table_name();
         return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT * FROM $table WHERE dues_year = %d AND status NOT IN (%s, %s, %s) AND invoice_kind <> %s ORDER BY id ASC",
+            "SELECT * FROM $table WHERE dues_year = %d AND status NOT IN (%s, %s, %s, %s, %s, %s) AND invoice_kind <> %s ORDER BY id ASC",
             $duesYear,
             self::STATUS_PAID,
             self::STATUS_DOWNGRADED,
             self::STATUS_EXCLUDED,
+            self::STATUS_VOIDED,
+            self::STATUS_UNCOLLECTIBLE,
+            self::STATUS_PROCESSING,
             MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT
         ) );
     }
