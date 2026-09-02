@@ -9,52 +9,59 @@ class MyNJILGA_Page_Members {
             wp_die( 'Access denied.' );
         }
 
-        echo '<div class="wrap"><h1>Active Paid Members</h1>';
+        MyNJILGA_Admin_UI::styles();
+        echo '<div class="wrap njilga-ui">';
+        MyNJILGA_Admin_Menu::render_back_to_reports();
+        MyNJILGA_Admin_UI::page_header( 'Active Paid Members', 'Every contact carrying the Dues Paid tag, with firm, trustee role and payment method.' );
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
-            echo '</div>';
+            MyNJILGA_Admin_UI::close();
             return;
         }
 
-        MyNJILGA_Admin_Menu::render_back_to_reports();
         MyNJILGA_Admin_Menu::render_stats_panel();
 
         if ( MyNJILGA_Tags::id_for( MyNJILGA_Tags::SLUG_DUES_PAID ) === null ) {
-            printf(
-                '<div class="notice notice-warning"><p>The <strong>Dues Paid</strong> tag does not exist yet. <a href="%s">Open Setup</a> to create it.</p></div></div>',
-                esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) )
+            MyNJILGA_Admin_UI::callout(
+                sprintf(
+                    'The <strong>Dues Paid</strong> tag does not exist yet. <a href="%s">Open Setup</a> to create it.',
+                    esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) )
+                ),
+                'warning'
             );
+            MyNJILGA_Admin_UI::close();
             return;
         }
 
         $rows = MyNJILGA_Members_Data::get_active_members();
 
-        printf( '<p style="color:#646970">%d active paid member%s.</p>', count( $rows ), count( $rows ) === 1 ? '' : 's' );
-
+        MyNJILGA_Admin_UI::section( 'Members', '', count( $rows ) );
         MyNJILGA_Admin_Menu::render_csv_button( 'members', 'Download Active Paid Members CSV' );
 
-        echo '<table class="widefat striped"><thead><tr>
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
                 <th>Member</th><th>Email</th><th>Firm</th><th>Trustee</th><th>Payment Method</th><th>Paid</th>
               </tr></thead><tbody>';
 
         if ( empty( $rows ) ) {
-            echo '<tr><td colspan="6" style="color:#999;font-style:italic">No paid members yet.</td></tr>';
+            echo '<tr class="njilga-emptyrow"><td colspan="6">No paid members yet.</td></tr>';
         }
 
         foreach ( $rows as $r ) {
             printf(
-                '<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><strong style="color:#1d6f42">PAID</strong></td></tr>',
+                '<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
                 esc_url( $r['member_url'] ),
                 esc_html( $r['member'] ),
                 esc_html( $r['email'] ),
                 esc_html( $r['firm'] ),
                 $r['trustee_status'] !== ''
-                    ? '<strong style="color:#1d6f42">' . esc_html( $r['trustee_status'] ) . '</strong>'
-                    : '<span style="color:#888">—</span>',
-                esc_html( $r['payment_method'] )
+                    ? MyNJILGA_Admin_UI::status( $r['trustee_status'], 'ok' )
+                    : MyNJILGA_Admin_UI::blank(),
+                esc_html( $r['payment_method'] ),
+                MyNJILGA_Admin_UI::pill( 'Paid', 'success' )
             );
         }
 
-        echo '</tbody></table></div>';
+        echo '</tbody></table></div></div>';
+        MyNJILGA_Admin_UI::close();
     }
 }

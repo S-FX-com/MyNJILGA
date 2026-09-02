@@ -16,18 +16,21 @@ class MyNJILGA_Page_Setup {
             wp_die( 'Access denied.' );
         }
 
-        echo '<div class="wrap"><h1>My NJILGA — Setup</h1>';
+        MyNJILGA_Admin_UI::open(
+            'Setup',
+            'Environment checks, the core tag checklist, and the Dues & Billing audit against this FluentCRM instance.'
+        );
 
         if ( ! empty( $_GET['created'] ) ) {
-            printf(
-                '<div class="notice notice-success is-dismissible"><p>Created tag <strong>%s</strong>.</p></div>',
-                esc_html( sanitize_text_field( wp_unslash( $_GET['created'] ) ) )
+            MyNJILGA_Admin_UI::callout(
+                sprintf( 'Created tag <strong>%s</strong>.', esc_html( sanitize_text_field( wp_unslash( $_GET['created'] ) ) ) ),
+                'success'
             );
         }
         if ( ! empty( $_GET['create_error'] ) ) {
-            printf(
-                '<div class="notice notice-error"><p>Could not create tag: %s</p></div>',
-                esc_html( sanitize_text_field( wp_unslash( $_GET['create_error'] ) ) )
+            MyNJILGA_Admin_UI::callout(
+                sprintf( 'Could not create tag: %s', esc_html( sanitize_text_field( wp_unslash( $_GET['create_error'] ) ) ) ),
+                'error'
             );
         }
 
@@ -42,7 +45,7 @@ class MyNJILGA_Page_Setup {
 
         self::render_shortcodes();
 
-        echo '</div>';
+        MyNJILGA_Admin_UI::close();
     }
 
     /**
@@ -96,43 +99,45 @@ class MyNJILGA_Page_Setup {
     // -------------------------------------------------------------------------
 
     private static function render_environment_section(): void {
-        echo '<h2>Environment</h2>';
-        echo '<table class="widefat striped" style="max-width:760px"><tbody>';
+        MyNJILGA_Admin_UI::section( 'Environment', 'What this plugin needs, and whether it is present on this install.' );
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table njilga-kv"><tbody>';
 
         $fcrm = MyNJILGA_Members_Data::fluentcrm_active();
         printf(
-            '<tr><td style="width:280px">FluentCRM core</td><td>%s</td></tr>',
+            '<tr><th>FluentCRM core</th><td>%s</td></tr>',
             $fcrm
-                ? '<strong style="color:#1d6f42">Active</strong>'
-                : '<strong style="color:#d63638">Not detected</strong> — install and activate FluentCRM.'
+                ? MyNJILGA_Admin_UI::pill( 'Active', 'success' )
+                : MyNJILGA_Admin_UI::pill( 'Not detected', 'destructive' ) . ' <span class="njilga-dim">install and activate FluentCRM.</span>'
         );
 
         if ( $fcrm ) {
             $companies = MyNJILGA_Members_Data::companies_module_active();
             $company_count = $companies ? (int) \FluentCrm\App\Models\Company::count() : 0;
             printf(
-                '<tr><td>FluentCRM Companies module</td><td>%s</td></tr>',
+                '<tr><th>FluentCRM Companies module</th><td>%s</td></tr>',
                 $companies
-                    ? sprintf( '<strong style="color:#1d6f42">Active</strong> <span style="color:#888">(%d compan%s)</span>', $company_count, $company_count === 1 ? 'y' : 'ies' )
-                    : '<strong style="color:#b26200">Not detected</strong> — enable Companies in FluentCRM → Settings → Modules.'
+                    ? MyNJILGA_Admin_UI::pill( 'Active', 'success' ) . sprintf( ' <span class="njilga-dim">%d compan%s</span>', $company_count, $company_count === 1 ? 'y' : 'ies' )
+                    : MyNJILGA_Admin_UI::pill( 'Not detected', 'warning' ) . ' <span class="njilga-dim">enable Companies in FluentCRM → Settings → Modules.</span>'
             );
         }
 
         $gateway = MyNJILGA_Invoicing::gateway();
         $ready   = $gateway->is_available() ? $gateway->readiness_errors() : [];
         printf(
-            '<tr><td>%s (invoice gateway)</td><td>%s</td></tr>',
+            '<tr><th>%s (invoice gateway)</th><td>%s</td></tr>',
             esc_html( $gateway->name() ),
             ! $gateway->is_available()
-                ? '<strong style="color:#b26200">Not detected</strong> — needed to create invoices; preview/approve still work.'
-                : ( $ready ? '<strong style="color:#b26200">Active, not ready:</strong> ' . esc_html( $ready[0] ) : '<strong style="color:#1d6f42">Active and ready</strong>' )
+                ? MyNJILGA_Admin_UI::pill( 'Not detected', 'warning' ) . ' <span class="njilga-dim">needed to create invoices; previews still work.</span>'
+                : ( $ready
+                    ? MyNJILGA_Admin_UI::pill( 'Active, not ready', 'warning' ) . ' <span class="njilga-dim">' . esc_html( $ready[0] ) . '</span>'
+                    : MyNJILGA_Admin_UI::pill( 'Active and ready', 'success' ) )
         );
 
         printf(
-            '<tr><td>Action Scheduler (background invoice creation)</td><td>%s</td></tr>',
+            '<tr><th>Action Scheduler (background invoice creation)</th><td>%s</td></tr>',
             function_exists( 'as_enqueue_async_action' )
-                ? '<strong style="color:#1d6f42">Available</strong> <span style="color:#888">(bundled with FluentCart / FluentCRM)</span>'
-                : '<strong style="color:#b26200">Not available</strong> — invoices will be created inline in one request.'
+                ? MyNJILGA_Admin_UI::pill( 'Available', 'success' ) . ' <span class="njilga-dim">bundled with FluentCart / FluentCRM</span>'
+                : MyNJILGA_Admin_UI::pill( 'Not available', 'warning' ) . ' <span class="njilga-dim">invoices will be created inline in one request.</span>'
         );
 
         $roles = [];
@@ -143,34 +148,39 @@ class MyNJILGA_Page_Setup {
         }
         $roleCells = [];
         foreach ( $roles as $slug => $exists ) {
-            $roleCells[] = sprintf( '<code>%s</code> %s', esc_html( $slug ), $exists ? '<span style="color:#1d6f42">✓</span>' : '<span style="color:#d63638">✗ not defined on this site (payment can\'t grant it)</span>' );
+            $roleCells[] = sprintf(
+                '<code>%s</code> %s',
+                esc_html( $slug ),
+                $exists
+                    ? MyNJILGA_Admin_UI::validation( 'defined', true )
+                    : MyNJILGA_Admin_UI::validation( 'not defined on this site (payment can\'t grant it)', false )
+            );
         }
-        printf( '<tr><td>WordPress roles mapped in Settings</td><td>%s</td></tr>', $roleCells ? implode( '<br>', $roleCells ) : '<span style="color:#888">none</span>' );
+        printf( '<tr><th>WordPress roles mapped in Settings</th><td>%s</td></tr>', $roleCells ? implode( '<br>', $roleCells ) : MyNJILGA_Admin_UI::blank() );
 
-        echo '</tbody></table>';
+        echo '</tbody></table></div></div>';
     }
 
     private static function render_tag_checklist(): void {
-        echo '<h2 style="margin-top:24px">Core report tags</h2>';
-        echo '<p style="color:#646970">Used by the report pages. Looked up by slug first, then by exact title.</p>';
-        echo '<table class="widefat striped" style="max-width:900px"><thead><tr>
-                <th>Status</th><th>Title</th><th>Slug</th><th>Required?</th><th>Subscribers</th><th></th>
+        MyNJILGA_Admin_UI::section( 'Core report tags', 'Used by the report pages. Looked up by slug first, then by exact title.' );
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
+                <th>Status</th><th>Title</th><th>Slug</th><th>Required?</th><th class="njilga-col-num">Subscribers</th><th></th>
               </tr></thead><tbody>';
 
         foreach ( MyNJILGA_Tags::DEFINITIONS as $slug => $def ) {
             $tag_id = MyNJILGA_Tags::id_for( $slug );
             printf(
-                '<tr><td>%s</td><td><strong>%s</strong></td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>',
-                $tag_id !== null ? '<strong style="color:#1d6f42">✓ Found</strong>' : '<strong style="color:#d63638">✗ Missing</strong>',
+                '<tr><td>%s</td><td><strong>%s</strong></td><td><code>%s</code></td><td>%s</td><td class="njilga-col-num">%s</td><td>%s</td></tr>',
+                $tag_id !== null ? MyNJILGA_Admin_UI::pill( 'Found', 'success' ) : MyNJILGA_Admin_UI::pill( 'Missing', 'destructive' ),
                 esc_html( $def['title'] ),
                 esc_html( $def['slug'] ),
-                $def['required'] ? 'Yes' : 'Optional',
+                $def['required'] ? 'Yes' : '<span class="njilga-dim">Optional</span>',
                 esc_html( self::subscriber_count( $tag_id ) ),
-                $tag_id === null ? self::create_button( $slug ) : sprintf( '<span style="color:#888">id %d</span>', $tag_id )
+                $tag_id === null ? self::create_button( $slug ) : sprintf( '<span class="njilga-dim">id %d</span>', $tag_id )
             );
         }
 
-        echo '</tbody></table>';
+        echo '</tbody></table></div></div>';
     }
 
     /**
@@ -198,8 +208,11 @@ class MyNJILGA_Page_Setup {
             $add( (string) $q['tag'], 'Assessment qualifier: ' . $q['label'] );
         }
 
-        printf( '<h2 style="margin-top:24px">Dues &amp; Billing tag audit</h2><p style="color:#646970">Every tag slug the <a href="%s">Dues &amp; Billing settings</a> refer to, checked against this FluentCRM instance. Pricing matches on these exact slugs (with an exact-title fallback) — a slug that doesn\'t resolve silently matches nobody.</p>', esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) );
-        echo '<table class="widefat striped" style="max-width:1000px"><thead><tr><th>Status</th><th>Configured slug</th><th>Resolves to</th><th>Subscribers</th><th>Used for</th><th></th></tr></thead><tbody>';
+        MyNJILGA_Admin_UI::section(
+            'Dues & Billing tag audit',
+            sprintf( 'Every tag slug the <a href="%s">Dues &amp; Billing settings</a> refer to, checked against this FluentCRM instance. Pricing matches on these exact slugs (with an exact-title fallback) — a slug that doesn\'t resolve silently matches nobody.', esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) )
+        );
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Status</th><th>Configured slug</th><th>Resolves to</th><th class="njilga-col-num">Subscribers</th><th>Used for</th><th></th></tr></thead><tbody>';
         $missing = 0;
         foreach ( $refs as $slug => $info ) {
             $id  = MyNJILGA_Tags::resolve_slug( $slug );
@@ -208,18 +221,21 @@ class MyNJILGA_Page_Setup {
                 $missing++;
             }
             printf(
-                '<tr><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
-                $id ? '<strong style="color:#1d6f42">✓ Found</strong>' : '<strong style="color:#d63638">✗ Missing</strong>',
+                '<tr><td>%s</td><td><code>%s</code></td><td>%s</td><td class="njilga-col-num">%s</td><td>%s</td><td>%s</td></tr>',
+                $id ? MyNJILGA_Admin_UI::pill( 'Found', 'success' ) : MyNJILGA_Admin_UI::pill( 'Missing', 'destructive' ),
                 esc_html( $slug ),
-                $tag ? sprintf( '<strong>%s</strong> <span style="color:#888">(slug <code>%s</code>, id %d)%s</span>', esc_html( $tag->title ), esc_html( $tag->slug ), (int) $tag->id, $tag->slug !== $slug ? ' — matched by title' : '' ) : '—',
+                $tag ? sprintf( '<strong>%s</strong> <span class="njilga-dim">(slug <code>%s</code>, id %d)%s</span>', esc_html( $tag->title ), esc_html( $tag->slug ), (int) $tag->id, $tag->slug !== $slug ? ' — matched by title' : '' ) : MyNJILGA_Admin_UI::blank(),
                 esc_html( self::subscriber_count( $id ) ),
                 esc_html( implode( '; ', array_unique( $info['uses'] ) ) ),
                 $id ? '' : self::create_button( $slug )
             );
         }
-        echo '</tbody></table>';
+        echo '</tbody></table></div></div>';
         if ( $missing > 0 ) {
-            printf( '<p style="color:#d63638"><strong>%d configured tag%s missing.</strong> Either create %s here (titled from the slug), or change the slug in Settings to match an existing tag from the list at the bottom of this page.</p>', $missing, $missing === 1 ? ' is' : 's are', $missing === 1 ? 'it' : 'them' );
+            MyNJILGA_Admin_UI::callout(
+                sprintf( '<strong>%d configured tag%s missing.</strong> Either create %s here (titled from the slug), or change the slug in Settings to match an existing tag from the list at the bottom of this page.', $missing, $missing === 1 ? ' is' : 's are', $missing === 1 ? 'it' : 'them' ),
+                'error'
+            );
         }
     }
 
@@ -227,9 +243,12 @@ class MyNJILGA_Page_Setup {
         $gateway = MyNJILGA_Invoicing::gateway();
         $s       = MyNJILGA_Dues_Settings::get();
 
-        printf( '<h2 style="margin-top:24px">%s product mapping</h2>', esc_html( $gateway->name() ) );
+        MyNJILGA_Admin_UI::section( $gateway->name() . ' product mapping' );
         if ( ! $gateway->is_available() ) {
-            printf( '<p style="color:#b26200">%s is not active — line items will be created as custom lines until products are mapped.</p>', esc_html( $gateway->name() ) );
+            MyNJILGA_Admin_UI::callout(
+                sprintf( '%s is not active — line items will be created as custom lines until products are mapped.', esc_html( $gateway->name() ) ),
+                'warning'
+            );
             return;
         }
 
@@ -239,11 +258,11 @@ class MyNJILGA_Page_Setup {
         // actually are, or every-row-unmapped on a fresh install reads as
         // broken instead of as "nobody has configured Settings yet."
         printf(
-            '<p style="color:#646970">Read-only — reflects the picks on the <a href="%s">Dues &amp; Billing settings</a> page. A row reading "Not mapped" means no product/variation has been chosen there yet, not that something is broken.</p>',
+            '<p class="njilga-section-desc">Read-only — reflects the picks on the <a href="%s">Dues &amp; Billing settings</a> page. A row reading "Not mapped" means no product/variation has been chosen there yet, not that something is broken.</p>',
             esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) )
         );
 
-        echo '<table class="widefat striped" style="max-width:1000px"><thead><tr><th>Fee</th><th>Charges</th><th>Mapped to</th><th>Status</th></tr></thead><tbody>';
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Fee</th><th class="njilga-col-num">Charges</th><th>Mapped to</th><th>Status</th></tr></thead><tbody>';
         $rows = [];
         foreach ( $s['categories'] as $cat ) {
             if ( ! empty( $cat['tier_eligible'] ) && ! empty( $cat['tiers'] ) ) {
@@ -258,40 +277,40 @@ class MyNJILGA_Page_Setup {
 
         foreach ( $rows as [ $label, $cents, $pid, $vid ] ) {
             if ( $vid <= 0 ) {
-                $status = '<span style="color:#b26200">Not mapped — will be a custom line item</span>';
-                $mapped = '—';
+                $status = MyNJILGA_Admin_UI::validation( 'Not mapped — will be a custom line item', false );
+                $mapped = MyNJILGA_Admin_UI::blank();
             } else {
                 $check  = $gateway->check_variation( $pid, $vid );
                 $mapped = esc_html( $check['label'] !== '' ? $check['label'] : "#$pid / #$vid" );
                 if ( ! $check['ok'] ) {
-                    $status = '<span style="color:#d63638">✗ ' . esc_html( (string) ( $check['error'] ?? 'invalid' ) ) . '</span>';
+                    $status = MyNJILGA_Admin_UI::validation( (string) ( $check['error'] ?? 'invalid' ), false );
                 } elseif ( (int) $check['price_cents'] !== $cents ) {
-                    $status = sprintf( '<span style="color:#b26200">✓ exists, but %s price is %s — invoices charge the Settings price</span>', esc_html( $gateway->name() ), esc_html( MyNJILGA_Invoicing::money( (int) $check['price_cents'] ) ) );
+                    $status = MyNJILGA_Admin_UI::validation( sprintf( 'Exists, but %s price is %s — invoices charge the Settings price', $gateway->name(), MyNJILGA_Invoicing::money( (int) $check['price_cents'] ) ), false );
                 } else {
-                    $status = '<span style="color:#1d6f42">✓ OK</span>';
+                    $status = MyNJILGA_Admin_UI::validation( 'OK', true );
                 }
             }
-            printf( '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>', esc_html( $label ), esc_html( MyNJILGA_Invoicing::money( $cents ) ), $mapped, $status );
+            printf( '<tr><td>%s</td><td class="njilga-col-num">%s</td><td>%s</td><td>%s</td></tr>', esc_html( $label ), esc_html( MyNJILGA_Invoicing::money( $cents ) ), $mapped, $status );
         }
-        echo '</tbody></table>';
+        echo '</tbody></table></div></div>';
     }
 
     private static function render_all_tags(): void {
         $tags = MyNJILGA_Tags::all_tags();
-        echo '<details style="margin-top:24px"><summary style="cursor:pointer;font-size:14px;font-weight:600">All FluentCRM tags on this install (' . count( $tags ) . ') — for documenting the exact slugs</summary>';
-        echo '<table class="widefat striped" style="max-width:700px;margin-top:8px"><thead><tr><th>Title</th><th>Slug</th><th>id</th></tr></thead><tbody>';
+        echo '<details class="njilga-details"><summary>' . MyNJILGA_Admin_UI::icon( 'tag' ) . ' All FluentCRM tags on this install (' . count( $tags ) . ') — for documenting the exact slugs</summary>';
+        echo '<div class="njilga-card njilga-table-boxed" style="margin-top:10px;max-width:760px"><div class="njilga-tablewrap"><table class="njilga-table njilga-table-compact"><thead><tr><th>Title</th><th>Slug</th><th class="njilga-col-num">id</th></tr></thead><tbody>';
         foreach ( $tags as $t ) {
-            printf( '<tr><td>%s</td><td><code>%s</code></td><td style="color:#888">%d</td></tr>', esc_html( $t['title'] ), esc_html( $t['slug'] ), $t['id'] );
+            printf( '<tr><td>%s</td><td><code>%s</code></td><td class="njilga-col-num njilga-dim">%d</td></tr>', esc_html( $t['title'] ), esc_html( $t['slug'] ), $t['id'] );
         }
-        echo '</tbody></table></details>';
+        echo '</tbody></table></div></div></details>';
     }
 
     private static function render_shortcodes(): void {
-        echo '<h2 style="margin-top:24px">Shortcodes</h2>';
-        echo '<table class="widefat striped" style="max-width:900px"><tbody>';
-        echo '<tr><td style="width:320px"><code>[njilga_membership_application]</code></td><td>Public membership application form with firm autocomplete. Applicants land in <strong>My NJILGA → Applications</strong> and are never invoiced until approved.</td></tr>';
-        echo '<tr><td><code>[njilga_firm_dues_status]</code></td><td>Member-facing dues status: logged-in member sees their firm\'s invoices, full roster, amounts and payment link.</td></tr>';
-        echo '</tbody></table>';
+        MyNJILGA_Admin_UI::section( 'Shortcodes', 'Drop these on any page to expose the public-facing parts of the plugin.' );
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table njilga-kv"><tbody>';
+        echo '<tr><th><code>[njilga_membership_application]</code></th><td>Public membership application form with firm autocomplete. Applicants land in <strong>My NJILGA → Applications</strong> and are never invoiced until approved.</td></tr>';
+        echo '<tr><th><code>[njilga_firm_dues_status]</code></th><td>Member-facing dues status: logged-in member sees their firm\'s invoices, full roster, amounts and payment link.</td></tr>';
+        echo '</tbody></table></div></div>';
     }
 
     // -------------------------------------------------------------------------
@@ -310,12 +329,11 @@ class MyNJILGA_Page_Setup {
     }
 
     private static function create_button( string $slug ): string {
-        return sprintf(
-            '<form method="post" action="%s" style="margin:0">%s<input type="hidden" name="action" value="%s"><input type="hidden" name="slug" value="%s"><button type="submit" class="button button-primary">Create</button></form>',
-            esc_url( admin_url( 'admin-post.php' ) ),
-            wp_nonce_field( self::ACTION_CREATE_TAG, '_wpnonce', true, false ),
-            esc_attr( self::ACTION_CREATE_TAG ),
-            esc_attr( $slug )
+        return MyNJILGA_Admin_UI::action_form(
+            self::ACTION_CREATE_TAG,
+            'Create',
+            [ 'slug' => $slug ],
+            'primary'
         );
     }
 

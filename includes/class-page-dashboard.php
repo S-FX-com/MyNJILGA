@@ -9,55 +9,96 @@ class MyNJILGA_Page_Dashboard {
             wp_die( 'Access denied.' );
         }
 
-        echo '<div class="wrap"><h1>My NJILGA</h1>';
+        MyNJILGA_Admin_UI::open(
+            'My NJILGA',
+            'Membership at a glance — counts, firm distribution, and the report exports.'
+        );
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
-            echo '</div>';
+            MyNJILGA_Admin_UI::close();
             return;
         }
 
         self::render_missing_tag_banner();
 
         $s = MyNJILGA_Members_Data::summary();
-        ?>
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:16px;margin:16px 0 24px">
-            <?php
-            self::stat_card( 'Active Paid Members', $s['paid'],     MyNJILGA_Admin_Menu::SLUG_MEMBERS );
-            self::stat_card( 'Trustees',              $s['trustees'], MyNJILGA_Admin_Menu::SLUG_TRUSTEES );
-            self::stat_card( 'Companies with Paid Members', $s['companies_with_paid'], MyNJILGA_Admin_Menu::SLUG_COMPANIES );
-            ?>
-        </div>
 
-        <h2>Company distribution</h2>
-        <ul style="list-style:disc;padding-left:24px">
-            <li>1 Paid Member: <strong><?php echo (int) ( $s['bucket_counts']['1'] ?? 0 ); ?></strong></li>
-            <li>2–5 Paid Members: <strong><?php echo (int) ( $s['bucket_counts']['2-5'] ?? 0 ); ?></strong></li>
-            <li>6+ Paid Members: <strong><?php echo (int) ( $s['bucket_counts']['6+'] ?? 0 ); ?></strong></li>
-            <li style="color:#666">No paid members: <strong><?php echo (int) ( $s['bucket_counts']['0'] ?? 0 ); ?></strong></li>
-        </ul>
+        MyNJILGA_Admin_UI::stat_cards( [
+            [
+                'label' => 'Active Paid Members',
+                'value' => $s['paid'],
+                'variant' => 'success',
+                'icon' => 'check-circle',
+                'url' => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_MEMBERS ),
+            ],
+            [
+                'label' => 'Trustees',
+                'value' => $s['trustees'],
+                'variant' => 'info',
+                'icon' => 'award',
+                'url' => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_TRUSTEES ),
+            ],
+            [
+                'label' => 'Companies with Paid Members',
+                'value' => $s['companies_with_paid'],
+                'variant' => 'default',
+                'icon' => 'building',
+                'url' => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_COMPANIES ),
+            ],
+        ] );
 
-        <h2 style="margin-top:24px">Exports</h2>
-        <p style="color:#646970">Download each report as a CSV from its page:</p>
-        <p style="display:flex;gap:8px;flex-wrap:wrap">
-            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_MEMBERS ) ); ?>">Active Paid Members →</a>
-            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_TRUSTEES ) ); ?>">Trustees →</a>
-            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_COMPANIES ) ); ?>">Companies →</a>
-            <a class="button" href="<?php echo esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_FIRMS ) ); ?>">Membership by Firm →</a>
-        </p>
-        </div>
-        <?php
+        self::render_distribution( $s );
+        self::render_report_links();
+
+        MyNJILGA_Admin_UI::close();
     }
 
-    private static function stat_card( string $label, int $value, string $link_slug ): void {
-        printf(
-            '<a href="%s" style="display:block;padding:16px;background:#fff;border:1px solid #c3c4c7;border-radius:4px;text-decoration:none;color:inherit">
-                <div style="font-size:32px;font-weight:600;line-height:1.1">%d</div>
-                <div style="color:#646970">%s</div>
-             </a>',
-            esc_url( MyNJILGA_Admin_Menu::url( $link_slug ) ),
-            $value,
-            esc_html( $label )
-        );
+    /**
+     * @param array<string,mixed> $s
+     */
+    private static function render_distribution( array $s ): void {
+        MyNJILGA_Admin_UI::section( 'Company distribution', 'Firms bucketed by how many of their contacts carry the Dues Paid tag.' );
+
+        $buckets = [
+            [ '1 Paid Member',     (int) ( $s['bucket_counts']['1'] ?? 0 ),   'success' ],
+            [ '2–5 Paid Members',  (int) ( $s['bucket_counts']['2-5'] ?? 0 ), 'success' ],
+            [ '6+ Paid Members',   (int) ( $s['bucket_counts']['6+'] ?? 0 ),  'success' ],
+            [ 'No Paid Members',   (int) ( $s['bucket_counts']['0'] ?? 0 ),   'destructive' ],
+        ];
+
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table">';
+        echo '<thead><tr><th>Bucket</th><th class="njilga-col-num">Firms</th></tr></thead><tbody>';
+        foreach ( $buckets as [ $label, $count, $tone ] ) {
+            printf(
+                '<tr><td>%s</td><td class="njilga-col-num">%s</td></tr>',
+                esc_html( $label ),
+                MyNJILGA_Admin_UI::status( (string) $count, $count > 0 ? ( $tone === 'success' ? 'ok' : 'bad' ) : 'muted' )
+            );
+        }
+        echo '</tbody></table></div></div>';
+    }
+
+    private static function render_report_links(): void {
+        MyNJILGA_Admin_UI::section( 'Reports', 'Each report opens with its own CSV or Excel export.' );
+
+        $links = [
+            [ 'Active Paid Members', 'Contacts carrying the Dues Paid tag.', MyNJILGA_Admin_Menu::SLUG_MEMBERS,   'check-circle' ],
+            [ 'Trustees',            'Trustees, Senior Trustees and Past Presidents.', MyNJILGA_Admin_Menu::SLUG_TRUSTEES,  'award' ],
+            [ 'Companies',           'Firms bucketed by paid member count.', MyNJILGA_Admin_Menu::SLUG_COMPANIES, 'building' ],
+            [ 'Membership by Firm',  'Every firm with its contacts, dues and roles.', MyNJILGA_Admin_Menu::SLUG_FIRMS,     'users' ],
+        ];
+
+        echo '<div class="njilga-linkcards">';
+        foreach ( $links as [ $title, $desc, $slug, $icon ] ) {
+            printf(
+                '<a class="njilga-linkcard" href="%s"><span class="njilga-linkcard-icon">%s</span><span><span class="njilga-linkcard-title">%s &rarr;</span><span class="njilga-linkcard-desc">%s</span></span></a>',
+                esc_url( MyNJILGA_Admin_Menu::url( $slug ) ),
+                MyNJILGA_Admin_UI::icon( $icon ),
+                esc_html( $title ),
+                esc_html( $desc )
+            );
+        }
+        echo '</div>';
     }
 
     private static function render_missing_tag_banner(): void {
@@ -70,10 +111,13 @@ class MyNJILGA_Page_Dashboard {
         }
         if ( ! $missing ) return;
 
-        printf(
-            '<div class="notice notice-warning"><p>Required FluentCRM tags missing: <strong>%s</strong>. <a href="%s">Open Setup</a> to create them.</p></div>',
-            esc_html( implode( ', ', $missing ) ),
-            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) )
+        MyNJILGA_Admin_UI::callout(
+            sprintf(
+                'Required FluentCRM tags missing: <strong>%s</strong>. <a href="%s">Open Setup</a> to create them.',
+                esc_html( implode( ', ', $missing ) ),
+                esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) )
+            ),
+            'warning'
         );
     }
 }

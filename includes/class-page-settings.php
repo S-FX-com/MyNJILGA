@@ -36,21 +36,22 @@ class MyNJILGA_Page_Settings {
         $tags     = MyNJILGA_Members_Data::fluentcrm_active() ? MyNJILGA_Tags::all_tags() : [];
         $roles    = self::wp_roles();
 
-        echo '<div class="wrap"><h1>Dues &amp; Billing Settings</h1>';
+        MyNJILGA_Admin_UI::open(
+            'Dues & Billing Settings',
+            sprintf( 'FluentCRM tags are the source of truth for who owes what; WordPress roles are a downstream effect of payment, never an input to pricing. Prices below (in dollars) are what invoices charge; the mapped product/variation is what each line item points at in %s.', $gateway->name() )
+        );
 
         if ( ! empty( $_GET['saved'] ) ) {
-            echo '<div class="notice notice-success is-dismissible"><p>Settings saved.</p></div>';
+            MyNJILGA_Admin_UI::callout( 'Settings saved.', 'success' );
         }
         if ( ! empty( $_GET['reset'] ) ) {
-            echo '<div class="notice notice-success is-dismissible"><p>Settings reset to the seeded defaults.</p></div>';
+            MyNJILGA_Admin_UI::callout( 'Settings reset to the seeded defaults.', 'success' );
         }
 
-        echo '<p style="color:#646970;max-width:820px">FluentCRM tags are the source of truth for who owes what; WordPress roles are a downstream effect of payment, never an input to pricing. Prices below (in dollars) are what invoices charge; the mapped product/variation is what each line item points at in ' . esc_html( $gateway->name() ) . '.</p>';
-
         if ( ! $gateway->is_available() ) {
-            printf( '<div class="notice notice-warning"><p><strong>%s is not active</strong> — product pickers are empty. Categories still price correctly; line items will be created as custom lines until products are mapped.</p></div>', esc_html( $gateway->name() ) );
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>%s is not active</strong> — product pickers are empty. Categories still price correctly; line items will be created as custom lines until products are mapped.', esc_html( $gateway->name() ) ), 'warning' );
         } elseif ( empty( $products ) ) {
-            printf( '<div class="notice notice-warning"><p><strong>No %s products found.</strong> Create the dues products first (Professional Membership with its three variations, Emerging Professional, Law Student, Past President (Exempt), Senior Trustee (Exempt), Trustee Dinner Assessment), then map them here.</p></div>', esc_html( $gateway->name() ) );
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>No %s products found.</strong> Create the dues products first (Professional Membership with its three variations, Emerging Professional, Law Student, Past President (Exempt), Senior Trustee (Exempt), Trustee Dinner Assessment), then map them here.', esc_html( $gateway->name() ) ), 'warning' );
         }
 
         self::render_tag_datalist( $tags );
@@ -64,20 +65,23 @@ class MyNJILGA_Page_Settings {
         self::render_assessment( $s, $products, $tags, $gateway );
         self::render_firm_overrides( $s );
 
-        echo '<p style="margin-top:24px"><button type="submit" class="button button-primary button-large">Save Settings</button></p>';
+        echo '<div class="njilga-actions" style="margin-top:24px"><button type="submit" class="njilga-btn njilga-btn-primary njilga-btn-lg">Save Settings</button></div>';
         echo '</form>';
 
-        printf(
-            '<form method="post" action="%s" style="margin-top:8px" onsubmit="return confirm(\'Reset every Dues & Billing setting to the seeded defaults? Firm overrides are cleared too.\')">
-                <input type="hidden" name="action" value="%s">%s
-                <button type="submit" class="button" style="color:#d63638;border-color:#d63638">Reset to defaults</button>
-             </form>',
-            esc_url( admin_url( 'admin-post.php' ) ),
-            esc_attr( self::ACTION_RESET ),
-            wp_nonce_field( self::ACTION_RESET, '_wpnonce', true, false )
+        echo '<div class="njilga-danger-card" style="max-width:640px">';
+        echo '<div class="njilga-danger-head">' . MyNJILGA_Admin_UI::icon( 'alert' ) . '<h2>Reset settings</h2></div>';
+        echo '<p>Restores every Dues &amp; Billing setting to the seeded defaults. Per-firm billing overrides are cleared too. Invoices already generated are not touched.</p>';
+        echo MyNJILGA_Admin_UI::action_form(
+            self::ACTION_RESET,
+            'Reset to defaults',
+            [],
+            'danger',
+            '',
+            'Reset every Dues & Billing setting to the seeded defaults? Firm overrides are cleared too.'
         );
-
         echo '</div>';
+
+        MyNJILGA_Admin_UI::close();
     }
 
     // -------------------------------------------------------------------------
@@ -86,15 +90,16 @@ class MyNJILGA_Page_Settings {
 
     private static function render_general( array $s, array $tags ): void {
         $g = $s['general'];
-        echo '<h2 style="margin-top:24px">General</h2><table class="form-table" role="presentation"><tbody>';
+        MyNJILGA_Admin_UI::section( 'General', 'Global switches: the fallback category, the evergreen and per-year tags, email policy, and enrollment.' );
+        echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
 
         // Default category.
         echo '<tr><th scope="row"><label for="g-default_category">Default category</label></th><td>';
-        echo '<select id="g-default_category" name="general[default_category]"><option value="">— Not billed (list as an exception) —</option>';
+        echo '<select id="g-default_category" name="general[default_category]" class="njilga-select"><option value="">— Not billed (list as an exception) —</option>';
         foreach ( $s['categories'] as $cat ) {
             printf( '<option value="%s"%s>%s</option>', esc_attr( $cat['key'] ), selected( $g['default_category'], $cat['key'], false ), esc_html( $cat['label'] ) );
         }
-        echo '</select><p class="description">Contacts carrying none of the category tags below fall into this category. Seeded to Professional so an untagged roster bills the way it does today.</p></td></tr>';
+        echo '</select><p class="njilga-help">Contacts carrying none of the category tags below fall into this category. Seeded to Professional so an untagged roster bills the way it does today.</p></td></tr>';
 
         self::text_row( 'general[inactive_tag]', 'Inactive override tag', $g['inactive_tag'], 'Tag slug. A contact carrying it is billed nothing this cycle — no dues, no assessment — whatever else they carry.', $tags );
         self::text_row( 'general[paid_tag]', 'Evergreen "paid" tag', $g['paid_tag'], 'Applied to every member of a paid dues invoice; read by every report in this plugin.', $tags );
@@ -104,25 +109,26 @@ class MyNJILGA_Page_Settings {
         self::text_row( 'general[assessment_paid_pattern]', 'Assessment paid tag pattern', $g['assessment_paid_pattern'], 'Applied when an assessment-only invoice (split-assessment billing) is paid.' );
 
         // CC mode.
-        echo '<tr><th scope="row">Invoice email recipients</th><td>';
+        echo '<tr><th scope="row">Invoice email recipients</th><td><div class="njilga-radio-list">';
         foreach ( MyNJILGA_Dues_Settings::cc_mode_labels() as $val => $label ) {
-            printf( '<label style="display:block;margin-bottom:4px"><input type="radio" name="general[send_cc_mode]" value="%s"%s> %s</label>', esc_attr( $val ), checked( $g['send_cc_mode'], $val, false ), esc_html( $label ) );
+            printf( '<label class="njilga-check-label"><input type="radio" name="general[send_cc_mode]" value="%s"%s> <span>%s</span></label>', esc_attr( $val ), checked( $g['send_cc_mode'], $val, false ), esc_html( $label ) );
         }
-        printf( '<p><label for="g-cc">Fixed CC list</label><br><textarea id="g-cc" name="general[send_cc_emails]" rows="2" class="large-text" placeholder="treasurer@njilga.org, admin@njilga.org">%s</textarea></p>', esc_textarea( (string) $g['send_cc_emails'] ) );
-        printf( '<p><label for="g-replyto">Reply-To</label><br><input type="email" id="g-replyto" name="general[send_reply_to]" value="%s" class="regular-text" placeholder="dues@njilga.org"></p>', esc_attr( (string) $g['send_reply_to'] ) );
+        echo '</div>';
+        printf( '<div class="njilga-field"><label for="g-cc">Fixed CC list</label><textarea id="g-cc" name="general[send_cc_emails]" rows="2" class="large-text" placeholder="treasurer@njilga.org, admin@njilga.org">%s</textarea></div>', esc_textarea( (string) $g['send_cc_emails'] ) );
+        printf( '<div class="njilga-field"><label for="g-replyto">Reply-To</label><input type="email" id="g-replyto" name="general[send_reply_to]" value="%s" class="regular-text" placeholder="dues@njilga.org"></div>', esc_attr( (string) $g['send_reply_to'] ) );
         echo '</td></tr>';
 
         // Downgrade.
         echo '<tr><th scope="row">Downgrade sweep</th><td>';
-        printf( '<label><input type="checkbox" name="general[downgrade_remove_roles]" value="1"%s> Remove the category\'s WordPress role from members of invoices that were never paid</label>', checked( ! empty( $g['downgrade_remove_roles'] ), true, false ) );
-        echo '<p class="description">Tags are always applied; this only controls the role. Runs manually, behind a confirmation screen, from the Invoicing page.</p></td></tr>';
+        printf( '<label class="njilga-check-label"><input type="checkbox" name="general[downgrade_remove_roles]" value="1"%s> <span>Remove the category\'s WordPress role from members of invoices that were never paid</span></label>', checked( ! empty( $g['downgrade_remove_roles'] ), true, false ) );
+        echo '<p class="njilga-help">Tags are always applied; this only controls the role. Runs manually, behind a confirmation screen, from the Invoicing page.</p></td></tr>';
 
         // Mid-year join policy.
-        echo '<tr><th scope="row">Mid-year join policy</th><td>';
+        echo '<tr><th scope="row">Mid-year join policy</th><td><div class="njilga-radio-list">';
         foreach ( MyNJILGA_Dues_Settings::join_policy_labels() as $val => $label ) {
-            printf( '<label style="display:block;margin-bottom:4px"><input type="radio" name="general[mid_year_join_policy]" value="%s"%s> %s</label>', esc_attr( $val ), checked( $g['mid_year_join_policy'], $val, false ), esc_html( $label ) );
+            printf( '<label class="njilga-check-label"><input type="radio" name="general[mid_year_join_policy]" value="%s"%s> <span>%s</span></label>', esc_attr( $val ), checked( $g['mid_year_join_policy'], $val, false ), esc_html( $label ) );
         }
-        echo '<p class="description">Applied when an application is approved (Applications page). Final policy is still to be confirmed by NJILGA (spec §3.5) — the default is "free until next cycle".</p></td></tr>';
+        echo '</div><p class="njilga-help">Applied when an application is approved (Applications page). Final policy is still to be confirmed by NJILGA (spec §3.5) — the default is "free until next cycle".</p></td></tr>';
 
         // Enrollment.
         self::text_row( 'general[pending_tag]', 'Pending-approval tag', $g['pending_tag'], 'Applied to an applicant on submission; removed on approval/rejection. Contacts carrying it are never invoiced.', $tags );
@@ -130,19 +136,21 @@ class MyNJILGA_Page_Settings {
         self::text_row( 'general[application_notify_email]', 'Notify staff on new application', $g['application_notify_email'], 'Comma-separated. Blank = the site admin email.' );
         echo '<tr><th scope="row"><label for="g-success">Application success message</label></th><td>';
         printf( '<textarea id="g-success" name="general[application_success_text]" rows="2" class="large-text">%s</textarea>', esc_textarea( (string) $g['application_success_text'] ) );
-        echo '<p class="description">Shown to the applicant after the <code>[njilga_membership_application]</code> form is submitted.</p></td></tr>';
+        echo '<p class="njilga-help">Shown to the applicant after the <code>[njilga_membership_application]</code> form is submitted.</p></td></tr>';
 
         self::text_row( 'general[batch_size]', 'Invoice creation batch size', (string) (int) $g['batch_size'], 'Invoices created per background job (Action Scheduler). Default 25.' );
 
-        echo '</tbody></table>';
+        echo '</tbody></table></div>';
     }
 
     private static function render_categories( array $s, array $products, array $tags, array $roles, MyNJILGA_Invoice_Gateway $gateway ): void {
-        echo '<h2 style="margin-top:32px">Membership categories</h2>';
-        echo '<p style="color:#646970;max-width:820px">Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> is granted on payment, best-effort.</p>';
+        MyNJILGA_Admin_UI::section(
+            'Membership categories',
+            'Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> is granted on payment, best-effort.'
+        );
 
-        echo '<table class="widefat striped" style="max-width:1200px"><thead><tr>
-                <th style="width:60px">Order</th><th style="min-width:200px">Label</th><th style="min-width:180px">Tag slug</th><th style="min-width:260px">Product / variation</th><th style="width:90px">Price ($)</th><th>Role</th><th style="width:70px">Tier-eligible</th><th style="width:80px">Applicant may pick</th><th style="width:50px">Delete</th>
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
+                <th style="width:70px">Order</th><th style="min-width:200px">Label</th><th style="min-width:180px">Tag slug</th><th style="min-width:260px">Product / variation</th><th style="width:100px">Price ($)</th><th>Role</th><th style="width:80px">Tier-eligible</th><th style="width:90px">Applicant may pick</th><th style="width:60px">Delete</th>
               </tr></thead><tbody>';
 
         $rows = $s['categories'];
@@ -150,16 +158,16 @@ class MyNJILGA_Page_Settings {
         foreach ( $rows as $i => $cat ) {
             $isNew = $cat['key'] === '';
             $n     = "categories[$i]";
-            echo '<tr' . ( $isNew ? ' style="background:#f6f7f7"' : '' ) . '>';
-            printf( '<td><input type="number" name="%s[order]" value="%d" min="0" style="width:56px"></td>', $n, $isNew ? 999 : $i + 1 );
-            printf( '<td><input type="text" name="%s[label]" value="%s" class="regular-text" placeholder="%s" style="width:100%%">%s</td>', $n, esc_attr( $cat['label'] ), $isNew ? 'New category label…' : '', $isNew ? '' : sprintf( '<input type="hidden" name="%s[key]" value="%s"><div style="color:#888;font-size:11px">key: %s</div>', $n, esc_attr( $cat['key'] ), esc_html( $cat['key'] ) ) );
-            printf( '<td><input type="text" list="njilga-tags" name="%s[tag]" value="%s" style="width:100%%">%s</td>', $n, esc_attr( $cat['tag'] ), self::tag_check( $cat['tag'] ) );
+            echo '<tr' . ( $isNew ? ' class="njilga-newrow"' : '' ) . '>';
+            printf( '<td><input type="number" name="%s[order]" value="%d" min="0" class="njilga-input-sm" style="width:64px"></td>', $n, $isNew ? 999 : $i + 1 );
+            printf( '<td><input type="text" name="%s[label]" value="%s" placeholder="%s" class="njilga-full">%s</td>', $n, esc_attr( $cat['label'] ), $isNew ? 'New category label…' : '', $isNew ? '' : sprintf( '<input type="hidden" name="%s[key]" value="%s"><div class="njilga-dim" style="font-size:11px;margin-top:4px">key: %s</div>', $n, esc_attr( $cat['key'] ), esc_html( $cat['key'] ) ) );
+            printf( '<td><input type="text" list="njilga-tags" name="%s[tag]" value="%s" class="njilga-full">%s</td>', $n, esc_attr( $cat['tag'] ), self::tag_check( $cat['tag'] ) );
             printf( '<td>%s%s</td>', self::product_select( "{$n}[product]", (int) $cat['product_id'], (int) $cat['variation_id'], $products ), self::variation_check( $gateway, (int) $cat['product_id'], (int) $cat['variation_id'], (int) $cat['price_cents'] ) );
-            printf( '<td><input type="number" step="0.01" min="0" name="%s[price]" value="%s" style="width:84px"></td>', $n, esc_attr( number_format( $cat['price_cents'] / 100, 2, '.', '' ) ) );
+            printf( '<td><input type="number" step="0.01" min="0" name="%s[price]" value="%s" style="width:92px"></td>', $n, esc_attr( number_format( $cat['price_cents'] / 100, 2, '.', '' ) ) );
             printf( '<td>%s</td>', self::role_select( "{$n}[role]", $cat['role'], $roles ) );
-            printf( '<td style="text-align:center"><input type="checkbox" name="%s[tier_eligible]" value="1"%s></td>', $n, checked( ! empty( $cat['tier_eligible'] ), true, false ) );
-            printf( '<td style="text-align:center"><input type="checkbox" name="%s[applicant_selectable]" value="1"%s></td>', $n, checked( ! empty( $cat['applicant_selectable'] ), true, false ) );
-            printf( '<td style="text-align:center">%s</td>', $isNew ? '' : sprintf( '<input type="checkbox" name="%s[delete]" value="1">', $n ) );
+            printf( '<td class="njilga-col-center"><input type="checkbox" name="%s[tier_eligible]" value="1"%s></td>', $n, checked( ! empty( $cat['tier_eligible'] ), true, false ) );
+            printf( '<td class="njilga-col-center"><input type="checkbox" name="%s[applicant_selectable]" value="1"%s></td>', $n, checked( ! empty( $cat['applicant_selectable'] ), true, false ) );
+            printf( '<td class="njilga-col-center">%s</td>', $isNew ? '' : sprintf( '<input type="checkbox" name="%s[delete]" value="1">', $n ) );
             echo '</tr>';
 
             // Tier table (used only when tier-eligible).
@@ -172,52 +180,56 @@ class MyNJILGA_Page_Settings {
                 ];
             }
             $tiers[] = [ 'key' => '', 'label' => '', 'from' => 0, 'to' => 0, 'price_cents' => 0, 'variation_id' => 0 ];
-            echo '<tr><td></td><td colspan="8" style="padding:0 8px 10px"><details' . ( ! empty( $cat['tier_eligible'] ) ? ' open' : '' ) . '><summary style="cursor:pointer;color:#2271b1;font-size:12px">Tier pricing by rank (used only when Tier-eligible is checked)</summary>';
-            echo '<table class="widefat" style="margin-top:6px;max-width:900px"><thead><tr><th>Tier label</th><th style="width:80px">From rank</th><th style="width:80px">To rank (0 = open)</th><th style="width:90px">Price ($)</th><th>Variation</th></tr></thead><tbody>';
+            echo '<tr><td></td><td colspan="8" style="padding:0 14px 12px"><details class="njilga-details" style="margin:0"' . ( ! empty( $cat['tier_eligible'] ) ? ' open' : '' ) . '><summary>' . MyNJILGA_Admin_UI::icon( 'sliders' ) . ' Tier pricing by rank (used only when Tier-eligible is checked)</summary>';
+            echo '<div class="njilga-card njilga-table-boxed" style="margin-top:8px;max-width:940px"><div class="njilga-tablewrap"><table class="njilga-table njilga-table-compact"><thead><tr><th>Tier label</th><th style="width:90px">From rank</th><th style="width:110px">To rank (0 = open)</th><th style="width:100px">Price ($)</th><th>Variation</th></tr></thead><tbody>';
             foreach ( $tiers as $j => $t ) {
                 $tn = "{$n}[tiers][$j]";
                 echo '<tr>';
-                printf( '<td><input type="text" name="%s[label]" value="%s" style="width:100%%" placeholder="%s"><input type="hidden" name="%s[key]" value="%s"></td>', $tn, esc_attr( $t['label'] ), $t['key'] === '' ? 'Add a tier…' : '', $tn, esc_attr( $t['key'] ) );
-                printf( '<td><input type="number" name="%s[from]" value="%d" min="0" style="width:70px"></td>', $tn, (int) $t['from'] );
-                printf( '<td><input type="number" name="%s[to]" value="%d" min="0" style="width:70px"></td>', $tn, (int) $t['to'] );
-                printf( '<td><input type="number" step="0.01" min="0" name="%s[price]" value="%s" style="width:84px"></td>', $tn, esc_attr( number_format( $t['price_cents'] / 100, 2, '.', '' ) ) );
+                printf( '<td><input type="text" name="%s[label]" value="%s" class="njilga-full njilga-input-sm" placeholder="%s"><input type="hidden" name="%s[key]" value="%s"></td>', $tn, esc_attr( $t['label'] ), $t['key'] === '' ? 'Add a tier…' : '', $tn, esc_attr( $t['key'] ) );
+                printf( '<td><input type="number" name="%s[from]" value="%d" min="0" class="njilga-input-sm" style="width:76px"></td>', $tn, (int) $t['from'] );
+                printf( '<td><input type="number" name="%s[to]" value="%d" min="0" class="njilga-input-sm" style="width:76px"></td>', $tn, (int) $t['to'] );
+                printf( '<td><input type="number" step="0.01" min="0" name="%s[price]" value="%s" class="njilga-input-sm" style="width:92px"></td>', $tn, esc_attr( number_format( $t['price_cents'] / 100, 2, '.', '' ) ) );
                 printf( '<td>%s%s</td>', self::product_select( "{$tn}[product]", (int) $cat['product_id'], (int) $t['variation_id'], $products, true ), $t['key'] !== '' ? self::variation_check( $gateway, 0, (int) $t['variation_id'], (int) $t['price_cents'] ) : '' );
                 echo '</tr>';
             }
-            echo '</tbody></table></details></td></tr>';
+            echo '</tbody></table></div></div></details></td></tr>';
         }
-        echo '</tbody></table>';
+        echo '</tbody></table></div></div>';
     }
 
     private static function render_assessment( array $s, array $products, array $tags, MyNJILGA_Invoice_Gateway $gateway ): void {
         $a = $s['assessment'];
-        echo '<h2 style="margin-top:32px">Assessment</h2>';
-        echo '<p style="color:#646970;max-width:820px">One flat charge per qualifying ACTIVE contact, on top of their dues (an exempt Senior Trustee still owes it). Qualifying tags are matched in order; the first one a contact carries labels their line. Capped at one per person.</p>';
-        echo '<table class="form-table" role="presentation"><tbody>';
+        MyNJILGA_Admin_UI::section(
+            'Assessment',
+            'One flat charge per qualifying ACTIVE contact, on top of their dues (an exempt Senior Trustee still owes it). Qualifying tags are matched in order; the first one a contact carries labels their line. Capped at one per person.'
+        );
+        echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
         self::text_row( 'assessment[label]', 'Label', $a['label'], 'Printed on the invoice line, e.g. "Trustee Dinner Assessment".' );
         echo '<tr><th scope="row">Product / variation</th><td>' . self::product_select( 'assessment[product]', (int) $a['product_id'], (int) $a['variation_id'], $products ) . self::variation_check( $gateway, (int) $a['product_id'], (int) $a['variation_id'], (int) $a['price_cents'] ) . '</td></tr>';
-        printf( '<tr><th scope="row"><label for="a-price">Price ($)</label></th><td><input type="number" step="0.01" min="0" id="a-price" name="assessment[price]" value="%s" style="width:100px"></td></tr>', esc_attr( number_format( $a['price_cents'] / 100, 2, '.', '' ) ) );
-        echo '</tbody></table>';
+        printf( '<tr><th scope="row"><label for="a-price">Price ($)</label></th><td><input type="number" step="0.01" min="0" id="a-price" name="assessment[price]" value="%s" style="width:110px"></td></tr>', esc_attr( number_format( $a['price_cents'] / 100, 2, '.', '' ) ) );
+        echo '</tbody></table></div>';
 
-        echo '<table class="widefat striped" style="max-width:720px"><thead><tr><th style="width:60px">Order</th><th>Qualifying tag slug</th><th>Label on invoice</th><th style="width:50px">Delete</th></tr></thead><tbody>';
+        echo '<div class="njilga-card njilga-table-boxed" style="max-width:780px"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th style="width:70px">Order</th><th>Qualifying tag slug</th><th>Label on invoice</th><th style="width:60px">Delete</th></tr></thead><tbody>';
         $qs   = $a['qualifiers'];
         $qs[] = [ 'tag' => '', 'label' => '' ];
         foreach ( $qs as $i => $q ) {
             $n     = "assessment[qualifiers][$i]";
             $isNew = $q['tag'] === '';
-            echo '<tr' . ( $isNew ? ' style="background:#f6f7f7"' : '' ) . '>';
-            printf( '<td><input type="number" name="%s[order]" value="%d" min="0" style="width:56px"></td>', $n, $isNew ? 999 : $i + 1 );
-            printf( '<td><input type="text" list="njilga-tags" name="%s[tag]" value="%s" style="width:100%%" placeholder="%s">%s</td>', $n, esc_attr( $q['tag'] ), $isNew ? 'Add a qualifying tag…' : '', self::tag_check( $q['tag'] ) );
-            printf( '<td><input type="text" name="%s[label]" value="%s" style="width:100%%"></td>', $n, esc_attr( $q['label'] ) );
-            printf( '<td style="text-align:center">%s</td>', $isNew ? '' : sprintf( '<input type="checkbox" name="%s[delete]" value="1">', $n ) );
+            echo '<tr' . ( $isNew ? ' class="njilga-newrow"' : '' ) . '>';
+            printf( '<td><input type="number" name="%s[order]" value="%d" min="0" class="njilga-input-sm" style="width:64px"></td>', $n, $isNew ? 999 : $i + 1 );
+            printf( '<td><input type="text" list="njilga-tags" name="%s[tag]" value="%s" class="njilga-full" placeholder="%s">%s</td>', $n, esc_attr( $q['tag'] ), $isNew ? 'Add a qualifying tag…' : '', self::tag_check( $q['tag'] ) );
+            printf( '<td><input type="text" name="%s[label]" value="%s" class="njilga-full"></td>', $n, esc_attr( $q['label'] ) );
+            printf( '<td class="njilga-col-center">%s</td>', $isNew ? '' : sprintf( '<input type="checkbox" name="%s[delete]" value="1">', $n ) );
             echo '</tr>';
         }
-        echo '</tbody></table>';
+        echo '</tbody></table></div></div>';
     }
 
     private static function render_firm_overrides( array $s ): void {
-        echo '<h2 style="margin-top:32px">Per-firm billing mode</h2>';
-        echo '<p style="color:#646970;max-width:820px">Every firm gets one invoice to its Owner unless overridden here. Overrides take effect the next time a preview is generated (firms already approved for a year keep their rows).</p>';
+        MyNJILGA_Admin_UI::section(
+            'Per-firm billing mode',
+            'Every firm gets one invoice to its Owner unless overridden here. Overrides take effect the next time a preview is generated (firms already invoiced for a year keep their rows).'
+        );
 
         $companies = [];
         if ( MyNJILGA_Members_Data::companies_module_active() ) {
@@ -227,30 +239,30 @@ class MyNJILGA_Page_Settings {
         }
         $modes = MyNJILGA_Dues_Settings::billing_mode_labels();
 
-        echo '<table class="widefat striped" style="max-width:900px"><thead><tr><th>Firm</th><th>Billing mode</th></tr></thead><tbody>';
+        echo '<div class="njilga-card njilga-table-boxed" style="max-width:940px"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Firm</th><th>Billing mode</th></tr></thead><tbody>';
         foreach ( $s['firm_overrides'] as $companyId => $mode ) {
-            printf( '<tr><td>%s <span style="color:#888">#%d</span><input type="hidden" name="firm_overrides[%d][company_id]" value="%d"></td><td><select name="firm_overrides[%d][mode]">', esc_html( $companies[ $companyId ] ?? 'Company' ), $companyId, $companyId, $companyId, $companyId );
+            printf( '<tr><td>%s <span class="njilga-dim">#%d</span><input type="hidden" name="firm_overrides[%d][company_id]" value="%d"></td><td><select name="firm_overrides[%d][mode]" class="njilga-select">', esc_html( $companies[ $companyId ] ?? 'Company' ), $companyId, $companyId, $companyId, $companyId );
             foreach ( $modes as $val => $label ) {
                 printf( '<option value="%s"%s>%s</option>', esc_attr( $val ), selected( $mode, $val, false ), esc_html( $label ) );
             }
             echo '</select></td></tr>';
         }
         // Add row.
-        echo '<tr style="background:#f6f7f7"><td><select name="firm_overrides[new][company_id]"><option value="0">— Add a firm override —</option>';
+        echo '<tr class="njilga-newrow"><td><select name="firm_overrides[new][company_id]" class="njilga-select"><option value="0">— Add a firm override —</option>';
         foreach ( $companies as $id => $name ) {
             if ( isset( $s['firm_overrides'][ $id ] ) ) {
                 continue;
             }
             printf( '<option value="%d">%s</option>', $id, esc_html( $name ) );
         }
-        echo '</select></td><td><select name="firm_overrides[new][mode]">';
+        echo '</select></td><td><select name="firm_overrides[new][mode]" class="njilga-select">';
         foreach ( $modes as $val => $label ) {
             if ( $val === MyNJILGA_Dues_Settings::MODE_FIRM ) {
                 continue;
             }
             printf( '<option value="%s">%s</option>', esc_attr( $val ), esc_html( $label ) );
         }
-        echo '</select></td></tr></tbody></table>';
+        echo '</select></td></tr></tbody></table></div></div>';
     }
 
     // -------------------------------------------------------------------------
@@ -260,7 +272,7 @@ class MyNJILGA_Page_Settings {
     private static function text_row( string $name, string $label, $value, string $help, array $tags = [] ): void {
         $id = 'f-' . sanitize_key( str_replace( [ '[', ']' ], '-', $name ) );
         printf(
-            '<tr><th scope="row"><label for="%s">%s</label></th><td><input type="text" id="%s" name="%s" value="%s" class="regular-text"%s>%s<p class="description">%s</p></td></tr>',
+            '<tr><th scope="row"><label for="%s">%s</label></th><td><input type="text" id="%s" name="%s" value="%s" class="regular-text"%s>%s<p class="njilga-help">%s</p></td></tr>',
             esc_attr( $id ),
             esc_html( $label ),
             esc_attr( $id ),
@@ -286,24 +298,24 @@ class MyNJILGA_Page_Settings {
         }
         $id = MyNJILGA_Tags::resolve_slug( $slug );
         return $id
-            ? sprintf( '<div style="color:#1d6f42;font-size:11px">✓ tag #%d</div>', $id )
-            : '<div style="color:#d63638;font-size:11px">✗ no such tag — create it in FluentCRM or on the Setup page</div>';
+            ? sprintf( '<div class="njilga-note-ok">&#10003; tag #%d</div>', $id )
+            : '<div class="njilga-note-bad">&#10007; no such tag — create it in FluentCRM or on the Setup page</div>';
     }
 
     private static function variation_check( MyNJILGA_Invoice_Gateway $gateway, int $productId, int $variationId, int $priceCents ): string {
         if ( $variationId <= 0 ) {
-            return '<div style="color:#b26200;font-size:11px">no product mapped — line will be created as a custom line</div>';
+            return '<div class="njilga-note-warn">no product mapped — line will be created as a custom line</div>';
         }
         if ( ! $gateway->is_available() ) {
             return '';
         }
         $check = $gateway->check_variation( $productId, $variationId );
         if ( ! $check['ok'] ) {
-            return sprintf( '<div style="color:#d63638;font-size:11px">✗ %s</div>', esc_html( (string) ( $check['error'] ?? 'invalid' ) ) );
+            return sprintf( '<div class="njilga-note-bad">&#10007; %s</div>', esc_html( (string) ( $check['error'] ?? 'invalid' ) ) );
         }
-        $out = sprintf( '<div style="color:#1d6f42;font-size:11px">✓ %s (%s)</div>', esc_html( $check['label'] ), esc_html( MyNJILGA_Invoicing::money( (int) $check['price_cents'] ) ) );
+        $out = sprintf( '<div class="njilga-note-ok">&#10003; %s (%s)</div>', esc_html( $check['label'] ), esc_html( MyNJILGA_Invoicing::money( (int) $check['price_cents'] ) ) );
         if ( (int) $check['price_cents'] !== $priceCents ) {
-            $out .= sprintf( '<div style="color:#b26200;font-size:11px">price differs from %s (%s) — the price here is what\'s charged</div>', esc_html( $gateway->name() ), esc_html( MyNJILGA_Invoicing::money( (int) $check['price_cents'] ) ) );
+            $out .= sprintf( '<div class="njilga-note-warn">price differs from %s (%s) — the price here is what\'s charged</div>', esc_html( $gateway->name() ), esc_html( MyNJILGA_Invoicing::money( (int) $check['price_cents'] ) ) );
         }
         return $out;
     }

@@ -1,5 +1,20 @@
 # My NJILGA — project instructions for Claude
 
+## UI work goes through the design system
+
+Every admin screen is built from `includes/class-admin-ui.php`
+(`MyNJILGA_Admin_UI`) — one scoped stylesheet plus render helpers, modelled
+on shadcn/ui element styles. **Read `design.md` before touching any admin
+markup.**
+
+Short version: never write inline styles in a page class, never use
+WordPress admin classes (`widefat`, `button`, `notice notice-*`,
+`form-table`, `nav-tab`, `description`) — each has a `njilga-*`
+replacement. Open pages with `MyNJILGA_Admin_UI::open()` / `::close()`.
+The only place inline styles are still correct is the Excel exporters
+(`class-report-xls.php`, `class-report-summary.php`), because Excel only
+understands literal styling.
+
 ## ALWAYS bump the plugin version when you change the repo
 
 This plugin auto-updates installed WordPress sites via
