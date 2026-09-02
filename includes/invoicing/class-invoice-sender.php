@@ -13,7 +13,7 @@ class MyNJILGA_Invoice_Sender {
      * @return array{ok:bool, error?:string}
      */
     public static function send_for_row( object $invoiceRow ): array {
-        if ( empty( $invoiceRow->fluentcart_order_uuid ) ) {
+        if ( empty( $invoiceRow->hosted_invoice_url ) ) {
             return [ 'ok' => false, 'error' => 'No order on this row yet — create the invoice first.' ];
         }
 
@@ -33,7 +33,7 @@ class MyNJILGA_Invoice_Sender {
             return [ 'ok' => false, 'error' => 'Bill-to contact not found or has no email on file.' ];
         }
 
-        $link = MyNJILGA_Invoice_Creator::payment_link( (string) $invoiceRow->fluentcart_order_uuid );
+        $link = (string) ( $invoiceRow->hosted_invoice_url ?? '' );
         if ( $link === '' ) {
             return [ 'ok' => false, 'error' => 'Could not build a payment link for this order.' ];
         }
@@ -62,6 +62,10 @@ class MyNJILGA_Invoice_Sender {
             $blocks[] = $covers;
         }
         $blocks[] = 'Pay online here: ' . $link;
+        $remittanceAddress = trim( (string) MyNJILGA_Stripe_Connection::setting( 'remittance_address', '' ) );
+        if ( $remittanceAddress !== '' ) {
+            $blocks[] = 'Pay online at the link above, or mail a check to: ' . $remittanceAddress;
+        }
         $blocks[] = "Thank you,\nNJILGA";
 
         $subject = $isAssess

@@ -2,8 +2,8 @@
 /**
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
- * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (FluentCart + FluentCRM), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
- * Version:     2.11.0
+ * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
+ * Version:     3.0.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -52,14 +52,22 @@ require_once NJILGA_REPORT_DIR . 'includes/class-page-firms.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-setup.php';
 
 // Dues Invoicing — annual, admin-triggered batch invoicing through the
-// InvoiceGateway (FluentCart). See includes/invoicing/ and README.
+// InvoiceGateway (Stripe). See includes/invoicing/ and README.
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-settings.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-client.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-connection.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-pricing-engine.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-ledger-totals.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-snapshot.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-invoice-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-payments-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-events-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-customer-map.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/interface-invoice-gateway.php';
-require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-fluentcart-invoice-gateway.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-invoice-gateway.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-webhook.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-reconciler.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-roster.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
@@ -68,6 +76,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-page-payments.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-settings.php';
 
 // Enrollment gate (application form → review queue → approval) and the
@@ -89,12 +98,28 @@ add_filter( 'submenu_file', [ 'MyNJILGA_Admin_Menu', 'highlight_submenu' ] );
 // activation, never on an auto-update of an already-active plugin.
 register_activation_hook( __FILE__, [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
 register_activation_hook( __FILE__, [ 'MyNJILGA_Applications_Table', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Dues_Payments_Table', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Stripe_Events_Table', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Stripe_Customer_Map', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Applications_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Dues_Payments_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Stripe_Events_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Stripe_Customer_Map', 'maybe_upgrade' ] );
 
 // Background invoice creation (Action Scheduler chunks) — the hook must be
 // registered on every request so the scheduler's worker can find it.
 MyNJILGA_Invoice_Creator::register();
+
+// Stripe webhook receiver — registers its own REST route (rest_api_init)
+// and its Action Scheduler processing hook; must run on every request so
+// both the REST endpoint and the scheduler's worker can find it.
+MyNJILGA_Stripe_Webhook::register();
+
+// Stripe reconciler — the webhook's safety net. Registers its daily
+// Action Scheduler job (and schedules it, once) on every request so the
+// scheduler's worker can find the hook.
+MyNJILGA_Stripe_Reconciler::register();
 
 // Payment listener: registered once every plugin has loaded, so a site
 // can swap the invoice gateway via the `my_njilga_invoice_gateway` filter
@@ -126,6 +151,24 @@ add_action( 'admin_post_my_njilga_export_csv', static function () {
 // Membership by Firm — formatted Excel (.xls) export.
 add_action( 'admin_post_my_njilga_export_firms', [ 'MyNJILGA_Report_Xls', 'handle' ] );
 
+// Payments ledger — CSV export (?view=invoice|firm|aging).
+add_action( 'admin_post_my_njilga_export_payments', static function () {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_die( 'Access denied.' );
+    }
+    check_admin_referer( 'my_njilga_export_payments' );
+
+    if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
+        wp_die( 'FluentCRM is not active.' );
+    }
+
+    $view = sanitize_key( $_REQUEST['view'] ?? '' );
+    MyNJILGA_Report_Csv::stream_payments( $view );
+} );
+
+// Payments ledger — formatted Excel (.xls) export (?view=firm|aging).
+add_action( 'admin_post_my_njilga_export_payments_xls', [ 'MyNJILGA_Report_Xls', 'handle_payments' ] );
+
 // Executive Summary — formatted Excel (.xls) export combining every report.
 add_action( 'admin_post_my_njilga_export_summary', [ 'MyNJILGA_Report_Summary', 'handle' ] );
 
@@ -135,10 +178,19 @@ add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_APPROVE,   [ 'MyNJIL
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_CREATE,    [ 'MyNJILGA_Page_Invoicing', 'handle_create' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SEND,      [ 'MyNJILGA_Page_Invoicing', 'handle_send' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_DOWNGRADE, [ 'MyNJILGA_Page_Invoicing', 'handle_downgrade' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SYNC,      [ 'MyNJILGA_Page_Invoicing', 'handle_sync' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_MARK_PAID, [ 'MyNJILGA_Page_Invoicing', 'handle_mark_paid' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_VOID,      [ 'MyNJILGA_Page_Invoicing', 'handle_void' ] );
 
 // Dues & Billing settings.
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_SAVE,  [ 'MyNJILGA_Page_Settings', 'handle_save' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_RESET, [ 'MyNJILGA_Page_Settings', 'handle_reset' ] );
+
+// Settings > Payments tab — Stripe connect/credential actions.
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_PAYMENTS_SAVE,       [ 'MyNJILGA_Page_Settings', 'handle_payments_save' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_CONNECT,      [ 'MyNJILGA_Page_Settings', 'handle_connect' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_WEBHOOK_SAVE, [ 'MyNJILGA_Page_Settings', 'handle_webhook_save' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_SWITCH_MODE,  [ 'MyNJILGA_Page_Settings', 'handle_switch_mode' ] );
 
 // Applications review queue.
 add_action( 'admin_post_' . MyNJILGA_Page_Applications::ACTION_DECIDE, [ 'MyNJILGA_Page_Applications', 'handle_decide' ] );

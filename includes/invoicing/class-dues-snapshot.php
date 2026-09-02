@@ -21,9 +21,9 @@
  *         "category_key": "professional", "category_label": "Professional Membership",
  *         "tier_eligible": true, "role": "professional",
  *         "rank": 1, "tier_key": "first", "tier_label": "1st Member",
- *         "dues_cents": 12500, "dues_product_id": 101, "dues_variation_id": 1001, "dues_note": "",
+ *         "dues_cents": 12500, "dues_note": "",
  *         "assessment_cents": 20000, "assessment_label": "Trustee Dinner Assessment",
- *         "assessment_qualifier": "Officer", "assessment_product_id": 105, "assessment_variation_id": 1050,
+ *         "assessment_qualifier": "Officer",
  *         "unbilled_reason": ""            // "" | "inactive" | "no category tag"
  *       }, ...
  *     ],
@@ -196,14 +196,10 @@ class MyNJILGA_Dues_Snapshot {
                 'tier_key'                => '',
                 'tier_label'              => $dues === 12500 ? '1st Member' : ( $dues === 7500 ? 'Members 2–5' : ( ( ! $exempt && ! $inactive ) ? 'Members 6+' : '' ) ),
                 'dues_cents'              => $dues,
-                'dues_product_id'         => 0,
-                'dues_variation_id'       => 0,
                 'dues_note'               => $dues > 0 ? '' : ( $inactive ? 'inactive' : ( $exempt ? 'dues exempt' : '6th or later member' ) ),
                 'assessment_cents'        => $fee,
                 'assessment_label'        => $fee > 0 ? 'Trustee Dinner Fee' : '',
                 'assessment_qualifier'    => '',
-                'assessment_product_id'   => 0,
-                'assessment_variation_id' => 0,
                 'unbilled_reason'         => $inactive ? 'inactive' : '',
             ];
         }

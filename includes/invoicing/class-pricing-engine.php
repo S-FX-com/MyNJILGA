@@ -1,7 +1,7 @@
 <?php
 /**
  * Pricing engine (spec §6) — a PURE function. Roster in, priced roster
- * out. No database, no WordPress, no FluentCRM/FluentCart, no globals, no
+ * out. No database, no WordPress, no FluentCRM, no globals, no
  * side effects. Everything it needs arrives as plain arrays, which is
  * what makes it unit-testable without a WordPress install
  * (see tests/PricingEngineTest.php).
@@ -13,7 +13,7 @@
  * Input config: MyNJILGA_Dues_Settings::engine_config() —
  *   [ 'default_category' => string, 'inactive_tag' => string,
  *     'categories' => ordered rows (see MyNJILGA_Dues_Settings::defaults()),
- *     'assessment' => [ label, price_cents, product_id, variation_id, qualifiers[] ] ]
+ *     'assessment' => [ label, price_cents, qualifiers[] ] ]
  *
  * Rules, in the order they're applied to each contact:
  *
@@ -109,8 +109,6 @@ class MyNJILGA_Pricing_Engine {
             $m['tier_key']           = (string) ( $tier['key'] ?? '' );
             $m['tier_label']         = (string) ( $tier['label'] ?? '' );
             $m['dues_cents']         = (int) ( $tier['price_cents'] ?? $c['category']['price_cents'] ?? 0 );
-            $m['dues_product_id']    = (int) ( $c['category']['product_id'] ?? 0 );
-            $m['dues_variation_id']  = (int) ( ( $tier['variation_id'] ?? 0 ) ?: ( $c['category']['variation_id'] ?? 0 ) );
             $m['dues_note']          = $m['dues_cents'] > 0 ? '' : $m['tier_label'];
             self::apply_assessment( $m, $c['tags'], $assessment );
             $members[] = $m;
@@ -118,8 +116,6 @@ class MyNJILGA_Pricing_Engine {
         foreach ( $flat as $c ) {
             $m                      = self::base_member( $c );
             $m['dues_cents']        = (int) ( $c['category']['price_cents'] ?? 0 );
-            $m['dues_product_id']   = (int) ( $c['category']['product_id'] ?? 0 );
-            $m['dues_variation_id'] = (int) ( $c['category']['variation_id'] ?? 0 );
             $m['dues_note']         = $m['dues_cents'] > 0 ? '' : (string) $c['category']['label'];
             self::apply_assessment( $m, $c['tags'], $assessment );
             $members[] = $m;
@@ -233,10 +229,9 @@ class MyNJILGA_Pricing_Engine {
             return end( $tiers );
         }
         return [
-            'key'          => '',
-            'label'        => (string) ( $category['label'] ?? '' ),
-            'price_cents'  => (int) ( $category['price_cents'] ?? 0 ),
-            'variation_id' => (int) ( $category['variation_id'] ?? 0 ),
+            'key'         => '',
+            'label'       => (string) ( $category['label'] ?? '' ),
+            'price_cents' => (int) ( $category['price_cents'] ?? 0 ),
         ];
     }
 
@@ -253,8 +248,6 @@ class MyNJILGA_Pricing_Engine {
                 $m['assessment_cents']        = $price;
                 $m['assessment_label']        = (string) ( $assessment['label'] ?? 'Assessment' );
                 $m['assessment_qualifier']    = (string) ( $q['label'] ?? $tag );
-                $m['assessment_product_id']   = (int) ( $assessment['product_id'] ?? 0 );
-                $m['assessment_variation_id'] = (int) ( $assessment['variation_id'] ?? 0 );
                 return; // Capped at one per person — first qualifier wins.
             }
         }
@@ -285,14 +278,10 @@ class MyNJILGA_Pricing_Engine {
             'tier_key'                => '',
             'tier_label'              => '',
             'dues_cents'              => 0,
-            'dues_product_id'         => 0,
-            'dues_variation_id'       => 0,
             'dues_note'               => '',
             'assessment_cents'        => 0,
             'assessment_label'        => '',
             'assessment_qualifier'    => '',
-            'assessment_product_id'   => 0,
-            'assessment_variation_id' => 0,
             'unbilled_reason'         => '',
         ];
     }

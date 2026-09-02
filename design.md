@@ -244,6 +244,15 @@ MyNJILGA_Admin_UI::nav_tabs( [
 Add `njilga-tabs-bare` to the container when the tabs aren't sitting on a
 card. Client-side tabs (Invoicing) use `<button class="njilga-tab" data-tab="…">`.
 
+`nav_tabs()` also works one level up, as a **section switch inside a
+single page class** rather than a filter on one list — Settings uses a
+`?tab=dues` / `?tab=payments` query arg to render two entirely different
+forms from one `render()` (never both at once), the same mechanism
+`MyNJILGA_Page_Firms::render_scope_tabs()` uses for a filter. Reach for
+this shape when a page grows a second, unrelated screen (a connection/
+credentials tab next to a settings form) rather than splitting it into a
+second menu page.
+
 ### Danger zone
 
 ```php
@@ -292,6 +301,17 @@ Key classes: `njilga-bulkbar`, `njilga-firmcell` / `njilga-firmname` /
 `njilga-subline`, `njilga-chevron` (rotates via `.njilga-row.open`),
 `njilga-preview*` and `njilga-roster*` (the expanded invoice preview),
 `njilga-tablefoot` / `njilga-pager` / `njilga-pgbtn` (pagination).
+
+**Payments** reuses this same workspace (search/filter/paginate CSS +
+JS pattern, its own `scripts()`), but its tabs mean something different:
+on Invoicing a tab is a status filter over *one* table shape, while on
+Payments each tab (By Invoice / By Firm / By Member / Aging) is a
+**separately-rendered table with its own columns** — four `render_by_*()`
+methods, each into its own `<div data-panel="…">` toggled by
+`[hidden]`, all fed by one shared row-builder rather than each running
+its own query. Reach for that shape — several independently-shaped
+`<table>`s behind one tab strip, one query — when a screen's "views"
+aren't just filtered slices of the same columns.
 
 ---
 

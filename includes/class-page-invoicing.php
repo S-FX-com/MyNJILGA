@@ -28,8 +28,26 @@ class MyNJILGA_Page_Invoicing {
     const ACTION_CREATE    = 'my_njilga_dues_create';
     const ACTION_SEND      = 'my_njilga_dues_send';
     const ACTION_DOWNGRADE = 'my_njilga_dues_downgrade';
+    const ACTION_SYNC      = 'my_njilga_dues_stripe_sync';
+    const ACTION_MARK_PAID = 'my_njilga_dues_mark_paid';
+    const ACTION_VOID      = 'my_njilga_dues_void';
 
-    const FORM_ID = 'njilga-inv-form';
+    const FORM_ID      = 'njilga-inv-form';
+    const SYNC_FORM_ID = 'njilga-inv-sync';
+
+    /**
+     * Statuses where a balance is genuinely outstanding — Mark Paid and
+     * Void both apply consistently across these three.
+     *
+     * @return array<int,string>
+     */
+    private static function outstanding_statuses(): array {
+        return [
+            MyNJILGA_Dues_Invoice_Table::STATUS_CREATED,
+            MyNJILGA_Dues_Invoice_Table::STATUS_SENT,
+            MyNJILGA_Dues_Invoice_Table::STATUS_PROCESSING,
+        ];
+    }
 
     // -------------------------------------------------------------------------
     // Render
@@ -45,8 +63,14 @@ class MyNJILGA_Page_Invoicing {
         $duesYear = self::selected_year();
         $view     = isset( $_GET['view'] ) ? sanitize_key( $_GET['view'] ) : '';
 
+        $liveMode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+
         MyNJILGA_Admin_UI::styles();
         echo '<div class="wrap njilga-ui">';
+
+        if ( ! $liveMode ) {
+            MyNJILGA_Admin_UI::callout( esc_html( 'Test mode — these invoices are not real and are hidden from Live.' ), 'warning' );
+        }
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
             echo '</div>';
@@ -63,12 +87,19 @@ class MyNJILGA_Page_Invoicing {
             return;
         }
 
+        if ( $view === 'mark_paid' ) {
+            $rowId = isset( $_GET['row_id'] ) ? (int) $_GET['row_id'] : 0;
+            self::render_mark_paid_confirm( $rowId );
+            echo '</div>';
+            return;
+        }
+
         self::render_notice();
         self::render_gateway_notices();
 
-        $rows   = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear );
-        $counts = MyNJILGA_Dues_Invoice_Table::counts_by_status( $duesYear );
-        $totals = MyNJILGA_Dues_Invoice_Table::totals_by_status( $duesYear );
+        $rows   = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [], $liveMode );
+        $counts = MyNJILGA_Dues_Invoice_Table::counts_by_status( $duesYear, $liveMode );
+        $totals = MyNJILGA_Dues_Invoice_Table::totals_by_status( $duesYear, $liveMode );
 
         // Classify every row once — the summary, the tabs and the rows all
         // read the same verdict.
@@ -83,6 +114,10 @@ class MyNJILGA_Page_Invoicing {
         $tally = self::tally( $views );
 
         self::render_header( $duesYear, $tally, $canCreate );
+        // Always present once the header is — the header's own "Sync with
+        // Stripe" button targets this form by id regardless of whether
+        // the year has any rows yet.
+        self::render_sync_form( $duesYear );
 
         if ( empty( $rows ) ) {
             self::render_empty_state( $duesYear );
@@ -133,6 +168,11 @@ class MyNJILGA_Page_Invoicing {
             '<a class="njilga-btn njilga-btn-outline" href="%s">%s Manage Dues Rules</a>',
             esc_url( $settingsUrl ),
             self::icon( 'sliders' )
+        );
+        printf(
+            '<button type="submit" form="%s" class="njilga-btn njilga-btn-outline" title="Check every created/sent invoice for this year against Stripe">%s Sync with Stripe</button>',
+            esc_attr( self::SYNC_FORM_ID ),
+            self::icon( 'refresh' )
         );
         printf(
             '<button type="submit" %s name="all" value="1" class="njilga-btn njilga-btn-primary"%s>%s Create Ready Invoices</button>',
@@ -245,10 +285,13 @@ class MyNJILGA_Page_Invoicing {
                 <option value="ready">Ready</option>
                 <option value="created">Invoice Created</option>
                 <option value="sent">Sent</option>
+                <option value="processing">Processing (ACH)</option>
                 <option value="paid">Paid</option>
                 <option value="blocked">Blocked</option>
                 <option value="error">Error</option>
                 <option value="downgraded">Downgraded</option>
+                <option value="voided">Voided</option>
+                <option value="uncollectible">Uncollectible</option>
               </select>';
         echo '<div class="njilga-toolbar-spacer"></div>';
         self::render_generate_form( $duesYear, 'Refresh Firms', 'outline' );
@@ -383,7 +426,8 @@ class MyNJILGA_Page_Invoicing {
      */
     private static function row_actions( object $row, array $c, bool $canCreate ): string {
         $rowId = (int) $row->id;
-        $link  = MyNJILGA_Invoice_Creator::payment_link( (string) $row->fluentcart_order_uuid );
+        $link  = (string) ( $row->hosted_invoice_url ?? '' );
+        $pdf   = (string) ( $row->invoice_pdf_url ?? '' );
 
         switch ( $c['status'] ) {
             case 'ready':
@@ -401,26 +445,50 @@ class MyNJILGA_Page_Invoicing {
                 return '<span class="njilga-dim njilga-inline-status">' . self::icon( 'refresh' ) . ' Creating…</span>';
 
             case 'created':
-                $view = $link !== '' ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View</a>', esc_url( $link ) ) : '';
                 return sprintf(
-                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d">Send</button> %s',
+                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d">Send</button> %s %s %s %s %s',
                     $rowId,
-                    $view
+                    self::view_link( $link ),
+                    self::pdf_link( $pdf ),
+                    self::mark_paid_button( $row ),
+                    self::void_button( $row ),
+                    self::sync_button( $rowId )
                 );
 
             case 'sent':
-                $view = $link !== '' ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View</a>', esc_url( $link ) ) : '';
                 return sprintf(
-                    '%s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d">Resend</button>',
-                    $view,
-                    $rowId
+                    '%s %s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d">Resend</button> %s %s %s',
+                    self::view_link( $link ),
+                    self::pdf_link( $pdf ),
+                    $rowId,
+                    self::mark_paid_button( $row ),
+                    self::void_button( $row ),
+                    self::sync_button( $rowId )
+                );
+
+            case 'processing':
+                return sprintf(
+                    '<span class="njilga-dim njilga-inline-status">%s Processing (ACH)</span> %s %s %s %s %s',
+                    self::icon( 'refresh' ),
+                    self::view_link( $link ),
+                    self::pdf_link( $pdf ),
+                    self::mark_paid_button( $row ),
+                    self::void_button( $row ),
+                    self::sync_button( $rowId )
                 );
 
             case 'paid':
             case 'downgraded':
-                return $link !== ''
-                    ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View Invoice</a>', esc_url( $link ) )
-                    : '<span class="njilga-dim">—</span>';
+            case 'voided':
+            case 'uncollectible':
+                if ( $link === '' ) {
+                    return '<span class="njilga-dim">—</span>';
+                }
+                return sprintf(
+                    '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View Invoice</a> %s',
+                    esc_url( $link ),
+                    self::pdf_link( $pdf )
+                );
 
             case 'blocked':
                 return sprintf(
@@ -431,6 +499,44 @@ class MyNJILGA_Page_Invoicing {
             default: // no-members / zero
                 return '<span class="njilga-dim">—</span>';
         }
+    }
+
+    /** A small outline "View" link to the hosted Stripe invoice, or '' when there isn't one yet. */
+    private static function view_link( string $url ): string {
+        return $url !== ''
+            ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View</a>', esc_url( $url ) )
+            : '';
+    }
+
+    /** A small outline "PDF" link to the invoice's PDF, or '' when there isn't one yet. */
+    private static function pdf_link( string $url ): string {
+        return $url !== ''
+            ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">PDF</a>', esc_url( $url ) )
+            : '';
+    }
+
+    /**
+     * Links to the ?view=mark_paid confirmation screen — the same
+     * GET-driven, scoped-confirmation-view pattern as the downgrade
+     * sweep's "Review & run" link, just keyed by a row id instead of a
+     * whole-year sweep.
+     */
+    private static function mark_paid_button( object $row ): string {
+        $url = self::page_url( (int) $row->dues_year, [ 'view' => 'mark_paid', 'row_id' => (int) $row->id ] );
+        return sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s">Mark Paid</a>', esc_url( $url ) );
+    }
+
+    /** A single POST + JS confirm() — voiding one invoice is a small enough blast radius not to need a full confirmation screen. */
+    private static function void_button( object $row ): string {
+        return MyNJILGA_Admin_UI::action_form(
+            self::ACTION_VOID,
+            'Void',
+            [ 'row_id' => (int) $row->id, 'dues_year' => (int) $row->dues_year ],
+            'danger-outline',
+            '',
+            'Void this invoice? This cannot be undone — the firm will need a new invoice if they still owe dues.',
+            'sm'
+        );
     }
 
     /**
@@ -603,11 +709,32 @@ class MyNJILGA_Page_Invoicing {
             case $T::STATUS_SENT:
                 return self::verdict( 'created', 'sent', [ 'Sent', 'info' ], [ 'Complete', true ], false );
 
+            // ACH-in-flight (set only by the payment_intent.processing
+            // webhook event, or the reconciler catching up to it) — not
+            // yet settled, not an error either.
+            case $T::STATUS_PROCESSING:
+                // Amber, not blue, and it says what is actually happening:
+                // money has been submitted but nothing has settled, and an
+                // ACH debit can take days. The submit date is the thing
+                // staff want ("is this stuck?"), so it rides in the pill.
+                $submitted = substr( (string) ( $row->processing_at ?? '' ), 0, 10 );
+                $pillLabel = $submitted !== '' ? 'ACH clearing since ' . $submitted : 'ACH clearing';
+                $val       = $hasError ? [ (string) $row->last_error, false ] : [ 'Payment in progress (ACH)', true ];
+                return self::verdict( 'created', 'processing', [ $pillLabel, 'warning' ], $val, false );
+
             case $T::STATUS_PAID:
                 return self::verdict( 'created', 'paid', [ 'Paid', 'success' ], [ 'Complete', true ], false );
 
             case $T::STATUS_DOWNGRADED:
                 return self::verdict( 'created', 'downgraded', [ 'Downgraded', 'destructive' ], [ 'Unpaid — swept', false ], false );
+
+            // Terminal in Stripe — staff voided it, or it was written off.
+            // Neither is retryable; both are things worth a look.
+            case $T::STATUS_VOIDED:
+                return self::verdict( 'attention', 'voided', [ 'Voided', 'muted' ], [ 'Voided — no longer collectible', false ], false );
+
+            case $T::STATUS_UNCOLLECTIBLE:
+                return self::verdict( 'attention', 'uncollectible', [ 'Uncollectible', 'destructive' ], [ 'Written off', false ], false );
 
             default:
                 return self::verdict( 'attention', 'error', [ ucfirst( $status ), 'muted' ], [ '—', false ], false );
@@ -718,6 +845,44 @@ class MyNJILGA_Page_Invoicing {
     }
 
     // -------------------------------------------------------------------------
+    // Sync with Stripe (header button + per-row "Refresh", same form)
+    // -------------------------------------------------------------------------
+
+    /**
+     * One shared form for both the header's whole-year "Sync with Stripe"
+     * button and every per-row "Refresh" button — exactly the same
+     * all-vs-single shape #njilga-inv-form already uses for "Create Ready
+     * Invoices" vs. a single-row "Create Invoice": no `single` field means
+     * the whole year, a `single` value scopes it to one invoice row. Both
+     * kinds of button live outside this form in the DOM and target it by
+     * id via the `form="..."` attribute (HTML doesn't require a form
+     * control to be a DOM descendant of the form it submits to).
+     */
+    private static function render_sync_form( int $duesYear ): void {
+        printf(
+            '<form id="%s" method="post" action="%s" hidden>
+                <input type="hidden" name="action" value="%s">
+                <input type="hidden" name="dues_year" value="%d">
+                %s
+             </form>',
+            esc_attr( self::SYNC_FORM_ID ),
+            esc_url( admin_url( 'admin-post.php' ) ),
+            esc_attr( self::ACTION_SYNC ),
+            $duesYear,
+            wp_nonce_field( self::ACTION_SYNC, '_wpnonce', true, false )
+        );
+    }
+
+    private static function sync_button( int $rowId ): string {
+        return sprintf(
+            '<button type="submit" form="%s" name="single" value="%d" class="njilga-btn njilga-btn-outline njilga-btn-sm" title="Check this invoice against Stripe">%s Refresh</button>',
+            esc_attr( self::SYNC_FORM_ID ),
+            $rowId,
+            self::icon( 'refresh' )
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // Downgrade
     // -------------------------------------------------------------------------
 
@@ -813,6 +978,119 @@ class MyNJILGA_Page_Invoicing {
     }
 
     // -------------------------------------------------------------------------
+    // Mark Paid (by check/cash/wire) — confirmation screen
+    // -------------------------------------------------------------------------
+
+    /**
+     * The ?view=mark_paid&row_id=… confirmation screen — same GET-driven,
+     * scoped-confirmation-view shape as render_downgrade_confirm(), just
+     * keyed by one invoice row instead of a whole-year sweep. See
+     * handle_mark_paid() for the money-correctness split between a
+     * partial payment (recorded purely in WordPress) and a
+     * balance-zeroing payment (recorded via Stripe's
+     * mark_paid_out_of_band(), whose resulting invoice.paid webhook is
+     * the only place that writes THAT payment's ledger row).
+     */
+    private static function render_mark_paid_confirm( int $rowId ): void {
+        $row      = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
+        $duesYear = $row ? (int) $row->dues_year : self::selected_year();
+
+        printf( '<p class="njilga-back"><a href="%s">&larr; Back to %d invoicing</a></p>', esc_url( self::page_url( $duesYear ) ), $duesYear );
+
+        if ( ! $row || ! in_array( $row->status, self::outstanding_statuses(), true ) ) {
+            MyNJILGA_Admin_UI::callout( esc_html( 'This invoice can\'t be marked paid right now — it may already be paid, voided, or no longer exists.' ), 'warning' );
+            return;
+        }
+
+        $name    = MyNJILGA_Dues_Snapshot::company_name( $row );
+        $balance = (int) $row->amount_due_cents;
+
+        printf( '<h1 class="njilga-title">Mark %s Paid</h1>', esc_html( $name ) );
+        printf(
+            '<p class="njilga-subtitle">Invoice %s &middot; Current balance <strong>%s</strong></p>',
+            esc_html( (string) ( $row->gateway_invoice_number ?: '—' ) ),
+            esc_html( MyNJILGA_Invoicing::money( $balance ) )
+        );
+
+        $today          = current_time( 'Y-m-d' );
+        $balanceDollars = number_format( $balance / 100, 2, '.', '' );
+
+        echo '<div class="njilga-card njilga-card-pad" style="max-width:560px">';
+        printf(
+            '<form method="post" action="%s">
+                <input type="hidden" name="action" value="%s">
+                <input type="hidden" name="row_id" value="%d">
+                <input type="hidden" name="dues_year" value="%d">
+                %s',
+            esc_url( admin_url( 'admin-post.php' ) ),
+            esc_attr( self::ACTION_MARK_PAID ),
+            $rowId,
+            $duesYear,
+            wp_nonce_field( self::ACTION_MARK_PAID, '_wpnonce', true, false )
+        );
+
+        printf(
+            '<div class="njilga-field"><label for="mp-amount">Amount</label>
+                <input type="number" step="0.01" min="0.01" max="%1$s" id="mp-amount" name="amount" value="%1$s" class="regular-text">
+                <p class="njilga-help">Current balance: %2$s. Enter less to record a partial payment — the rest stays outstanding.</p>
+             </div>',
+            esc_attr( $balanceDollars ),
+            esc_html( MyNJILGA_Invoicing::money( $balance ) )
+        );
+
+        if ( ! empty( $row->hosted_invoice_url ) ) {
+            MyNJILGA_Admin_UI::callout(
+                'Recording a partial payment here only updates this record — it does not reduce what Stripe\'s hosted invoice page still asks the firm for. If they might pay the rest online using the original link, let them know the remaining balance directly so they don\'t pay the full original amount again.',
+                'warning'
+            );
+        }
+
+        echo '<div class="njilga-field"><label>Method</label><div class="njilga-radio-list">';
+        foreach ( [ 'check' => 'Check', 'cash' => 'Cash', 'wire' => 'Wire', 'other' => 'Other' ] as $val => $label ) {
+            printf(
+                '<label class="njilga-check-label"><input type="radio" name="method" value="%s"%s> <span>%s</span></label>',
+                esc_attr( $val ),
+                checked( $val, 'check', false ),
+                esc_html( $label )
+            );
+        }
+        echo '</div></div>';
+
+        // Field name is deliberately generic ("reference") even though
+        // it's labelled as a check number: with Method = Wire, the same
+        // field holds the wire reference instead — both are carried
+        // through mark_paid_out_of_band() under its one existing
+        // 'check_number' => 'njilga_check_number' metadata slot (see
+        // class-stripe-invoice-gateway.php), so no second metadata key
+        // was needed for this run's additive change there.
+        echo '<div class="njilga-field"><label for="mp-reference">Check number</label>
+                <input type="text" id="mp-reference" name="reference" class="regular-text" placeholder="e.g. 1042" autocomplete="off">
+                <p class="njilga-help">Required when Method is Check. Also holds the wire reference number when Method is Wire.</p>
+              </div>';
+
+        printf(
+            '<div class="njilga-field"><label for="mp-date">Date received</label>
+                <input type="date" id="mp-date" name="date_received" value="%1$s" max="%1$s">
+             </div>',
+            esc_attr( $today )
+        );
+
+        echo '<div class="njilga-field"><label for="mp-note">Note (optional)</label>
+                <textarea id="mp-note" name="note" rows="3" class="large-text"></textarea>
+              </div>';
+
+        printf(
+            '<div class="njilga-actions">
+                <button type="submit" class="njilga-btn njilga-btn-primary">Record Payment</button>
+                <a class="njilga-btn njilga-btn-outline" href="%s">Cancel</a>
+             </div>',
+            esc_url( self::page_url( $duesYear ) )
+        );
+
+        echo '</form></div>';
+    }
+
+    // -------------------------------------------------------------------------
     // Badges / small parts
     // -------------------------------------------------------------------------
 
@@ -886,6 +1164,14 @@ class MyNJILGA_Page_Invoicing {
         foreach ( $gateway->readiness_errors() as $err ) {
             printf( '<div class="njilga-callout njilga-callout-warning"><p><strong>%s isn\'t ready to create invoices:</strong> %s</p></div>', esc_html( $gateway->name() ), esc_html( $err ) );
         }
+        // Soft findings (a webhook gone quiet, ACH switched off at
+        // Stripe) don't block anything, but this is the page where
+        // invoices get made — the ACH one in particular is about what a
+        // firm will see on the invoice about to be sent, so it belongs
+        // here and not only on Setup.
+        foreach ( MyNJILGA_Stripe_Connection::health_warnings() as $warning ) {
+            printf( '<div class="njilga-callout njilga-callout-info"><p>%s</p></div>', esc_html( $warning ) );
+        }
     }
 
     private static function render_notice(): void {
@@ -903,6 +1189,9 @@ class MyNJILGA_Page_Invoicing {
             'sent'            => 'success',
             'sent_partial'    => 'warning',
             'downgraded'      => 'success',
+            'synced'          => 'info',
+            'marked_paid'     => 'success',
+            'voided_invoice'  => 'success',
             'nothing'         => 'info',
             'error'           => 'error',
         ];
@@ -926,7 +1215,8 @@ class MyNJILGA_Page_Invoicing {
     }
 
     private static function notice_text( string $msg ): string {
-        $g = static function ( string $k ): int { return isset( $_GET[ $k ] ) ? (int) $_GET[ $k ] : 0; };
+        $g  = static function ( string $k ): int { return isset( $_GET[ $k ] ) ? (int) $_GET[ $k ] : 0; };
+        $gs = static function ( string $k ): string { return isset( $_GET[ $k ] ) ? sanitize_key( (string) $_GET[ $k ] ) : ''; };
 
         switch ( $msg ) {
             case 'previewed':
@@ -952,6 +1242,25 @@ class MyNJILGA_Page_Invoicing {
                 return sprintf( '%d invoice%s sent, %d failed — see details below.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
             case 'downgraded':
                 return sprintf( 'Sweep complete: %d invoice%s across %d firm%s — %d member%s tagged unpaid, %d WordPress role%s removed, %d protected by a paid invoice.', $g( 'invoices' ), $g( 'invoices' ) === 1 ? '' : 's', $g( 'firms' ), $g( 'firms' ) === 1 ? '' : 's', $g( 'members' ), $g( 'members' ) === 1 ? '' : 's', $g( 'roles' ), $g( 'roles' ) === 1 ? '' : 's', $g( 'protected' ) );
+            case 'synced':
+                $syncMsg = sprintf( 'Checked %d invoice%s — %d updated, %d needs attention.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'updated' ), $g( 'attention' ) );
+                if ( isset( $_GET['orphan_scan'] ) && $g( 'orphan_scan' ) === 0 ) {
+                    $syncMsg .= ' Stripe could not be fully read for invoices missing from this site, so that check was skipped — the previous result on Setup → Stripe still stands.';
+                } elseif ( $g( 'orphans' ) > 0 ) {
+                    $syncMsg .= sprintf(
+                        ' Also found %d invoice%s in Stripe with no record here — see Setup → Stripe for the details.',
+                        $g( 'orphans' ),
+                        $g( 'orphans' ) === 1 ? '' : 's'
+                    );
+                }
+                return $syncMsg;
+            case 'marked_paid':
+                $methodLabel = ucfirst( $gs( 'method' ) );
+                return $g( 'full' )
+                    ? sprintf( '%s recorded by %s — invoice now fully paid.', MyNJILGA_Invoicing::money( $g( 'amount' ) ), $methodLabel )
+                    : sprintf( '%s recorded by %s — %s still outstanding.', MyNJILGA_Invoicing::money( $g( 'amount' ) ), $methodLabel, MyNJILGA_Invoicing::money( $g( 'remain' ) ) );
+            case 'voided_invoice':
+                return 'Invoice voided.';
             case 'nothing':
                 return 'Nothing selected.';
             case 'error':
@@ -1276,6 +1585,254 @@ JS;
         ] );
     }
 
+    /**
+     * The whole-year "Sync with Stripe" button and every per-row
+     * "Refresh" button post here — a `single` value scopes the sweep to
+     * one invoice row, its absence (the header button) means the whole
+     * year. A single synchronous POST + redirect + summary notice, same
+     * as every other bulk action on this page — no progress bar/polling.
+     */
+    public static function handle_sync(): void {
+        self::guard( self::ACTION_SYNC );
+        $duesYear = self::post_year();
+
+        $onlyRowId = isset( $_POST['single'] ) ? (int) $_POST['single'] : 0;
+        $result    = MyNJILGA_Stripe_Reconciler::sync_year( $duesYear, null, $onlyRowId > 0 ? $onlyRowId : null );
+
+        // A full-year sync also looks the other way down the road: an
+        // invoice sitting in Stripe with no row here. Skipped for a
+        // single-row Refresh, which has no business paging the whole
+        // year's invoices at Stripe.
+        $orphans     = 0;
+        $orphanScanOk = 1;
+        if ( $onlyRowId <= 0 ) {
+            $scan = MyNJILGA_Stripe_Reconciler::scan_for_orphans( $duesYear );
+            // An abandoned scan must not read as "none found" — that is
+            // the difference between "Stripe holds nothing we don't" and
+            // "we couldn't ask".
+            $orphanScanOk = empty( $scan['ok'] ) ? 0 : 1;
+            $orphans      = count( $scan['orphans'] );
+        }
+
+        self::redirect( $duesYear, [
+            'msg'          => 'synced',
+            'count'        => $result['checked'],
+            'updated'      => $result['updated'],
+            'attention'    => $result['needs_attention'],
+            'orphans'      => $orphans,
+            'orphan_scan'  => $orphanScanOk,
+        ] );
+    }
+
+    /**
+     * The ?view=mark_paid confirmation screen's submit. The
+     * money-correctness split documented in CLAUDE.md governs everything
+     * below:
+     *
+     *   - PARTIAL (this amount doesn't zero the balance): recorded
+     *     ENTIRELY in WordPress — this handler writes its own ledger row
+     *     directly and updates the invoice row's amount_paid_cents/
+     *     amount_due_cents itself. No Stripe call at all (Stripe has no
+     *     notion of a partial out-of-band payment on an invoice), and
+     *     never settle() — the balance isn't zero yet.
+     *
+     *   - FULL / balance-zeroing: this handler writes NO ledger row.
+     *     mark_paid_out_of_band() marks the Stripe invoice paid, which
+     *     triggers Stripe's invoice.paid webhook — the ONLY code path
+     *     allowed to write the ledger row for the payment that actually
+     *     zeroes the balance (see class-stripe-webhook.php's
+     *     handle_invoice_paid(), extended this run to read the
+     *     njilga_* metadata this branch sets below). Getting this split
+     *     wrong double-counts real money against the same invoice.
+     *
+     * Either way, a FluentCRM Company Note is logged immediately from
+     * here (not from the webhook) — informational, and staff want to see
+     * it right away rather than wait on the async webhook round-trip.
+     */
+    public static function handle_mark_paid(): void {
+        self::guard( self::ACTION_MARK_PAID );
+
+        $rowId    = isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0;
+        $row      = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
+        $duesYear = $row ? (int) $row->dues_year : self::post_year();
+
+        if ( ! $row || ! in_array( $row->status, self::outstanding_statuses(), true ) ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => 'That invoice can\'t be marked paid right now — it may already be paid, voided, or no longer exists.' ] );
+        }
+
+        $balanceCents = (int) $row->amount_due_cents;
+        if ( $balanceCents <= 0 ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => 'This invoice has no balance outstanding.' ] );
+        }
+
+        $amountCents = self::dollars_to_cents( isset( $_POST['amount'] ) ? wp_unslash( $_POST['amount'] ) : '' );
+        if ( $amountCents <= 0 ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => 'Enter a payment amount greater than $0.' ] );
+        }
+        // Never accept an overpayment through this flow — clamp to what's
+        // actually owed rather than reject a slightly-over amount.
+        if ( $amountCents > $balanceCents ) {
+            $amountCents = $balanceCents;
+        }
+
+        $method = isset( $_POST['method'] ) ? sanitize_key( (string) wp_unslash( $_POST['method'] ) ) : '';
+        if ( ! in_array( $method, [ 'check', 'cash', 'wire', 'other' ], true ) ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => 'Choose a payment method.' ] );
+        }
+
+        $reference = isset( $_POST['reference'] ) ? sanitize_text_field( wp_unslash( $_POST['reference'] ) ) : '';
+        if ( $method === 'check' && $reference === '' ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => 'Enter a check number — it\'s required when the method is Check.' ] );
+        }
+
+        $dateReceived = isset( $_POST['date_received'] ) ? sanitize_text_field( wp_unslash( $_POST['date_received'] ) ) : '';
+        $parsedDate   = \DateTime::createFromFormat( 'Y-m-d', $dateReceived );
+        $today        = current_time( 'Y-m-d' );
+        if ( ! $parsedDate || $parsedDate->format( 'Y-m-d' ) !== $dateReceived || $dateReceived > $today ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => 'Enter a valid date received that isn\'t in the future.' ] );
+        }
+
+        $note = isset( $_POST['note'] ) ? sanitize_textarea_field( wp_unslash( $_POST['note'] ) ) : '';
+
+        $actor        = wp_get_current_user();
+        $recordedName = ( $actor && $actor->display_name !== '' ) ? $actor->display_name : 'a staff member';
+        $occurredAt   = $dateReceived . ' ' . current_time( 'H:i:s' );
+
+        // amount_due_cents already reflects any prior partials this
+        // handler recorded, so this one comparison correctly covers both
+        // "first and only payment" and "final payment after partials".
+        $remainderAfter = $balanceCents - $amountCents;
+        $isFull         = $remainderAfter <= 0;
+
+        if ( ! $isFull ) {
+            MyNJILGA_Dues_Payments_Table::record( [
+                'invoice_row_id'      => (int) $row->id,
+                'livemode'            => (bool) $row->livemode,
+                'stripe_object_id'    => null,
+                'kind'                => MyNJILGA_Dues_Payments_Table::KIND_MANUAL,
+                'method'              => $method,
+                'amount_cents'        => $amountCents,
+                'status'              => 'succeeded',
+                'occurred_at'         => $occurredAt,
+                'recorded_by_user_id' => get_current_user_id(),
+                'reference'           => $reference !== '' ? $reference : null,
+            ] );
+
+            MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
+                'amount_paid_cents'     => (int) $row->amount_paid_cents + $amountCents,
+                'amount_due_cents'      => $remainderAfter,
+                // This money never touched Stripe, which is the whole
+                // point of the column: it is what a reconciliation
+                // against a Stripe payout will never account for.
+                'paid_off_stripe_cents' => (int) ( $row->paid_off_stripe_cents ?? 0 ) + $amountCents,
+            ] );
+        } else {
+            $invoiceId = (string) ( $row->gateway_invoice_id ?? '' );
+            if ( $invoiceId === '' ) {
+                self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => 'This invoice has no Stripe invoice id on file — cannot mark it paid.' ] );
+            }
+
+            // $balanceCents (the balance BEFORE this payment) is exactly
+            // what needs to reach Stripe/the webhook as the amount to log
+            // — never Stripe's own cumulative amount_paid, which would
+            // double-count any prior manually-recorded partial.
+            $result = MyNJILGA_Invoicing::gateway()->mark_paid_out_of_band( $invoiceId, [
+                'payment_method'             => $method,
+                // The one existing metadata slot doubles as the wire
+                // reference when Method is Wire — see
+                // class-stripe-invoice-gateway.php's mark_paid_out_of_band().
+                'check_number'               => $reference,
+                'check_date'                 => $dateReceived,
+                'recorded_by'                => $recordedName,
+                'final_payment_amount_cents' => (string) $balanceCents,
+            ] );
+
+            if ( ! $result['ok'] ) {
+                self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => $result['error'] ?? MyNJILGA_Invoicing::gateway()->name() . ' could not mark the invoice paid.' ] );
+            }
+
+            // Reflect the payment locally right away — NOT status (that
+            // stays exclusively the njilga_stripe_invoice_paid webhook
+            // cascade's call, per this migration's single-settlement-
+            // trigger design; no tag/role is granted here). Without this,
+            // the row shows its stale pre-payment balance until the
+            // webhook (or the next reconcile) catches up, and a second
+            // Mark Paid attempt in that window would pass the "no balance
+            // outstanding" guard and log a real duplicate manual payment.
+            // (The failure path above always exits, so $result['ok'] is
+            // guaranteed true here.)
+            MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
+                'amount_paid_cents'     => (int) $row->amount_paid_cents + $balanceCents,
+                'amount_due_cents'      => 0,
+                'paid_off_stripe_cents' => (int) ( $row->paid_off_stripe_cents ?? 0 ) + $balanceCents,
+            ] );
+        }
+
+        MyNJILGA_Invoicing_Notes::log(
+            (int) $row->fluentcrm_company_id,
+            'Payment recorded (' . ucfirst( $method ) . ')',
+            sprintf(
+                '%s recorded by %s on %s via %s%s.%s%s',
+                MyNJILGA_Invoicing::money( $amountCents ),
+                $recordedName,
+                $dateReceived,
+                ucfirst( $method ),
+                $reference !== '' ? ' (' . $reference . ')' : '',
+                $isFull ? ' Invoice now fully paid.' : sprintf( ' %s still outstanding.', MyNJILGA_Invoicing::money( max( 0, $remainderAfter ) ) ),
+                $note !== '' ? ' Note: ' . $note : ''
+            )
+        );
+
+        self::redirect( $duesYear, [
+            'msg'    => 'marked_paid',
+            'amount' => $amountCents,
+            'full'   => $isFull ? 1 : 0,
+            'remain' => max( 0, $remainderAfter ),
+            'method' => $method,
+        ] );
+    }
+
+    /**
+     * A single POST behind a JS confirm() (see void_button()) — voiding
+     * ONE invoice is a small enough blast radius not to need a full
+     * confirmation screen the way the downgrade sweep does.
+     */
+    public static function handle_void(): void {
+        self::guard( self::ACTION_VOID );
+
+        $rowId    = isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0;
+        $row      = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
+        $duesYear = $row ? (int) $row->dues_year : self::post_year();
+
+        if ( ! $row || ! in_array( $row->status, self::outstanding_statuses(), true ) ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => 'That invoice can\'t be voided right now.' ] );
+        }
+
+        $invoiceId = (string) ( $row->gateway_invoice_id ?? '' );
+        if ( $invoiceId === '' ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => 'This invoice has no Stripe invoice id on file — cannot void it.' ] );
+        }
+
+        $result = MyNJILGA_Invoicing::gateway()->void_invoice( $invoiceId );
+        if ( ! $result['ok'] ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => $result['error'] ?? MyNJILGA_Invoicing::gateway()->name() . ' could not void the invoice.' ] );
+        }
+
+        MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
+            'status'    => MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED,
+            'voided_at' => current_time( 'mysql' ),
+        ] );
+
+        $actor = wp_get_current_user();
+        MyNJILGA_Invoicing_Notes::log(
+            (int) $row->fluentcrm_company_id,
+            'Invoice voided',
+            sprintf( 'The %d dues invoice was voided by %s.', $duesYear, ( $actor && $actor->display_name !== '' ) ? $actor->display_name : 'a staff member' )
+        );
+
+        self::redirect( $duesYear, [ 'msg' => 'voided_invoice' ] );
+    }
+
     // -------------------------------------------------------------------------
     // Handler helpers
     // -------------------------------------------------------------------------
@@ -1292,6 +1849,12 @@ JS;
         return ( $year >= 2000 && $year <= 2100 ) ? $year : MyNJILGA_Invoicing::default_dues_year();
     }
 
+    /** Same conversion MyNJILGA_Page_Settings::dollars_to_cents() uses for a posted price field. */
+    private static function dollars_to_cents( $value ): int {
+        $value = str_replace( [ ',', '$', ' ' ], '', (string) $value );
+        return max( 0, (int) round( (float) $value * 100 ) );
+    }
+
     /**
      * Selected row ids — or, with the "all" button, every row of the year
      * in the given status.
@@ -1300,7 +1863,8 @@ JS;
      */
     private static function post_ids( int $duesYear, string $statusForAll ): array {
         if ( ! empty( $_POST['all'] ) ) {
-            return array_map( static function ( $r ) { return (int) $r->id; }, MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ $statusForAll ] ) );
+            $liveMode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+            return array_map( static function ( $r ) { return (int) $r->id; }, MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ $statusForAll ], $liveMode ) );
         }
         $ids = ( isset( $_POST['row_ids'] ) && is_array( $_POST['row_ids'] ) ) ? $_POST['row_ids'] : [];
         return array_values( array_unique( array_filter( array_map( 'intval', $ids ) ) ) );
@@ -1315,7 +1879,8 @@ JS;
      */
     private static function post_create_ids( int $duesYear ): array {
         if ( ! empty( $_POST['all'] ) ) {
-            $rows = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT, MyNJILGA_Dues_Invoice_Table::STATUS_APPROVED ] );
+            $liveMode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+            $rows     = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT, MyNJILGA_Dues_Invoice_Table::STATUS_APPROVED ], $liveMode );
             return array_map( static function ( $r ) { return (int) $r->id; }, $rows );
         }
         if ( isset( $_POST['single'] ) ) {

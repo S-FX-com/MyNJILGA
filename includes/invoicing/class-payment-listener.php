@@ -1,10 +1,11 @@
 <?php
 /**
  * Step 5 (spec §7) — payment settles the whole invoice at once. Registered
- * through the gateway's "order paid" hook (FluentCart:
- * `fluent_cart/order_paid_done`); receives an order id, looks up the
- * invoice row, and cascades onto EVERY member of the frozen snapshot —
- * never a fresh Company query.
+ * through the gateway's on_invoice_paid() hook (gateway-agnostic —
+ * whatever internal event the active MyNJILGA_Invoice_Gateway wires that
+ * to is its own business); receives an invoice id and payment details,
+ * looks up the invoice row, and cascades onto EVERY member of the frozen
+ * snapshot — never a fresh Company query.
  *
  * Dues / combined invoices — each member gets:
  *   - the year-specific paid tag ("Dues Paid 2027", pattern in Settings),
@@ -26,17 +27,41 @@ class MyNJILGA_Payment_Listener {
     const WP_ROLE = 'professional';
 
     public static function register(): void {
-        MyNJILGA_Invoicing::gateway()->on_order_paid( [ __CLASS__, 'handle_order_paid' ] );
+        MyNJILGA_Invoicing::gateway()->on_invoice_paid( [ __CLASS__, 'handle_invoice_paid' ] );
     }
 
-    public static function handle_order_paid( int $orderId ): void {
-        if ( $orderId <= 0 ) {
+    /**
+     * @param array<string,mixed> $payment Raw payment details from the
+     *   gateway — the Stripe webhook receiver's invoice.paid handler
+     *   builds this in the shape MyNJILGA_Dues_Payments_Table::record()
+     *   expects (stripe_object_id/kind/method/amount_cents/status/
+     *   occurred_at/card_brand/last4/bank_name/receipt_url/raw), minus
+     *   invoice_row_id/livemode — this method supplies those two from
+     *   the invoice row it looks up right here, and is the ONE place
+     *   that both writes the ledger row and decides settlement for this
+     *   event, so a duplicate fire can never do one without the other.
+     */
+    public static function handle_invoice_paid( string $invoiceId, array $payment ): void {
+        if ( $invoiceId === '' ) {
             return;
         }
-        $invoiceRow = MyNJILGA_Dues_Invoice_Table::get_by_order_id( $orderId );
+        $invoiceRow = MyNJILGA_Dues_Invoice_Table::get_by_order_id( $invoiceId );
         if ( ! $invoiceRow ) {
-            return; // Not a dues invoice — some other order.
+            return; // Not a dues invoice — some other invoice.
         }
+
+        if ( ! empty( $payment ) ) {
+            $ledgerData = $payment;
+            $ledgerData['invoice_row_id'] = (int) $invoiceRow->id;
+            if ( ! array_key_exists( 'livemode', $ledgerData ) ) {
+                $ledgerData['livemode'] = (bool) $invoiceRow->livemode;
+            }
+            // Duplicate-safe on (stripe_object_id, kind) — a re-delivery
+            // of the same event (or a re-fire after the row is already
+            // paid) is a harmless no-op here, not a second ledger row.
+            MyNJILGA_Dues_Payments_Table::record( $ledgerData );
+        }
+
         if ( $invoiceRow->status === MyNJILGA_Dues_Invoice_Table::STATUS_PAID ) {
             return; // Already processed.
         }
