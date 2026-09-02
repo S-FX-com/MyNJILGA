@@ -61,11 +61,11 @@ The **Setup** page can create any of these in one click, plus any slug the Dues 
 
 ## Dues Invoicing
 
-An annual, admin-driven batch process (**My NJILGA → Invoicing**). Staff generate one preview across every FluentCRM Company for a dues year, review and approve, the plugin creates FluentCart orders (invoices) in background batches, staff send the payment links, FluentCart collects, and payment settles the whole invoice — tags and WordPress roles for everyone on it — at once. There are **no subscriptions**.
+An annual, admin-driven batch process (**My NJILGA → Invoicing**). Staff generate one preview across every FluentCRM Company for a dues year, then work a single firm-focused **Law Firms** table — reviewing each firm's dues in an inline preview and creating invoices one at a time or in bulk. Creating an invoice approves its frozen roster and places the FluentCart order in one click (background batches). Staff send the payment links, FluentCart collects, and payment settles the whole invoice — tags and WordPress roles for everyone on it — at once. There are **no subscriptions**.
 
 **FluentCRM tags are the source of truth for who owes what. WordPress roles are a downstream effect of payment, never an input to pricing.**
 
-**Flow:** Generate Preview → Review & Approve → Create Invoices (Action Scheduler, ~25 per job, per-row failure isolation) → Send (email + CC policy + Company Note) → Paid (automatic, via the gateway's "order paid" hook) → end-of-year Downgrade Sweep (manual, behind a confirmation screen).
+**Flow:** Generate Preview → Create Invoices (per firm or in bulk; approves the frozen roster and places the order in one step, Action Scheduler ~25 per job, per-row failure isolation) → Send (email + CC policy + Company Note) → Paid (automatic, via the gateway's "order paid" hook) → end-of-year Downgrade Sweep (manual, behind a confirmation screen). Firms that can't be billed yet — no Owner, no members, nothing billable — are surfaced under **Needs Attention** rather than blocking the main list.
 
 ### Settings → Dues & Billing (spec §3)
 
