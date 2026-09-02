@@ -214,6 +214,9 @@ class MyNJILGA_Invoice_Creator {
         if ( isset( $result['due_date'] ) ) {
             $extra['due_date'] = (string) $result['due_date'];
         }
+        if ( isset( $result['amount_due_cents'] ) ) {
+            $extra['amount_due_cents'] = (int) $result['amount_due_cents'];
+        }
 
         MyNJILGA_Dues_Invoice_Table::mark_created(
             (int) $invoiceRow->id,

@@ -128,6 +128,7 @@ class StripeGatewayTest extends NJILGA_TestCase {
             'hosted_invoice_url' => 'https://pay.stripe.com/inv_hosted',
             'invoice_pdf'        => 'https://pay.stripe.com/inv_hosted.pdf',
             'due_date'           => 1830297600, // 2027-12-31
+            'amount_due'         => 25000,
         ] ] );
 
         $gateway = new MyNJILGA_Stripe_Invoice_Gateway( $client );
@@ -150,6 +151,7 @@ class StripeGatewayTest extends NJILGA_TestCase {
         $this->assertSame( 'https://pay.stripe.com/inv_hosted', $result['hosted_url'] );
         $this->assertSame( 'https://pay.stripe.com/inv_hosted.pdf', $result['pdf_url'] );
         $this->assertSame( gmdate( 'Y-m-d', 1830297600 ), $result['due_date'] );
+        $this->assertSame( 25000, $result['amount_due_cents'] );
     }
 
     public function testCreateOrderAddLinesLineShape(): void {

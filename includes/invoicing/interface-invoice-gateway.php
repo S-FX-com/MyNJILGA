@@ -60,7 +60,7 @@ interface MyNJILGA_Invoice_Gateway {
      * @param array<int,array<string,mixed>> $lineItems See interface docblock.
      * @param array<string,mixed>            $context   Free-form: dues_year, company_id, invoice_row_id,
      *                                                   invoice_kind, and (Stripe gateway) company_name.
-     * @return array{ok:bool,invoice_id?:string,invoice_number?:string,hosted_url?:string,pdf_url?:string,due_date?:string,error?:string}
+     * @return array{ok:bool,invoice_id?:string,invoice_number?:string,hosted_url?:string,pdf_url?:string,due_date?:string,amount_due_cents?:int,error?:string}
      *   invoice_id is the gateway's own id (Stripe: `in_...`); invoice_number
      *   is the gateway's human-readable number (Stripe: the `number` field,
      *   e.g. "NJILGA-0001") — these are DIFFERENT strings, never conflated.

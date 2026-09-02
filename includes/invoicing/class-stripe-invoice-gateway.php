@@ -339,12 +339,17 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             }
 
             return [
-                'ok'             => true,
-                'invoice_id'     => $invoiceId,
-                'invoice_number' => (string) ( $body['number'] ?? '' ),
-                'hosted_url'     => (string) ( $body['hosted_invoice_url'] ?? '' ),
-                'pdf_url'        => (string) ( $body['invoice_pdf'] ?? '' ),
-                'due_date'       => $dueDate,
+                'ok'               => true,
+                'invoice_id'       => $invoiceId,
+                'invoice_number'   => (string) ( $body['number'] ?? '' ),
+                'hosted_url'       => (string) ( $body['hosted_invoice_url'] ?? '' ),
+                'pdf_url'          => (string) ( $body['invoice_pdf'] ?? '' ),
+                'due_date'         => $dueDate,
+                // A freshly finalized invoice owes its full amount — without
+                // this, amount_due_cents sits at the DB default of 0 until
+                // the next reconcile/sync, which would make a same-day
+                // "mark paid by check" clamp to a $0 balance.
+                'amount_due_cents' => (int) ( $body['amount_due'] ?? 0 ),
             ];
         } catch ( \Throwable $e ) {
             return [ 'ok' => false, 'error' => $e->getMessage() ];
