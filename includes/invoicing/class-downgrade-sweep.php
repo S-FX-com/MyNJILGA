@@ -25,8 +25,9 @@ class MyNJILGA_Downgrade_Sweep {
      * @return array{rows:array<int,object>,invoices:int,firms:int,members:int,protected:int,remove_roles:bool}
      */
     public static function preview( int $duesYear ): array {
-        $rows      = MyNJILGA_Dues_Invoice_Table::get_unpaid_for_sweep( $duesYear );
-        $protected = self::protected_contact_ids( $duesYear );
+        $livemode  = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+        $rows      = MyNJILGA_Dues_Invoice_Table::get_unpaid_for_sweep( $duesYear, $livemode );
+        $protected = self::protected_contact_ids( $duesYear, $livemode );
 
         $firms = []; $members = 0; $skipped = 0;
         foreach ( $rows as $row ) {
@@ -54,8 +55,9 @@ class MyNJILGA_Downgrade_Sweep {
      * @return array{firms_swept:int,invoices_swept:int,members_downgraded:int,roles_removed:int,protected:int}
      */
     public static function run( int $duesYear ): array {
-        $rows        = MyNJILGA_Dues_Invoice_Table::get_unpaid_for_sweep( $duesYear );
-        $protected   = self::protected_contact_ids( $duesYear );
+        $livemode    = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+        $rows        = MyNJILGA_Dues_Invoice_Table::get_unpaid_for_sweep( $duesYear, $livemode );
+        $protected   = self::protected_contact_ids( $duesYear, $livemode );
         $removeRoles = (bool) MyNJILGA_Dues_Settings::general( 'downgrade_remove_roles', true );
         $crmActive   = MyNJILGA_Members_Data::fluentcrm_active();
 
@@ -123,9 +125,9 @@ class MyNJILGA_Downgrade_Sweep {
      *
      * @return array<int,true>
      */
-    private static function protected_contact_ids( int $duesYear ): array {
+    private static function protected_contact_ids( int $duesYear, bool $livemode ): array {
         $ids = [];
-        foreach ( MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ MyNJILGA_Dues_Invoice_Table::STATUS_PAID ] ) as $row ) {
+        foreach ( MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ MyNJILGA_Dues_Invoice_Table::STATUS_PAID ], $livemode ) as $row ) {
             if ( ! MyNJILGA_Dues_Snapshot::settles_dues( $row ) ) {
                 continue;
             }

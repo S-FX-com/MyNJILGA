@@ -63,10 +63,12 @@ class MyNJILGA_Page_Invoicing {
         $duesYear = self::selected_year();
         $view     = isset( $_GET['view'] ) ? sanitize_key( $_GET['view'] ) : '';
 
+        $liveMode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+
         MyNJILGA_Admin_UI::styles();
         echo '<div class="wrap njilga-ui">';
 
-        if ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_TEST ) {
+        if ( ! $liveMode ) {
             MyNJILGA_Admin_UI::callout( esc_html( 'Test mode — these invoices are not real and are hidden from Live.' ), 'warning' );
         }
 
@@ -95,9 +97,9 @@ class MyNJILGA_Page_Invoicing {
         self::render_notice();
         self::render_gateway_notices();
 
-        $rows   = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear );
-        $counts = MyNJILGA_Dues_Invoice_Table::counts_by_status( $duesYear );
-        $totals = MyNJILGA_Dues_Invoice_Table::totals_by_status( $duesYear );
+        $rows   = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [], $liveMode );
+        $counts = MyNJILGA_Dues_Invoice_Table::counts_by_status( $duesYear, $liveMode );
+        $totals = MyNJILGA_Dues_Invoice_Table::totals_by_status( $duesYear, $liveMode );
 
         // Classify every row once — the summary, the tabs and the rows all
         // read the same verdict.
@@ -1793,7 +1795,8 @@ JS;
      */
     private static function post_ids( int $duesYear, string $statusForAll ): array {
         if ( ! empty( $_POST['all'] ) ) {
-            return array_map( static function ( $r ) { return (int) $r->id; }, MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ $statusForAll ] ) );
+            $liveMode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+            return array_map( static function ( $r ) { return (int) $r->id; }, MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ $statusForAll ], $liveMode ) );
         }
         $ids = ( isset( $_POST['row_ids'] ) && is_array( $_POST['row_ids'] ) ) ? $_POST['row_ids'] : [];
         return array_values( array_unique( array_filter( array_map( 'intval', $ids ) ) ) );
@@ -1808,7 +1811,8 @@ JS;
      */
     private static function post_create_ids( int $duesYear ): array {
         if ( ! empty( $_POST['all'] ) ) {
-            $rows = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT, MyNJILGA_Dues_Invoice_Table::STATUS_APPROVED ] );
+            $liveMode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+            $rows     = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT, MyNJILGA_Dues_Invoice_Table::STATUS_APPROVED ], $liveMode );
             return array_map( static function ( $r ) { return (int) $r->id; }, $rows );
         }
         if ( isset( $_POST['single'] ) ) {

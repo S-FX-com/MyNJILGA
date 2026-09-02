@@ -76,12 +76,13 @@ class MyNJILGA_Dues_Preview {
      */
     public static function generate_and_persist( int $duesYear ): array {
         $candidates = self::compute( $duesYear );
+        $livemode   = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
 
         $stats  = [ 'rows' => 0, 'drafts' => 0, 'excluded' => 0, 'blocked' => 0, 'stale_removed' => 0, 'total_cents' => 0 ];
         $keep   = []; // company_id => [row ids produced]
 
         foreach ( $candidates as $c ) {
-            $rowId = self::persist_candidate( $c );
+            $rowId = self::persist_candidate( $c, $livemode );
             $keep[ $c['company_id'] ][] = $rowId;
             $stats['rows']++;
             if ( $rowId === null ) {
@@ -99,8 +100,9 @@ class MyNJILGA_Dues_Preview {
         foreach ( $keep as $companyId => $ids ) {
             // A null id means an approved+ row blocked the refresh; that row
             // must survive, and so must any other non-draft row — deletion is
-            // limited to draft/excluded anyway.
-            $stats['stale_removed'] += MyNJILGA_Dues_Invoice_Table::delete_stale_drafts( (int) $companyId, $duesYear, array_filter( $ids ) );
+            // limited to draft/excluded anyway. Scoped to THIS run's mode —
+            // the other mode's stale drafts, if any, are untouched.
+            $stats['stale_removed'] += MyNJILGA_Dues_Invoice_Table::delete_stale_drafts( (int) $companyId, $duesYear, array_filter( $ids ), $livemode );
         }
 
         return $stats;
@@ -148,7 +150,7 @@ class MyNJILGA_Dues_Preview {
             $members,
             $priced['totals']['total_cents'] > 0 ? 'draft' : self::EXCLUDED_ZERO_TOTAL
         );
-        return self::persist_candidate( $candidate );
+        return self::persist_candidate( $candidate, MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
     }
 
     // -------------------------------------------------------------------------
@@ -347,7 +349,7 @@ class MyNJILGA_Dues_Preview {
     /**
      * @param array<string,mixed> $c
      */
-    private static function persist_candidate( array $c ): ?int {
+    private static function persist_candidate( array $c, bool $livemode ): ?int {
         $isDraft  = $c['status'] === 'draft';
         $snapshot = MyNJILGA_Dues_Snapshot::build(
             (int) $c['dues_year'],
@@ -375,6 +377,7 @@ class MyNJILGA_Dues_Preview {
             'status'                     => $isDraft ? MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT : MyNJILGA_Dues_Invoice_Table::STATUS_EXCLUDED,
             'total_amount_cents'         => (int) $c['totals']['total_cents'],
             'roster_snapshot'            => MyNJILGA_Dues_Snapshot::encode( $snapshot ),
+            'livemode'                   => $livemode,
         ] );
     }
 

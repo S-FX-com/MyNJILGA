@@ -234,36 +234,46 @@ class MyNJILGA_Dues_Invoice_Table {
     /**
      * @return object|null
      */
-    public static function find_row( int $companyId, int $duesYear, string $invoiceKind, int $billToContactId ) {
+    public static function find_row( int $companyId, int $duesYear, string $invoiceKind, int $billToContactId, bool $livemode ) {
         global $wpdb;
         $table = self::table_name();
         return $wpdb->get_row( $wpdb->prepare( // phpcs:ignore
-            "SELECT * FROM $table WHERE fluentcrm_company_id = %d AND dues_year = %d AND invoice_kind = %s AND bill_to_contact_id = %d",
+            "SELECT * FROM $table WHERE fluentcrm_company_id = %d AND dues_year = %d AND invoice_kind = %s AND bill_to_contact_id = %d AND livemode = %d",
             $companyId,
             $duesYear,
             $invoiceKind,
-            $billToContactId
+            $billToContactId,
+            $livemode ? 1 : 0
         ) );
     }
 
     /**
+     * $livemode null = every row for the year regardless of mode (only
+     * ever correct for a caller that post-filters itself, e.g. the
+     * reconciler and the Payments ledger, which already scope explicitly
+     * per row) — every OTHER caller must pass the active mode so a
+     * test-mode row can never leak into a live-mode read, or vice versa.
+     *
      * @param array<int,string> $statuses Optional status filter (empty = all).
      * @return array<int,object>
      */
-    public static function get_by_year( int $duesYear, array $statuses = [] ): array {
+    public static function get_by_year( int $duesYear, array $statuses = [], ?bool $livemode = null ): array {
         global $wpdb;
         $table = self::table_name();
 
-        if ( empty( $statuses ) ) {
-            return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-                "SELECT * FROM $table WHERE dues_year = %d ORDER BY id ASC",
-                $duesYear
-            ) );
+        $where  = [ 'dues_year = %d' ];
+        $params = [ $duesYear ];
+        if ( ! empty( $statuses ) ) {
+            $where[]  = 'status IN (' . implode( ',', array_fill( 0, count( $statuses ), '%s' ) ) . ')';
+            $params   = array_merge( $params, $statuses );
+        }
+        if ( $livemode !== null ) {
+            $where[]  = 'livemode = %d';
+            $params[] = $livemode ? 1 : 0;
         }
 
-        $placeholders = implode( ',', array_fill( 0, count( $statuses ), '%s' ) );
-        $query        = "SELECT * FROM $table WHERE dues_year = %d AND status IN ($placeholders) ORDER BY id ASC";
-        return (array) $wpdb->get_results( $wpdb->prepare( $query, array_merge( [ $duesYear ], $statuses ) ) ); // phpcs:ignore
+        $query = "SELECT * FROM $table WHERE " . implode( ' AND ', $where ) . ' ORDER BY id ASC';
+        return (array) $wpdb->get_results( $wpdb->prepare( $query, $params ) ); // phpcs:ignore
     }
 
     /**
@@ -299,14 +309,19 @@ class MyNJILGA_Dues_Invoice_Table {
      * it settles, or doesn't, on the eventual invoice.paid/payment_failed
      * outcome, never by lapsing mid-clearing).
      *
+     * $livemode is required, not optional — this sweep tags real FluentCRM
+     * contacts and can remove real WordPress roles; it must never act on a
+     * stale row from the other Stripe mode.
+     *
      * @return array<int,object>
      */
-    public static function get_unpaid_for_sweep( int $duesYear ): array {
+    public static function get_unpaid_for_sweep( int $duesYear, bool $livemode ): array {
         global $wpdb;
         $table = self::table_name();
         return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT * FROM $table WHERE dues_year = %d AND status NOT IN (%s, %s, %s, %s, %s, %s) AND invoice_kind <> %s ORDER BY id ASC",
+            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status NOT IN (%s, %s, %s, %s, %s, %s) AND invoice_kind <> %s ORDER BY id ASC",
             $duesYear,
+            $livemode ? 1 : 0,
             self::STATUS_PAID,
             self::STATUS_DOWNGRADED,
             self::STATUS_EXCLUDED,
@@ -320,12 +335,18 @@ class MyNJILGA_Dues_Invoice_Table {
     /**
      * @return array<string,int> status => count (only statuses present).
      */
-    public static function counts_by_status( int $duesYear ): array {
+    public static function counts_by_status( int $duesYear, ?bool $livemode = null ): array {
         global $wpdb;
-        $table = self::table_name();
-        $rows  = (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT status, COUNT(*) AS c FROM $table WHERE dues_year = %d GROUP BY status",
-            $duesYear
+        $table  = self::table_name();
+        $where  = [ 'dues_year = %d' ];
+        $params = [ $duesYear ];
+        if ( $livemode !== null ) {
+            $where[]  = 'livemode = %d';
+            $params[] = $livemode ? 1 : 0;
+        }
+        $rows = (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            'SELECT status, COUNT(*) AS c FROM ' . $table . ' WHERE ' . implode( ' AND ', $where ) . ' GROUP BY status',
+            $params
         ) );
 
         $counts = [];
@@ -340,12 +361,18 @@ class MyNJILGA_Dues_Invoice_Table {
      *
      * @return array<string,int> status => sum(total_amount_cents)
      */
-    public static function totals_by_status( int $duesYear ): array {
+    public static function totals_by_status( int $duesYear, ?bool $livemode = null ): array {
         global $wpdb;
-        $table = self::table_name();
-        $rows  = (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT status, SUM(total_amount_cents) AS t FROM $table WHERE dues_year = %d GROUP BY status",
-            $duesYear
+        $table  = self::table_name();
+        $where  = [ 'dues_year = %d' ];
+        $params = [ $duesYear ];
+        if ( $livemode !== null ) {
+            $where[]  = 'livemode = %d';
+            $params[] = $livemode ? 1 : 0;
+        }
+        $rows = (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            'SELECT status, SUM(total_amount_cents) AS t FROM ' . $table . ' WHERE ' . implode( ' AND ', $where ) . ' GROUP BY status',
+            $params
         ) );
         $totals = [];
         foreach ( $rows as $row ) {
@@ -428,22 +455,32 @@ class MyNJILGA_Dues_Invoice_Table {
 
     /**
      * Insert a fresh draft/excluded row, or — if one exists for the same
-     * (company, year, kind, bill-to) and is STILL draft/excluded — refresh
-     * it with the newly computed snapshot. Rows past draft are left
-     * untouched: re-running "Generate Preview" can never clobber a roster
-     * that's already been approved or billed.
+     * (company, year, kind, bill-to, livemode) and is STILL draft/excluded
+     * — refresh it with the newly computed snapshot. Rows past draft are
+     * left untouched: re-running "Generate Preview" can never clobber a
+     * roster that's already been approved or billed.
      *
-     * @param array{dues_year:int,fluentcrm_company_id:int,fluentcrm_owner_contact_id:int,bill_to_contact_id:int,billing_mode:string,invoice_kind:string,status:string,total_amount_cents:int,roster_snapshot:string} $data
+     * $data['livemode'] fixes which Stripe mode this row belongs to for
+     * its whole lifetime, from the moment the draft is generated — a
+     * preview run in Test mode and one in Live mode for the same firm/year
+     * are two distinct rows (the UNIQUE KEY includes livemode precisely so
+     * they don't collide); find_row() below only ever looks up a row in
+     * the SAME mode, so switching modes and re-running Generate Preview
+     * inserts a fresh row rather than reusing the other mode's.
+     *
+     * @param array{dues_year:int,fluentcrm_company_id:int,fluentcrm_owner_contact_id:int,bill_to_contact_id:int,billing_mode:string,invoice_kind:string,status:string,total_amount_cents:int,roster_snapshot:string,livemode:bool} $data
      * @return int|null The row id, or null if an existing non-draft row blocked the refresh.
      */
     public static function upsert_draft( array $data ): ?int {
         global $wpdb;
         $table    = self::table_name();
+        $livemode = (bool) ( $data['livemode'] ?? true );
         $existing = self::find_row(
             (int) $data['fluentcrm_company_id'],
             (int) $data['dues_year'],
             (string) $data['invoice_kind'],
-            (int) $data['bill_to_contact_id']
+            (int) $data['bill_to_contact_id'],
+            $livemode
         );
 
         if ( $existing ) {
@@ -479,9 +516,10 @@ class MyNJILGA_Dues_Invoice_Table {
                 'status'                     => (string) $data['status'],
                 'total_amount_cents'         => (int) $data['total_amount_cents'],
                 'roster_snapshot'            => (string) $data['roster_snapshot'],
+                'livemode'                   => $livemode ? 1 : 0,
                 'created_at'                 => current_time( 'mysql' ),
             ],
-            [ '%d', '%d', '%d', '%d', '%s', '%s', '%s', '%d', '%s', '%s' ]
+            [ '%d', '%d', '%d', '%d', '%s', '%s', '%s', '%d', '%s', '%d', '%s' ]
         );
         return (int) $wpdb->insert_id;
     }
@@ -495,13 +533,16 @@ class MyNJILGA_Dues_Invoice_Table {
      * @param array<int,int> $keepIds
      * @return int Rows deleted.
      */
-    public static function delete_stale_drafts( int $companyId, int $duesYear, array $keepIds ): int {
+    public static function delete_stale_drafts( int $companyId, int $duesYear, array $keepIds, bool $livemode ): int {
         global $wpdb;
         $table   = self::table_name();
         $keepIds = array_values( array_filter( array_map( 'intval', $keepIds ) ) );
 
-        $sql  = "DELETE FROM $table WHERE fluentcrm_company_id = %d AND dues_year = %d AND status IN (%s, %s)";
-        $args = [ $companyId, $duesYear, self::STATUS_DRAFT, self::STATUS_EXCLUDED ];
+        // Scoped to $livemode: a preview run in one mode must never delete
+        // the OTHER mode's stale drafts for this firm/year — they weren't
+        // (and can't be) reproduced by this run's $keepIds at all.
+        $sql  = "DELETE FROM $table WHERE fluentcrm_company_id = %d AND dues_year = %d AND livemode = %d AND status IN (%s, %s)";
+        $args = [ $companyId, $duesYear, $livemode ? 1 : 0, self::STATUS_DRAFT, self::STATUS_EXCLUDED ];
         if ( $keepIds ) {
             $sql   .= ' AND id NOT IN (' . implode( ',', array_fill( 0, count( $keepIds ), '%d' ) ) . ')';
             $args   = array_merge( $args, $keepIds );
