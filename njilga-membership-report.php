@@ -66,6 +66,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/interface-invoice-gateway.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-invoice-gateway.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-webhook.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-reconciler.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-roster.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
@@ -113,6 +114,11 @@ MyNJILGA_Invoice_Creator::register();
 // both the REST endpoint and the scheduler's worker can find it.
 MyNJILGA_Stripe_Webhook::register();
 
+// Stripe reconciler — the webhook's safety net. Registers its daily
+// Action Scheduler job (and schedules it, once) on every request so the
+// scheduler's worker can find the hook.
+MyNJILGA_Stripe_Reconciler::register();
+
 // Payment listener: registered once every plugin has loaded, so a site
 // can swap the invoice gateway via the `my_njilga_invoice_gateway` filter
 // before the "order paid" hook is bound.
@@ -152,6 +158,7 @@ add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_APPROVE,   [ 'MyNJIL
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_CREATE,    [ 'MyNJILGA_Page_Invoicing', 'handle_create' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SEND,      [ 'MyNJILGA_Page_Invoicing', 'handle_send' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_DOWNGRADE, [ 'MyNJILGA_Page_Invoicing', 'handle_downgrade' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SYNC,      [ 'MyNJILGA_Page_Invoicing', 'handle_sync' ] );
 
 // Dues & Billing settings.
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_SAVE,  [ 'MyNJILGA_Page_Settings', 'handle_save' ] );

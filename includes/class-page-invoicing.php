@@ -28,8 +28,10 @@ class MyNJILGA_Page_Invoicing {
     const ACTION_CREATE    = 'my_njilga_dues_create';
     const ACTION_SEND      = 'my_njilga_dues_send';
     const ACTION_DOWNGRADE = 'my_njilga_dues_downgrade';
+    const ACTION_SYNC      = 'my_njilga_dues_stripe_sync';
 
-    const FORM_ID = 'njilga-inv-form';
+    const FORM_ID      = 'njilga-inv-form';
+    const SYNC_FORM_ID = 'njilga-inv-sync';
 
     // -------------------------------------------------------------------------
     // Render
@@ -83,6 +85,10 @@ class MyNJILGA_Page_Invoicing {
         $tally = self::tally( $views );
 
         self::render_header( $duesYear, $tally, $canCreate );
+        // Always present once the header is — the header's own "Sync with
+        // Stripe" button targets this form by id regardless of whether
+        // the year has any rows yet.
+        self::render_sync_form( $duesYear );
 
         if ( empty( $rows ) ) {
             self::render_empty_state( $duesYear );
@@ -133,6 +139,11 @@ class MyNJILGA_Page_Invoicing {
             '<a class="njilga-btn njilga-btn-outline" href="%s">%s Manage Dues Rules</a>',
             esc_url( $settingsUrl ),
             self::icon( 'sliders' )
+        );
+        printf(
+            '<button type="submit" form="%s" class="njilga-btn njilga-btn-outline" title="Check every created/sent invoice for this year against Stripe">%s Sync with Stripe</button>',
+            esc_attr( self::SYNC_FORM_ID ),
+            self::icon( 'refresh' )
         );
         printf(
             '<button type="submit" %s name="all" value="1" class="njilga-btn njilga-btn-primary"%s>%s Create Ready Invoices</button>',
@@ -245,6 +256,7 @@ class MyNJILGA_Page_Invoicing {
                 <option value="ready">Ready</option>
                 <option value="created">Invoice Created</option>
                 <option value="sent">Sent</option>
+                <option value="processing">Processing (ACH)</option>
                 <option value="paid">Paid</option>
                 <option value="blocked">Blocked</option>
                 <option value="error">Error</option>
@@ -403,17 +415,28 @@ class MyNJILGA_Page_Invoicing {
             case 'created':
                 $view = $link !== '' ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View</a>', esc_url( $link ) ) : '';
                 return sprintf(
-                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d">Send</button> %s',
+                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d">Send</button> %s %s',
                     $rowId,
-                    $view
+                    $view,
+                    self::sync_button( $rowId )
                 );
 
             case 'sent':
                 $view = $link !== '' ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View</a>', esc_url( $link ) ) : '';
                 return sprintf(
-                    '%s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d">Resend</button>',
+                    '%s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d">Resend</button> %s',
                     $view,
-                    $rowId
+                    $rowId,
+                    self::sync_button( $rowId )
+                );
+
+            case 'processing':
+                $view = $link !== '' ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View</a>', esc_url( $link ) ) : '';
+                return sprintf(
+                    '<span class="njilga-dim njilga-inline-status">%s Processing (ACH)</span> %s %s',
+                    self::icon( 'refresh' ),
+                    $view,
+                    self::sync_button( $rowId )
                 );
 
             case 'paid':
@@ -603,6 +626,13 @@ class MyNJILGA_Page_Invoicing {
             case $T::STATUS_SENT:
                 return self::verdict( 'created', 'sent', [ 'Sent', 'info' ], [ 'Complete', true ], false );
 
+            // ACH-in-flight (set only by the payment_intent.processing
+            // webhook event, or the reconciler catching up to it) — not
+            // yet settled, not an error either.
+            case $T::STATUS_PROCESSING:
+                $val = $hasError ? [ (string) $row->last_error, false ] : [ 'Payment in progress (ACH)', true ];
+                return self::verdict( 'created', 'processing', [ 'Processing', 'info' ], $val, false );
+
             case $T::STATUS_PAID:
                 return self::verdict( 'created', 'paid', [ 'Paid', 'success' ], [ 'Complete', true ], false );
 
@@ -714,6 +744,44 @@ class MyNJILGA_Page_Invoicing {
             esc_attr( self::ACTION_SEND ),
             $duesYear,
             wp_nonce_field( self::ACTION_SEND, '_wpnonce', true, false )
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Sync with Stripe (header button + per-row "Refresh", same form)
+    // -------------------------------------------------------------------------
+
+    /**
+     * One shared form for both the header's whole-year "Sync with Stripe"
+     * button and every per-row "Refresh" button — exactly the same
+     * all-vs-single shape #njilga-inv-form already uses for "Create Ready
+     * Invoices" vs. a single-row "Create Invoice": no `single` field means
+     * the whole year, a `single` value scopes it to one invoice row. Both
+     * kinds of button live outside this form in the DOM and target it by
+     * id via the `form="..."` attribute (HTML doesn't require a form
+     * control to be a DOM descendant of the form it submits to).
+     */
+    private static function render_sync_form( int $duesYear ): void {
+        printf(
+            '<form id="%s" method="post" action="%s" hidden>
+                <input type="hidden" name="action" value="%s">
+                <input type="hidden" name="dues_year" value="%d">
+                %s
+             </form>',
+            esc_attr( self::SYNC_FORM_ID ),
+            esc_url( admin_url( 'admin-post.php' ) ),
+            esc_attr( self::ACTION_SYNC ),
+            $duesYear,
+            wp_nonce_field( self::ACTION_SYNC, '_wpnonce', true, false )
+        );
+    }
+
+    private static function sync_button( int $rowId ): string {
+        return sprintf(
+            '<button type="submit" form="%s" name="single" value="%d" class="njilga-btn njilga-btn-outline njilga-btn-sm" title="Check this invoice against Stripe">%s Refresh</button>',
+            esc_attr( self::SYNC_FORM_ID ),
+            $rowId,
+            self::icon( 'refresh' )
         );
     }
 
@@ -903,6 +971,7 @@ class MyNJILGA_Page_Invoicing {
             'sent'            => 'success',
             'sent_partial'    => 'warning',
             'downgraded'      => 'success',
+            'synced'          => 'info',
             'nothing'         => 'info',
             'error'           => 'error',
         ];
@@ -952,6 +1021,8 @@ class MyNJILGA_Page_Invoicing {
                 return sprintf( '%d invoice%s sent, %d failed — see details below.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
             case 'downgraded':
                 return sprintf( 'Sweep complete: %d invoice%s across %d firm%s — %d member%s tagged unpaid, %d WordPress role%s removed, %d protected by a paid invoice.', $g( 'invoices' ), $g( 'invoices' ) === 1 ? '' : 's', $g( 'firms' ), $g( 'firms' ) === 1 ? '' : 's', $g( 'members' ), $g( 'members' ) === 1 ? '' : 's', $g( 'roles' ), $g( 'roles' ) === 1 ? '' : 's', $g( 'protected' ) );
+            case 'synced':
+                return sprintf( 'Checked %d invoice%s — %d updated, %d needs attention.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'updated' ), $g( 'attention' ) );
             case 'nothing':
                 return 'Nothing selected.';
             case 'error':
@@ -1273,6 +1344,28 @@ JS;
             'members'   => $result['members_downgraded'],
             'roles'     => $result['roles_removed'],
             'protected' => $result['protected'],
+        ] );
+    }
+
+    /**
+     * The whole-year "Sync with Stripe" button and every per-row
+     * "Refresh" button post here — a `single` value scopes the sweep to
+     * one invoice row, its absence (the header button) means the whole
+     * year. A single synchronous POST + redirect + summary notice, same
+     * as every other bulk action on this page — no progress bar/polling.
+     */
+    public static function handle_sync(): void {
+        self::guard( self::ACTION_SYNC );
+        $duesYear = self::post_year();
+
+        $onlyRowId = isset( $_POST['single'] ) ? (int) $_POST['single'] : 0;
+        $result    = MyNJILGA_Stripe_Reconciler::sync_year( $duesYear, null, $onlyRowId > 0 ? $onlyRowId : null );
+
+        self::redirect( $duesYear, [
+            'msg'       => 'synced',
+            'count'     => $result['checked'],
+            'updated'   => $result['updated'],
+            'attention' => $result['needs_attention'],
         ] );
     }
 

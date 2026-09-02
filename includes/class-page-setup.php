@@ -43,6 +43,9 @@ class MyNJILGA_Page_Setup {
             self::render_all_tags();
         }
 
+        self::render_stripe_reconciliation_section();
+        self::render_stripe_needs_attention();
+
         self::render_shortcodes();
 
         MyNJILGA_Admin_UI::close();
@@ -291,6 +294,96 @@ class MyNJILGA_Page_Setup {
                 }
             }
             printf( '<tr><td>%s</td><td class="njilga-col-num">%s</td><td>%s</td><td>%s</td></tr>', esc_html( $label ), esc_html( MyNJILGA_Invoicing::money( $cents ) ), $mapped, $status );
+        }
+        echo '</tbody></table></div></div>';
+    }
+
+    /**
+     * Stripe migration phase 4 (reconciler) — connection health for the
+     * active mode, plus a collapsed diagnostic log of recent Stripe API
+     * requests. What the reconciler and the Invoicing page's "Sync with
+     * Stripe" button rely on being healthy; the invoices that couldn't be
+     * resolved automatically are their own section (render_stripe_needs_attention()).
+     */
+    private static function render_stripe_reconciliation_section(): void {
+        MyNJILGA_Admin_UI::section(
+            'Stripe reconciliation',
+            'Connection health for the active Stripe mode, and a diagnostic log of recent Stripe API activity.'
+        );
+
+        $healthErrors = MyNJILGA_Stripe_Connection::health();
+        if ( empty( $healthErrors ) ) {
+            MyNJILGA_Admin_UI::callout( 'Stripe connection is healthy.', 'success' );
+        } else {
+            foreach ( $healthErrors as $err ) {
+                MyNJILGA_Admin_UI::callout( esc_html( $err ), 'warning' );
+            }
+        }
+
+        self::render_stripe_request_log();
+    }
+
+    private static function render_stripe_request_log(): void {
+        $requests = array_slice( MyNJILGA_Stripe_Client::recent_requests(), 0, 20 );
+
+        echo '<details class="njilga-details"><summary>' . MyNJILGA_Admin_UI::icon( 'refresh' ) . ' Recent Stripe API requests (last 100, showing 20)</summary>';
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table njilga-table-compact"><thead><tr>
+                <th>Timestamp</th><th>Method</th><th>Path</th><th class="njilga-col-num">Status</th><th>Request id</th>
+              </tr></thead><tbody>';
+
+        if ( empty( $requests ) ) {
+            echo '<tr class="njilga-emptyrow"><td colspan="5">No Stripe API requests recorded yet.</td></tr>';
+        } else {
+            foreach ( $requests as $r ) {
+                $status = (int) ( $r['status'] ?? 0 );
+                $ok     = $status >= 200 && $status < 300;
+                printf(
+                    '<tr><td class="njilga-nowrap">%s</td><td>%s</td><td><code>%s</code></td><td class="njilga-col-num">%s</td><td>%s</td></tr>',
+                    esc_html( (string) ( $r['at'] ?? '' ) ),
+                    esc_html( (string) ( $r['method'] ?? '' ) ),
+                    esc_html( (string) ( $r['path'] ?? '' ) ),
+                    $ok ? esc_html( (string) $status ) : MyNJILGA_Admin_UI::status( (string) $status, 'bad' ),
+                    ( $r['request_id'] ?? '' ) !== '' ? esc_html( (string) $r['request_id'] ) : MyNJILGA_Admin_UI::blank()
+                );
+            }
+        }
+
+        echo '</tbody></table></div></div></details>';
+    }
+
+    /**
+     * Every invoice row (any status except excluded, any year) in the
+     * active mode currently carrying a last_error — set by the Stripe
+     * webhook receiver, the reconciler, or a failed send. There is no
+     * clean way to tell those sources apart from last_error alone, so
+     * this simply lists everything flagged; the error text itself says
+     * what went wrong.
+     */
+    private static function render_stripe_needs_attention(): void {
+        MyNJILGA_Admin_UI::section(
+            'Needs attention',
+            'Every invoice — any status, any year, except excluded — currently carrying an error from a payment event, a failed send, or the reconciler.'
+        );
+
+        $livemode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+        $rows     = MyNJILGA_Dues_Invoice_Table::get_flagged( $livemode );
+
+        if ( empty( $rows ) ) {
+            MyNJILGA_Admin_UI::callout( 'No invoices currently flagged for review.', 'success' );
+            return;
+        }
+
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
+                <th>Firm</th><th class="njilga-col-num">Dues year</th><th>Status</th><th>Error</th>
+              </tr></thead><tbody>';
+        foreach ( $rows as $row ) {
+            printf(
+                '<tr><td>%s</td><td class="njilga-col-num">%d</td><td>%s</td><td>%s</td></tr>',
+                esc_html( MyNJILGA_Dues_Snapshot::company_name( $row ) ),
+                (int) $row->dues_year,
+                MyNJILGA_Admin_UI::pill( ucfirst( (string) $row->status ), 'muted' ),
+                esc_html( (string) $row->last_error )
+            );
         }
         echo '</tbody></table></div></div>';
     }

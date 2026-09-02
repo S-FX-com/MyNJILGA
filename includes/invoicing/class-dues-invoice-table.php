@@ -361,12 +361,56 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
+     * Every row, across every dues year, in the given mode, carrying a
+     * last_error and not excluded — the Setup page's Stripe reconciliation
+     * "Needs attention" panel. Unlike get_with_errors(), not scoped to one
+     * dues year: a payment-event or reconciler flag belongs on that list
+     * regardless of which year or stage the row is in.
+     *
+     * @return array<int,object>
+     */
+    public static function get_flagged( bool $livemode ): array {
+        global $wpdb;
+        $table = self::table_name();
+        return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE livemode = %d AND status <> %s AND last_error IS NOT NULL AND last_error <> '' ORDER BY dues_year DESC, id ASC",
+            $livemode ? 1 : 0,
+            self::STATUS_EXCLUDED
+        ) );
+    }
+
+    /**
      * @return array<int,int> Distinct dues years present, newest first.
      */
     public static function years(): array {
         global $wpdb;
         $table = self::table_name();
         return array_map( 'intval', (array) $wpdb->get_col( "SELECT DISTINCT dues_year FROM $table ORDER BY dues_year DESC" ) ); // phpcs:ignore
+    }
+
+    /**
+     * Distinct dues years, newest first, that have at least one row in the
+     * given statuses and mode — e.g. "which years still have anything
+     * non-terminal in Stripe's active mode". Used by the reconciler's
+     * daily sweep (MyNJILGA_Stripe_Reconciler::run_daily()) to know which
+     * years are even worth checking, without re-fetching every paid/
+     * terminal row every day.
+     *
+     * @param array<int,string> $statuses
+     * @return array<int,int>
+     */
+    public static function years_with_status( array $statuses, bool $livemode ): array {
+        global $wpdb;
+        if ( empty( $statuses ) ) {
+            return [];
+        }
+        $table        = self::table_name();
+        $placeholders = implode( ',', array_fill( 0, count( $statuses ), '%s' ) );
+        $query        = "SELECT DISTINCT dues_year FROM $table WHERE livemode = %d AND status IN ($placeholders) ORDER BY dues_year DESC";
+        return array_map( 'intval', (array) $wpdb->get_col( $wpdb->prepare( // phpcs:ignore
+            $query,
+            array_merge( [ $livemode ? 1 : 0 ], $statuses )
+        ) ) );
     }
 
     // -------------------------------------------------------------------------
