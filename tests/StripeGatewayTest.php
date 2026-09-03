@@ -6,7 +6,7 @@
  * constructor / private client() helper).
  *
  * Every other interface method (is_available, find_or_create_customer,
- * invoice_status, mark_paid_out_of_band, ...) reaches into
+ * invoice_status, void_invoice, ...) reaches into
  * MyNJILGA_Stripe_Connection, which calls get_option()/current_time() —
  * genuinely WordPress-dependent — and is out of scope for this
  * dependency-free runner.
@@ -113,6 +113,33 @@ class StripeGatewayTest extends NJILGA_TestCase {
     }
 
     // -------------------------------------------------------------------
+    // (a0) Due date: an explicit one replaces the rolling window
+    // -------------------------------------------------------------------
+
+    /**
+     * Real dues invoices carry a due_timestamp (year end — see
+     * MyNJILGA_Invoicing::year_end_due_timestamp()). Stripe rejects an
+     * invoice carrying BOTH due_date and days_until_due with a 400, so
+     * the two must never appear together.
+     */
+    public function testExplicitDueTimestampReplacesDaysUntilDue(): void {
+        $client = new FakeStripeClientForGatewayTest();
+        $client->queue_response( [ 'body' => [ 'id' => 'in_1' ] ] );
+        $client->queue_response( [ 'body' => [] ] );
+        $client->queue_response( [ 'body' => [ 'id' => 'in_1' ] ] );
+
+        $due     = (int) strtotime( '2026-12-31 12:00:00 UTC' );
+        $gateway = new MyNJILGA_Stripe_Invoice_Gateway( $client );
+        $gateway->create_order( 'cus_1', $this->sample_line_items( 1 ), $this->sample_context( [
+            'due_timestamp' => $due,
+        ] ) );
+
+        $params = $client->calls[0]['params'];
+        $this->assertSame( $due, $params['due_date'] );
+        $this->assertFalse( isset( $params['days_until_due'] ), 'days_until_due must not ride along with due_date' );
+    }
+
+    // -------------------------------------------------------------------
     // (a) Full create -> add_lines -> finalize sequence, right order/paths
     // -------------------------------------------------------------------
 
@@ -187,7 +214,9 @@ class StripeGatewayTest extends NJILGA_TestCase {
         $params = $client->calls[0]['params'];
         $this->assertSame( 'cus_1', $params['customer'] );
         $this->assertSame( 'send_invoice', $params['collection_method'] );
+        // No due_timestamp in this context, so the rolling window applies.
         $this->assertSame( 30, $params['days_until_due'] );
+        $this->assertFalse( isset( $params['due_date'] ) );
         $this->assertFalse( $params['auto_advance'] );
         $this->assertSame( 'exclude', $params['pending_invoice_items_behavior'] );
         $this->assertSame( 'usd', $params['currency'] );

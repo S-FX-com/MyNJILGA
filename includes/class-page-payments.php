@@ -674,7 +674,6 @@ class MyNJILGA_Page_Payments {
         $kindMap = [
             MyNJILGA_Dues_Payments_Table::KIND_PAYMENT => [ 'Payment', 'success' ],
             MyNJILGA_Dues_Payments_Table::KIND_REFUND  => [ 'Refund', 'destructive' ],
-            MyNJILGA_Dues_Payments_Table::KIND_MANUAL  => [ 'Manual', 'outline' ],
         ];
         [ $kindLabel, $kindVariant ] = $kindMap[ (string) $p->kind ] ?? [ ucfirst( (string) $p->kind ), 'muted' ];
 
@@ -955,6 +954,12 @@ class MyNJILGA_Page_Payments {
         }
         if ( $method === 'cash' ) {
             return 'Cash';
+        }
+        // An invoice closed out with Stripe's own "Mark as paid" carries
+        // that phrase as its reference — say so, rather than the bare
+        // "Manual" that tells nobody where the record came from.
+        if ( $ref === MyNJILGA_Stripe_Webhook::MARKED_PAID_IN_STRIPE ) {
+            return $ref;
         }
         return 'Manual';
     }

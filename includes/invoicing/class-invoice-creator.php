@@ -194,6 +194,12 @@ class MyNJILGA_Invoice_Creator {
             'invoice_row_id' => (int) $invoiceRow->id,
             'invoice_kind'   => $kind,
             'bill_to_contact_id' => (int) ( $billTo['contact_id'] ?? 0 ),
+            // WHEN dues fall due is invoicing policy, not Stripe
+            // mechanics, so it is decided here and handed over as a
+            // timestamp — see MyNJILGA_Invoicing::year_end_due_timestamp().
+            'due_timestamp'  => MyNJILGA_Invoicing::year_end_due_timestamp(
+                (int) MyNJILGA_Stripe_Connection::setting( 'days_until_due', 30 )
+            ),
         ] );
 
         if ( empty( $result['ok'] ) ) {

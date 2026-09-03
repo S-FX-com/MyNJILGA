@@ -192,36 +192,32 @@ class MyNJILGA_Stripe_Reconciler {
 
         // 3a — missed-webhook safety net: Stripe shows paid, we don't yet.
         if ( $missedPayment ) {
-            // Mirrors class-stripe-webhook.php's handle_invoice_paid()
-            // exactly: an out-of-band ("Mark Paid") settlement carries
-            // njilga_payment_method in its Stripe metadata, and its
-            // njilga_final_payment_amount_cents is the exact remainder
-            // that payment covered — NOT Stripe's cumulative amount_paid,
-            // which would double-count any prior manually-recorded
-            // partial (the webhook and the reconciler are two different
-            // code paths that can both notice the SAME settlement; they
-            // must resolve the same amount or the ledger overstates it).
-            $metadata        = (array) ( $fetched['metadata'] ?? [] );
-            $offStripeMethod = isset( $metadata['njilga_payment_method'] ) ? (string) $metadata['njilga_payment_method'] : '';
+            if ( ! empty( $fetched['paid_out_of_band'] ) ) {
+                // The same case the webhook handles: closed out with
+                // Stripe's own "Mark as paid" rather than through this
+                // plugin. Resolved identically — same amount rule, same
+                // label, same off-Stripe accounting — because the webhook
+                // and this sweep can both notice the SAME settlement and
+                // must not describe it differently.
+                $offStripeCents = MyNJILGA_Stripe_Webhook::off_stripe_amount_cents( $rowAmtDue, $stripeAmtPaid );
 
-            if ( $offStripeMethod !== '' ) {
-                $finalAmountCents = isset( $metadata['njilga_final_payment_amount_cents'] ) ? (int) $metadata['njilga_final_payment_amount_cents'] : 0;
-                $reference        = '';
-                if ( isset( $metadata['njilga_check_number'] ) && (string) $metadata['njilga_check_number'] !== '' ) {
-                    $reference = (string) $metadata['njilga_check_number'];
-                } elseif ( isset( $metadata['njilga_wire_reference'] ) && (string) $metadata['njilga_wire_reference'] !== '' ) {
-                    $reference = (string) $metadata['njilga_wire_reference'];
-                }
+                $paidAt     = (int) ( $fetched['status_transitions']['paid_at'] ?? 0 );
+                $occurredAt = $paidAt > 0 ? gmdate( 'Y-m-d H:i:s', $paidAt ) : current_time( 'mysql' );
+
                 $payment = [
                     'stripe_object_id' => self::best_effort_object_id( $fetched, $invoiceId ),
                     'kind'             => MyNJILGA_Dues_Payments_Table::KIND_PAYMENT,
-                    'method'           => $offStripeMethod,
-                    'amount_cents'     => $finalAmountCents > 0 ? $finalAmountCents : $stripeAmtPaid,
+                    'method'           => 'other',
+                    'amount_cents'     => $offStripeCents,
                     'status'           => 'succeeded',
-                    'occurred_at'      => current_time( 'mysql' ),
-                    'reference'        => $reference !== '' ? $reference : null,
+                    'occurred_at'      => $occurredAt,
+                    'reference'        => MyNJILGA_Stripe_Webhook::MARKED_PAID_IN_STRIPE,
                     'raw'              => wp_json_encode( [ 'reconciled_by' => 'MyNJILGA_Stripe_Reconciler', 'at' => current_time( 'mysql' ) ] ),
                 ];
+
+                MyNJILGA_Dues_Invoice_Table::update_gateway_fields( $rowId, [
+                    'paid_off_stripe_cents' => (int) ( $invoiceRow->paid_off_stripe_cents ?? 0 ) + $offStripeCents,
+                ] );
             } else {
                 $detail  = self::best_effort_payment_detail( $fetched );
                 $payment = [

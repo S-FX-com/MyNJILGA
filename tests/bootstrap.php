@@ -21,6 +21,12 @@ declare( strict_types=1 );
 
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-settings.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-pricing-engine.php';
+// Loaded for year_end_due_timestamp() only — gateway() is the sole method
+// here that touches WordPress, and no test calls it.
+require_once dirname( __DIR__ ) . '/includes/invoicing/class-invoicing.php';
+// Loaded for off_stripe_amount_cents() only — the class registers its
+// REST route from register(), which no test calls.
+require_once dirname( __DIR__ ) . '/includes/invoicing/class-stripe-webhook.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-ledger-totals.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-snapshot.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-invoice-table.php';

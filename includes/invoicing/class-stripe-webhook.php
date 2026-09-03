@@ -34,6 +34,14 @@
  */
 class MyNJILGA_Stripe_Webhook {
 
+    /**
+     * Ledger `reference` for an invoice closed out with Stripe's own
+     * "Mark as paid" — Stripe tells us nothing about how it was actually
+     * paid, so this says where the record came from instead of implying
+     * a cheque number nobody typed.
+     */
+    const MARKED_PAID_IN_STRIPE = 'Marked paid in Stripe';
+
     const HOOK_PROCESS = 'njilga_stripe_process_webhook_event';
     const AS_GROUP      = 'njilga-dues';
 
@@ -328,6 +336,27 @@ class MyNJILGA_Stripe_Webhook {
     /**
      * @param array<string,mixed> $dataObject The Invoice object.
      */
+    /**
+     * How much money ONE out-of-band settlement actually moved.
+     *
+     * Stripe's amount_paid is CUMULATIVE for the invoice, so it is the
+     * wrong number the moment any of the balance was already recorded
+     * here: a $100 check logged in the admin followed by "Mark as paid"
+     * in the Stripe Dashboard would otherwise book the full $200 again
+     * on top of the $100, and the firm would show as having paid $300.
+     * The balance still outstanding on our row immediately before the
+     * event is exactly what this payment covered.
+     *
+     * Falls back to Stripe's figure only when we have no balance on file
+     * to reason from (a row whose amounts were never populated).
+     *
+     * @param int $localBalanceCents  amount_due_cents on the row before this event.
+     * @param int $stripeAmountPaid   The invoice's cumulative amount_paid.
+     */
+    public static function off_stripe_amount_cents( int $localBalanceCents, int $stripeAmountPaid ): int {
+        return $localBalanceCents > 0 ? $localBalanceCents : max( 0, $stripeAmountPaid );
+    }
+
     private static function handle_invoice_paid( string $eventId, array $dataObject, bool $livemode ): void {
         $row = self::resolve_invoice_row( 'invoice.paid', $dataObject );
         if ( ! $row ) {
@@ -346,50 +375,32 @@ class MyNJILGA_Stripe_Webhook {
         $piId     = self::extract_ref_id( $dataObject['payment_intent'] ?? null );
         $objectId = $chargeId !== '' ? $chargeId : ( $piId !== '' ? $piId : $invoiceId );
 
-        $metadata        = (array) ( $dataObject['metadata'] ?? [] );
-        $offStripeMethod = isset( $metadata['njilga_payment_method'] ) ? (string) $metadata['njilga_payment_method'] : '';
+        if ( ! empty( $dataObject['paid_out_of_band'] ) ) {
+            // Closed out with Stripe's own "Mark as paid" — the way a
+            // cheque that arrived in the post gets settled. There is no
+            // charge or payment_intent to inspect, and Stripe records no
+            // method detail of its own, so the honest record is "other,
+            // settled off Stripe" rather than a guess at cheque/wire/cash.
+            $detail = [ 'method' => 'other', 'card_brand' => null, 'last4' => null, 'bank_name' => null, 'receipt_url' => null ];
 
-        if ( $offStripeMethod !== '' ) {
-            // Recorded through this migration's "Mark Paid" admin flow
-            // (MyNJILGA_Page_Invoicing::handle_mark_paid() ->
-            // mark_paid_out_of_band()) rather than a real card/ACH charge —
-            // there is no payment_intent to inspect for an out-of-band
-            // payment, so resolve_payment_method_detail()'s enrichment
-            // below would find nothing useful regardless. Build the
-            // ledger entry straight from the metadata that flow wrote.
-            $detail = [ 'method' => $offStripeMethod, 'card_brand' => null, 'last4' => null, 'bank_name' => null, 'receipt_url' => null ];
+            $offStripeCents = self::off_stripe_amount_cents(
+                (int) ( $row->amount_due_cents ?? 0 ),
+                (int) ( $dataObject['amount_paid'] ?? 0 )
+            );
 
-            $reference = '';
-            if ( isset( $metadata['njilga_check_number'] ) && (string) $metadata['njilga_check_number'] !== '' ) {
-                $reference = (string) $metadata['njilga_check_number'];
-            } elseif ( isset( $metadata['njilga_wire_reference'] ) && (string) $metadata['njilga_wire_reference'] !== '' ) {
-                $reference = (string) $metadata['njilga_wire_reference'];
-            }
-
-            // The exact remainder this off-Stripe payment covers — never
-            // Stripe's own cumulative amount_paid, which would
-            // double-count a prior manually-recorded partial. The
-            // fallback below should essentially never fire once this
-            // flow always sets the metadata field, but stays as a
-            // defensive backstop rather than assuming.
-            $finalAmountCents = isset( $metadata['njilga_final_payment_amount_cents'] ) ? (int) $metadata['njilga_final_payment_amount_cents'] : 0;
-            $amountCents      = $finalAmountCents > 0 ? $finalAmountCents : (int) ( $dataObject['amount_paid'] ?? 0 );
-
-            $occurredAt = current_time( 'mysql' );
-            $checkDate  = isset( $metadata['njilga_check_date'] ) ? (string) $metadata['njilga_check_date'] : '';
-            $parsedDate = \DateTime::createFromFormat( 'Y-m-d', $checkDate );
-            if ( $parsedDate && $parsedDate->format( 'Y-m-d' ) === $checkDate ) {
-                $occurredAt = $checkDate . ' 00:00:00';
-            }
+            // Stripe's own timestamp for when it was marked paid, not
+            // whenever this delivery happened to be processed.
+            $paidAt     = (int) ( $dataObject['status_transitions']['paid_at'] ?? 0 );
+            $occurredAt = $paidAt > 0 ? gmdate( 'Y-m-d H:i:s', $paidAt ) : current_time( 'mysql' );
 
             $payment = [
                 'stripe_object_id' => $objectId,
                 'kind'             => MyNJILGA_Dues_Payments_Table::KIND_PAYMENT,
-                'method'           => $offStripeMethod,
-                'amount_cents'     => $amountCents,
+                'method'           => 'other',
+                'amount_cents'     => $offStripeCents,
                 'status'           => 'succeeded',
                 'occurred_at'      => $occurredAt,
-                'reference'        => $reference !== '' ? $reference : null,
+                'reference'        => self::MARKED_PAID_IN_STRIPE,
                 'raw'              => self::trimmed_json( $dataObject ),
             ];
         } else {
@@ -422,13 +433,23 @@ class MyNJILGA_Stripe_Webhook {
 
         // Not something handle_invoice_paid() does — the row update below
         // is this class's own responsibility.
-        MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
+        $rowFields = [
             'amount_paid_cents' => (int) ( $dataObject['amount_paid'] ?? 0 ),
             'amount_due_cents'  => (int) ( $dataObject['amount_remaining'] ?? 0 ),
             'primary_method'    => $detail['method'],
             'stripe_status'     => (string) ( $dataObject['status'] ?? '' ),
             'last_synced_at'    => current_time( 'mysql' ),
-        ] );
+        ];
+
+        // Money settled off Stripe needs recording as such, or a firm
+        // closed out by cheque looks — to anyone reconciling this page
+        // against a Stripe payout — like money Stripe should have sent
+        // and didn't.
+        if ( isset( $offStripeCents ) ) {
+            $rowFields['paid_off_stripe_cents'] = (int) ( $row->paid_off_stripe_cents ?? 0 ) + $offStripeCents;
+        }
+
+        MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, $rowFields );
 
         self::finish_processed( $eventId, (int) $row->id );
     }

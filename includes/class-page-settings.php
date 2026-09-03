@@ -389,7 +389,7 @@ class MyNJILGA_Page_Settings {
         echo '<p class="njilga-help">Fixed to USD — this organization bills in US dollars only.</p></td></tr>';
 
         printf(
-            '<tr><th scope="row"><label for="pmt-days">Days until due</label></th><td><input type="number" min="1" max="365" id="pmt-days" name="days_until_due" value="%d" class="njilga-input-sm"><p class="njilga-help">How many days after a Stripe invoice is finalized until it becomes due.</p></td></tr>',
+            '<tr><th scope="row"><label for="pmt-days">Minimum days until due</label></th><td><input type="number" min="1" max="365" id="pmt-days" name="days_until_due" value="%d" class="njilga-input-sm"><p class="njilga-help">Dues invoices fall due on <strong>31 December of the year they are raised in</strong>, so a firm reads one deadline: pay before the membership year starts. This is only the safety floor — an invoice raised so late in December that year-end is nearer than this many days gets that many days instead.</p></td></tr>',
             (int) $s['days_until_due']
         );
 

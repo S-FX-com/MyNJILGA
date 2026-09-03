@@ -23,9 +23,13 @@ class MyNJILGA_Dues_Payments_Table {
     const OPTION_DB_VERSION = 'njilga_dues_payments_db_version';
     const DB_VERSION        = '1.0.0';
 
+    // Every row is one of these two. There is no "manual" kind: money
+    // settled by cheque or wire is still a payment, and it reaches this
+    // table the same way any other does — through the invoice.paid
+    // webhook, whether the firm paid online or the invoice was closed
+    // out with Stripe's own "Mark as paid".
     const KIND_PAYMENT = 'payment';
     const KIND_REFUND  = 'refund';
-    const KIND_MANUAL  = 'manual';
 
     public static function table_name(): string {
         global $wpdb;

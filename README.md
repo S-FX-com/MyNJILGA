@@ -67,7 +67,7 @@ An annual, admin-driven batch process (**My NJILGA → Invoicing**), billed thro
 
 **FluentCRM tags are the source of truth for who owes what. WordPress roles are a downstream effect of payment, never an input to pricing.**
 
-**Flow:** Generate Preview → Create Invoices (per firm or in bulk; approves the frozen roster and creates the Stripe invoice in one step, Action Scheduler ~25 per job, per-row failure isolation) → Send (email + CC policy + Company Note) → Paid (automatic, driven by Stripe's `invoice.paid` webhook, with a daily reconciler as a safety net) → end-of-year Downgrade Sweep (manual, behind a confirmation screen). An invoice can also be settled by staff directly — **Mark Paid** for a check/cash/wire payment collected outside Stripe, or **Void** to cancel it — from a row action on the Invoicing table. Firms that can't be billed yet — no Owner, no members, nothing billable — are surfaced under **Needs Attention** rather than blocking the main list.
+**Flow:** Generate Preview → Create Invoices (per firm or in bulk; approves the frozen roster and creates the Stripe invoice in one step, Action Scheduler ~25 per job, per-row failure isolation) → Send (email + CC policy + Company Note) → Paid (automatic, driven by Stripe's `invoice.paid` webhook, with a daily reconciler as a safety net) → end-of-year Downgrade Sweep (manual, behind a confirmation screen). An invoice can also be cancelled outright with **Void**, a row action on the Invoicing table. A payment that arrives outside Stripe — a check in the post — is closed out in the **Stripe Dashboard** with its own "Mark as paid", which fires the same `invoice.paid` webhook and settles membership exactly as an online payment does. Firms that can't be billed yet — no Owner, no members, nothing billable — are surfaced under **Needs Attention** rather than blocking the main list.
 
 ### Settings → Dues & Billing (spec §3)
 
@@ -152,7 +152,11 @@ A **daily reconciler** (`class-stripe-reconciler.php`) is the webhook's safety n
 
 An ACH (`us_bank_account`) payment doesn't clear instantly — while it's in flight, Stripe fires `payment_intent.processing` and the invoice row moves to a `processing` status (**Payment in progress (ACH)**), distinct from unpaid, so it isn't mistaken for a firm that hasn't paid.
 
-**Mark Paid** and **Void**, both row actions on the Invoicing table for any `created`/`sent`/`processing` invoice, cover the cases Stripe itself never sees: **Mark Paid** records a check/cash/wire/other payment collected outside Stripe — a partial payment is logged entirely in WordPress (its own `njilga_dues_payments` ledger row plus a direct balance update, no Stripe call), while a payment that zeroes the balance calls Stripe's `mark_paid_out_of_band()` so the resulting `invoice.paid` webhook still drives settlement through the one path that's allowed to. **Void** cancels an invoice outright — terminal, the firm needs a new one if they still owe dues. Either action leaves a Company Note immediately.
+**Stripe is the only place a payment is ever recorded.** A check that arrives in the post is closed out with "Mark as paid" in the Stripe Dashboard; Stripe fires `invoice.paid` with `paid_out_of_band` set, and the plugin records it like any other payment — a `njilga_dues_payments` ledger row referenced as "Marked paid in Stripe", dated from Stripe's own `paid_at`, counted toward the invoice's `paid_off_stripe_cents` (money a Stripe payout will never contain), and settled through the one webhook path allowed to grant tags and roles. The method records as `other`: Stripe captures nothing about how an out-of-band invoice was actually paid, and inventing "check" would be a guess.
+
+**Void**, a row action on the Invoicing table for any `created`/`sent`/`processing` invoice, cancels an invoice outright — terminal, the firm needs a new one if they still owe dues. It leaves a Company Note immediately.
+
+Note the one thing this costs: **Stripe's "Mark as paid" settles the whole invoice**, so a *partial* payment has nowhere to be recorded. Leave the invoice open until the balance arrives in full.
 
 ### Downgrade sweep
 
@@ -252,7 +256,7 @@ my-njilga/
 │   │   ├── class-pricing-engine.php      ← PURE pricing function (unit-tested)
 │   │   ├── class-dues-snapshot.php       ← roster_snapshot shape (v2) + v1 upgrade
 │   │   ├── class-dues-invoice-table.php  ← njilga_dues_invoices schema (1.2.0) + CRUD
-│   │   ├── class-dues-payments-table.php ← njilga_dues_payments schema + CRUD (Mark Paid ledger)
+│   │   ├── class-dues-payments-table.php ← njilga_dues_payments schema + CRUD (payment/refund ledger)
 │   │   ├── interface-invoice-gateway.php ← Commerce seam
 │   │   ├── class-stripe-client.php       ← Raw Stripe HTTP transport (the only other file naming a Stripe endpoint)
 │   │   ├── class-stripe-connection.php   ← Credential storage/encryption, connect flow, webhook auto-provisioning

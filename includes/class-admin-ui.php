@@ -383,13 +383,17 @@ class MyNJILGA_Admin_UI {
 .njilga-toolbar-spacer{flex:1 1 auto}
 .njilga-search{position:relative;flex:1 1 260px;max-width:380px}
 .njilga-search .njilga-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted-fg)}
-.njilga-search input{width:100%;height:38px;padding:0 12px 0 34px;border:1px solid var(--border);
-  border-radius:var(--radius-control);font-size:13.5px;background:var(--bg);color:var(--fg);font-family:inherit}
 .njilga-ui input[type=text],.njilga-ui input[type=email],.njilga-ui input[type=number],
 .njilga-ui input[type=url],.njilga-ui input[type=search],.njilga-ui input[type=date],.njilga-ui textarea{
   height:38px;padding:0 12px;border:1px solid var(--border);border-radius:var(--radius-control);
   font-size:13.5px;background:var(--bg);color:var(--fg);font-family:inherit;max-width:100%}
 .njilga-ui textarea{height:auto;padding:9px 12px;line-height:1.5;resize:vertical}
+/* Room for the absolutely-positioned search icon. MUST stay after the
+   generic input rules above: those carry an attribute selector and so
+   outrank a bare `.njilga-search input`, which meant the 34px of left
+   padding was silently dropped and the placeholder rendered underneath
+   the icon. Same specificity as the generic rule, later in the file. */
+.njilga-ui .njilga-search input{width:100%;padding:0 12px 0 34px}
 .njilga-ui input:focus,.njilga-ui textarea:focus,.njilga-ui select:focus{
   outline:none;border-color:var(--ring);box-shadow:0 0 0 3px rgba(161,161,170,.25)}
 .njilga-select,.njilga-ui select{height:38px;padding:0 30px 0 12px;border:1px solid var(--border);
@@ -403,7 +407,11 @@ class MyNJILGA_Admin_UI {
 .njilga-select[multiple]{height:auto;min-height:84px;padding:6px 10px;background-image:none}
 .njilga-ui input[type=checkbox],.njilga-ui input[type=radio]{width:16px;height:16px;
   accent-color:var(--primary);cursor:pointer;margin:0}
-.njilga-input-sm{height:32px!important;font-size:12.5px!important;padding:0 9px!important}
+/* Same cascade rule as the search input above — the generic input rules
+   carry an attribute selector, so this needs to match their specificity
+   and come after them. It previously used !important three times to win
+   the same fight. */
+.njilga-ui input.njilga-input-sm{height:32px;font-size:12.5px;padding:0 9px}
 .njilga-full{width:100%}
 .njilga-help{color:var(--muted-fg);font-size:12.5px;margin:6px 0 0;line-height:1.5}
 .njilga-check-label{display:inline-flex;align-items:flex-start;gap:9px;font-size:13.5px;line-height:1.45}
