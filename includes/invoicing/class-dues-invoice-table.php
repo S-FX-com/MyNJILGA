@@ -305,6 +305,9 @@ class MyNJILGA_Dues_Invoice_Table {
      * assessment-only invoices (an unpaid dinner assessment doesn't lapse
      * a membership). Used by the downgrade sweep.
      *
+     * Online-join rows (kind 'join') are excluded outright, whatever their
+     * status: the payment was confirmed before the row was written.
+     *
      * Also excludes STATUS_VOIDED and STATUS_UNCOLLECTIBLE (staff already
      * closed these out — sweeping them again is meaningless) and
      * STATUS_PROCESSING (an ACH payment in flight is not an unpaid firm;
@@ -321,7 +324,7 @@ class MyNJILGA_Dues_Invoice_Table {
         global $wpdb;
         $table = self::table_name();
         return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status NOT IN (%s, %s, %s, %s, %s, %s) AND invoice_kind <> %s ORDER BY id ASC",
+            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status NOT IN (%s, %s, %s, %s, %s, %s) AND invoice_kind NOT IN (%s, %s) ORDER BY id ASC",
             $duesYear,
             $livemode ? 1 : 0,
             self::STATUS_PAID,
@@ -330,7 +333,40 @@ class MyNJILGA_Dues_Invoice_Table {
             self::STATUS_VOIDED,
             self::STATUS_UNCOLLECTIBLE,
             self::STATUS_PROCESSING,
-            MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT
+            MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT,
+            // An online join's row is backed by money Stripe already
+            // confirmed before the row existed — never "unpaid".
+            MyNJILGA_Dues_Snapshot::KIND_JOIN
+        ) );
+    }
+
+    /**
+     * Open, dues-settling invoices for the year (created, sent or clearing)
+     * whose frozen roster names this contact — so an online join never
+     * charges someone their firm's invoice already covers.
+     *
+     * @return array<int,object>
+     */
+    public static function open_rows_listing_contact( int $contactId, int $duesYear, bool $livemode ): array {
+        global $wpdb;
+        if ( $contactId <= 0 ) {
+            return [];
+        }
+        $table = self::table_name();
+        // roster_snapshot is wp_json_encode() output: an integer id is
+        // written bare and followed by a comma, so this can't match 1234
+        // when looking for 123.
+        $like = '%' . $wpdb->esc_like( '"contact_id":' . $contactId . ',' ) . '%';
+        return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status IN (%s, %s, %s) AND invoice_kind NOT IN (%s, %s) AND roster_snapshot LIKE %s",
+            $duesYear,
+            $livemode ? 1 : 0,
+            self::STATUS_CREATED,
+            self::STATUS_SENT,
+            self::STATUS_PROCESSING,
+            MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT,
+            MyNJILGA_Dues_Snapshot::KIND_JOIN,
+            $like
         ) );
     }
 

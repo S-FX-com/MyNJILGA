@@ -360,4 +360,53 @@ class MyNJILGA_Pricing_Engine_Test extends NJILGA_TestCase {
         $this->assertSame( 1, $r['totals']['unbilled_members'] );
         $this->assertSame( $r['totals'], MyNJILGA_Pricing_Engine::totals( $r['members'] ) );
     }
+    /**
+     * rank_in_roster_order (online joins): tier ranks follow the order
+     * given — the payer first — instead of surname order. Same total.
+     */
+    public function test_rank_in_roster_order_keeps_given_order(): void {
+        $roster = [
+            $this->contact( 1, 'Zed', 'Zulu', [ 'professional' ] ),
+            $this->contact( 2, 'Ann', 'Adams', [ 'professional' ] ),
+            $this->contact( 3, 'Mo', 'Moss', [ 'professional' ] ),
+        ];
+
+        $ordered = MyNJILGA_Pricing_Engine::price( $roster, $this->config( [ 'rank_in_roster_order' => true ] ) );
+        $this->assertSame( [ 1, 2, 3 ], array_column( $ordered['members'], 'contact_id' ) );
+        $this->assertSame( 12500, $this->member( $ordered, 1 )['dues_cents'] );
+        $this->assertSame( '1st Member', $this->member( $ordered, 1 )['tier_label'] );
+        $this->assertSame( 7500, $this->member( $ordered, 2 )['dues_cents'] );
+
+        $alpha = MyNJILGA_Pricing_Engine::price( $roster, $this->config() );
+        $this->assertSame( [ 2, 3, 1 ], array_column( $alpha['members'], 'contact_id' ), 'Default stays alphabetical.' );
+        $this->assertSame( $alpha['totals'], $ordered['totals'] );
+    }
+    /**
+     * dues_covered (online joins): a member whose dues were already paid
+     * online is $0 with the reason, never takes a paid slot, and still
+     * owes the assessment.
+     */
+    public function test_dues_covered_members_are_free_and_ranked_after(): void {
+        $r = MyNJILGA_Pricing_Engine::price( [
+            $this->contact( 1, 'Ann', 'Adams', [ 'professional', 'officer' ] ),
+            $this->contact( 2, 'Bob', 'Baker', [ 'professional' ] ),
+            $this->contact( 3, 'Cy', 'Clark', [ 'professional' ] ),
+        ], $this->config( [ 'dues_covered' => [ 1 => 'paid via online join' ] ] ) );
+
+        $ann = $this->member( $r, 1 );
+        $this->assertSame( 0, $ann['dues_cents'] );
+        $this->assertSame( 0, $ann['rank'] );
+        $this->assertSame( 'paid via online join', $ann['dues_note'] );
+        $this->assertSame( '', $ann['unbilled_reason'], 'Covered is not an exception.' );
+        $this->assertSame( 20000, $ann['assessment_cents'], 'A join pays dues, not the dinner.' );
+        $this->assertSame( 12500, $this->member( $r, 2 )['dues_cents'], 'Bob takes the 1st slot Ann no longer occupies.' );
+        $this->assertSame( 7500, $this->member( $r, 3 )['dues_cents'] );
+        $this->assertSame( [ 2, 3, 1 ], array_column( $r['members'], 'contact_id' ) );
+    }
+
+    /** Inactive still wins over covered: billed nothing, listed as inactive. */
+    public function test_inactive_beats_dues_covered(): void {
+        $r = MyNJILGA_Pricing_Engine::price( [ $this->contact( 1, 'Ann', 'Adams', [ 'professional', 'inactive' ] ) ], $this->config( [ 'dues_covered' => [ 1 => 'paid via online join' ] ] ) );
+        $this->assertSame( 'inactive', $this->member( $r, 1 )['unbilled_reason'] );
+    }
 }

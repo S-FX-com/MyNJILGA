@@ -46,6 +46,7 @@ class MyNJILGA_Page_Setup {
         self::render_stripe_needs_attention();
         self::render_stripe_orphans();
 
+        self::render_online_joining();
         self::render_shortcodes();
 
         MyNJILGA_Admin_UI::close();
@@ -204,6 +205,7 @@ class MyNJILGA_Page_Setup {
         $add( (string) $s['general']['unpaid_tag'], 'Evergreen unpaid' );
         $add( (string) $s['general']['pending_tag'], 'Application pending' );
         $add( (string) $s['general']['rejected_tag'], 'Application rejected' );
+        $add( (string) $s['general']['join_prelaw_tag'], 'Online join: undergraduate (pre-law)' );
         foreach ( $s['categories'] as $cat ) {
             $add( (string) $cat['tag'], 'Category: ' . $cat['label'] );
         }
@@ -560,9 +562,48 @@ class MyNJILGA_Page_Setup {
         echo '</tbody></table></div></div></details>';
     }
 
+    /**
+     * What online joining depends on, per Stripe mode: the key may create
+     * Checkout Sessions, and the webhook endpoint hears the Checkout
+     * events (added automatically on admin_init — see
+     * MyNJILGA_Stripe_Connection::maybe_sync_webhook_events()) in the API
+     * version the handlers read.
+     */
+    private static function render_online_joining(): void {
+        MyNJILGA_Admin_UI::section(
+            'Online joining',
+            sprintf( 'The <code>[njilga_join]</code> shortcode takes payment through Stripe Checkout. The public always joins in <strong>Live</strong> mode; staff rehearse in Test with <code>?njilga_test=1</code>. <a href="%s">Online joins</a> lists every attempt.', esc_url( add_query_arg( 'tab', 'joins', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) ) ) )
+        );
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Mode</th><th>Connected</th><th>Key can create checkouts</th><th>Webhook hears Checkout events</th><th>Endpoint API version</th></tr></thead><tbody>';
+        foreach ( [ MyNJILGA_Stripe_Connection::MODE_LIVE, MyNJILGA_Stripe_Connection::MODE_TEST ] as $mode ) {
+            $connected = MyNJILGA_Stripe_Connection::is_connected( $mode );
+            $access    = $connected ? MyNJILGA_Stripe_Connection::checkout_access( $mode ) : null;
+            $events    = MyNJILGA_Stripe_Connection::webhook_events_state( $mode );
+            $version   = $events['api_version'];
+            printf(
+                '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                esc_html( ucfirst( $mode ) ),
+                MyNJILGA_Admin_UI::validation( $connected ? 'Yes' : 'No', $connected ),
+                ! $connected ? MyNJILGA_Admin_UI::blank() : ( $access === null ? MyNJILGA_Admin_UI::status( 'Couldn\'t check just now', 'muted' ) : MyNJILGA_Admin_UI::validation( $access ? 'Yes' : 'No — add "Checkout Sessions: Write" to the key', $access ) ),
+                ! $connected ? MyNJILGA_Admin_UI::blank() : ( $events['synced'] ? MyNJILGA_Admin_UI::validation( 'Yes', true ) : MyNJILGA_Admin_UI::validation( $events['missing'] ? 'Missing: ' . implode( ', ', $events['missing'] ) . ' — add them in the Stripe Dashboard (Developers → Webhooks)' : 'Not checked yet (checked on the next admin page load)', false ) ),
+                $version === '' ? MyNJILGA_Admin_UI::blank() : ( $version === MyNJILGA_Stripe_Client::API_VERSION ? MyNJILGA_Admin_UI::validation( $version, true ) : MyNJILGA_Admin_UI::validation( $version . ' — the plugin reads ' . MyNJILGA_Stripe_Client::API_VERSION . '; recreate the endpoint (delete it in Stripe, then reconnect here)', false ) )
+            );
+        }
+        echo '</tbody></table></div></div>';
+
+        MyNJILGA_Admin_UI::callout(
+            sprintf(
+                '<strong>Before going live:</strong> exclude the Membership pages (and URLs carrying <code>njilga_join</code> or <code>njilga_invite</code>) from any page or CDN cache — the form carries a per-visitor security token. Student IDs are stored in <code>%s</code>, protected by <code>.htaccess</code> on Apache; on nginx, deny that path in the server config (or define <code>NJILGA_PRIVATE_DIR</code> outside the web root in wp-config.php).',
+                esc_html( str_replace( ABSPATH, '', MyNJILGA_Join_Documents::dir() ) )
+            ),
+            'info'
+        );
+    }
+
     private static function render_shortcodes(): void {
         MyNJILGA_Admin_UI::section( 'Shortcodes', 'Drop these on any page to expose the public-facing parts of the plugin.' );
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table njilga-kv"><tbody>';
+        echo '<tr><th><code>[njilga_join category="professional"]</code></th><td>Online joining with payment (Stripe Checkout). <code>category</code> is any category an applicant may pick — <code>professional</code> (with the firm upsell for colleagues), <code>law_student</code>, <code>emerging_professional</code>. Membership applies as soon as the payment clears; colleagues are emailed an invitation to create their account. Serves invitation links too.</td></tr>';
         echo '<tr><th><code>[njilga_membership_application]</code></th><td>Public membership application form with firm autocomplete. Applicants land in <strong>My NJILGA → Applications</strong> and are never invoiced until approved.</td></tr>';
         echo '<tr><th><code>[njilga_firm_dues_status]</code></th><td>Member-facing dues status: logged-in member sees their firm\'s invoices, full roster, amounts and payment link.</td></tr>';
         echo '</tbody></table></div></div>';

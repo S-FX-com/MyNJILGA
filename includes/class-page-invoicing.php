@@ -966,7 +966,7 @@ class MyNJILGA_Page_Invoicing {
     private static function row_badges( object $row, array $snapshot ): string {
         $out  = self::kind_pill( $row );
         $mode = (string) ( $row->billing_mode ?? 'firm' );
-        if ( $mode !== MyNJILGA_Dues_Settings::MODE_FIRM ) {
+        if ( $mode !== MyNJILGA_Dues_Settings::MODE_FIRM && (string) ( $row->invoice_kind ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
             $out .= ' ' . self::pill( str_replace( '_', ' ', $mode ), 'outline' );
         }
         $noCat = 0;
@@ -988,6 +988,10 @@ class MyNJILGA_Page_Invoicing {
                 return self::pill( 'dues only', 'outline' );
             case MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT:
                 return self::pill( 'assessment', 'outline' );
+            case MyNJILGA_Dues_Snapshot::KIND_JOIN:
+                // Paid through Stripe Checkout by the member themselves
+                // (Applications → Online joins) — nothing to create or send.
+                return self::pill( 'online join', 'info' );
             default:
                 return '';
         }

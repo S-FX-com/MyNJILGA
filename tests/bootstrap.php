@@ -30,6 +30,12 @@ require_once dirname( __DIR__ ) . '/includes/invoicing/class-stripe-webhook.php'
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-ledger-totals.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-snapshot.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-invoice-table.php';
+// Online joins: the roster line builder and the join's own pricing are
+// both pure; the checkout interface must load before the Stripe gateway
+// that implements it (tests/StripeGatewayTest.php requires that class).
+require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-roster.php';
+require_once dirname( __DIR__ ) . '/includes/join/class-join-pricing.php';
+require_once dirname( __DIR__ ) . '/includes/invoicing/interface-checkout-gateway.php';
 
 class NJILGA_Assertion_Failed extends Exception {}
 

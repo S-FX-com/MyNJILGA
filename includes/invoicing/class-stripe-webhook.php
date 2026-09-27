@@ -261,6 +261,22 @@ class MyNJILGA_Stripe_Webhook {
                 case 'customer.deleted':
                     self::handle_customer_deleted( $eventId, $dataObject, $livemode );
                     break;
+                case 'checkout.session.completed':
+                case 'checkout.session.async_payment_succeeded':
+                case 'checkout.session.async_payment_failed':
+                case 'checkout.session.expired':
+                    // Online joins (includes/join/) — the only Checkout
+                    // Sessions this plugin creates.
+                    $joinId = MyNJILGA_Join_Fulfillment::handle_checkout_event( $type, $dataObject, $livemode );
+                    if ( $joinId === null ) {
+                        self::finish_ignored( $eventId, null, 'No matching online join (or a superseded checkout).' );
+                    } else {
+                        self::finish_processed( $eventId, self::join_row_id( $joinId ) );
+                    }
+                    break;
+                case 'charge.dispute.created':
+                    self::handle_dispute_created( $eventId, $dataObject );
+                    break;
                 default:
                     // Subscribed-list drift (an event type we don't
                     // (yet) have a handler for) — ack, don't error.
@@ -306,17 +322,83 @@ class MyNJILGA_Stripe_Webhook {
         if ( strpos( $type, 'invoice.' ) === 0 ) {
             // invoice.* events: data.object.id IS the invoice id directly.
             $invoiceId = (string) ( $dataObject['id'] ?? '' );
-        } elseif ( in_array( $type, [ 'payment_intent.processing', 'charge.refunded', 'credit_note.created' ], true ) ) {
+        } elseif ( in_array( $type, [ 'payment_intent.processing', 'charge.refunded', 'credit_note.created', 'charge.dispute.created' ], true ) ) {
             // Each carries an 'invoice' field pointing back at it — may be
             // a bare id string or an expanded object depending on account
             // expansion settings.
             $invoiceId = self::extract_ref_id( $dataObject['invoice'] ?? null );
         }
 
-        if ( $invoiceId === '' ) {
-            return null;
+        $row = $invoiceId !== '' ? MyNJILGA_Dues_Invoice_Table::get_by_order_id( $invoiceId ) : null;
+        if ( $row ) {
+            return $row;
         }
-        return MyNJILGA_Dues_Invoice_Table::get_by_order_id( $invoiceId );
+
+        // An online join's own invoice (Checkout's post-payment invoice)
+        // names the join, and the join knows its row.
+        $joinId = (int) ( $dataObject['metadata']['njilga_join_id'] ?? 0 );
+        if ( $joinId > 0 ) {
+            $rowId = self::join_row_id( $joinId );
+            if ( $rowId ) {
+                return MyNJILGA_Dues_Invoice_Table::get( $rowId );
+            }
+        }
+
+        // An online join's charge points at no invoice of ours (Checkout
+        // made the payment first, the invoice after) — but its
+        // PaymentIntent is on the join, and the join knows its row.
+        $piId = self::extract_ref_id( $dataObject['payment_intent'] ?? null );
+        if ( $piId === '' && strpos( (string) ( $dataObject['id'] ?? '' ), 'pi_' ) === 0 ) {
+            $piId = (string) $dataObject['id'];
+        }
+        if ( $piId !== '' ) {
+            $join = MyNJILGA_Join_Orders_Table::get_by_payment_intent( $piId );
+            if ( $join && (int) $join->invoice_row_id > 0 ) {
+                return MyNJILGA_Dues_Invoice_Table::get( (int) $join->invoice_row_id );
+            }
+        }
+        return null;
+    }
+
+    private static function join_row_id( int $joinId ): ?int {
+        $join = MyNJILGA_Join_Orders_Table::get( $joinId );
+        return ( $join && (int) $join->invoice_row_id > 0 ) ? (int) $join->invoice_row_id : null;
+    }
+
+    /**
+     * A dispute — for ACH, also how a debit that bounced AFTER succeeding
+     * arrives. Same posture as a refund: flagged for a human, nothing
+     * revoked automatically.
+     *
+     * @param array<string,mixed> $dataObject The Dispute object.
+     */
+    private static function handle_dispute_created( string $eventId, array $dataObject ): void {
+        $row = self::resolve_invoice_row( 'charge.dispute.created', $dataObject );
+        if ( ! $row ) {
+            $rowId = MyNJILGA_Dues_Payments_Table::invoice_row_for_object( self::extract_ref_id( $dataObject['charge'] ?? null ) );
+            $row   = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
+        }
+        if ( ! $row ) {
+            self::finish_ignored( $eventId, null );
+            return;
+        }
+
+        $message = sprintf(
+            'Payment disputed (%s, %s) on %s — review membership; nothing was changed automatically.',
+            str_replace( '_', ' ', (string) ( $dataObject['reason'] ?? 'unknown reason' ) ),
+            MyNJILGA_Invoicing::money( (int) ( $dataObject['amount'] ?? 0 ) ),
+            current_time( 'Y-m-d' )
+        );
+        MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
+            'last_error'     => $message,
+            'last_synced_at' => current_time( 'mysql' ),
+        ] );
+        $join = MyNJILGA_Join_Orders_Table::get_by_payment_intent( self::extract_ref_id( $dataObject['payment_intent'] ?? null ) );
+        if ( $join ) {
+            MyNJILGA_Join_Orders_Table::update( (int) $join->id, [ 'last_error' => $message ] );
+        }
+
+        self::finish_processed( $eventId, (int) $row->id );
     }
 
     /**
@@ -358,6 +440,20 @@ class MyNJILGA_Stripe_Webhook {
     }
 
     private static function handle_invoice_paid( string $eventId, array $dataObject, bool $livemode ): void {
+        // An online join's post-payment invoice is settled by the join's
+        // own fulfillment and nowhere else — this generic path would book
+        // the same money a second time (and Stripe may mark a Checkout
+        // invoice paid out of band, which below reads as a cheque).
+        if ( ! empty( $dataObject['metadata']['njilga_join_id'] ) ) {
+            $joinId = MyNJILGA_Join_Fulfillment::handle_invoice_paid( $dataObject, $livemode );
+            if ( $joinId === null ) {
+                self::finish_ignored( $eventId, null, 'No matching online join.' );
+            } else {
+                self::finish_processed( $eventId, self::join_row_id( $joinId ) );
+            }
+            return;
+        }
+
         $row = self::resolve_invoice_row( 'invoice.paid', $dataObject );
         if ( ! $row ) {
             self::finish_ignored( $eventId, null );
@@ -515,10 +611,13 @@ class MyNJILGA_Stripe_Webhook {
     }
 
     /**
+     * Public (and pure) so the online join's fulfillment describes a
+     * Checkout payment in exactly the words this handler would.
+     *
      * @param array<string,mixed> $charge A Charge object.
      * @return array{method:string,card_brand:?string,last4:?string,bank_name:?string,receipt_url:?string}
      */
-    private static function detail_from_charge( array $charge ): array {
+    public static function detail_from_charge( array $charge ): array {
         $detail = [ 'method' => '', 'card_brand' => null, 'last4' => null, 'bank_name' => null, 'receipt_url' => null ];
 
         $pmDetails = is_array( $charge['payment_method_details'] ?? null ) ? $charge['payment_method_details'] : [];

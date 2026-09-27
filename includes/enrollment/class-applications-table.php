@@ -17,6 +17,9 @@ class MyNJILGA_Applications_Table {
     const STATUS_PENDING  = 'pending';
     const STATUS_APPROVED = 'approved';
     const STATUS_REJECTED = 'rejected';
+    // The applicant joined and paid online instead ([njilga_join]) — closed
+    // so an approval can't draft them a second invoice.
+    const STATUS_SUPERSEDED = 'superseded';
 
     public static function table_name(): string {
         global $wpdb;

@@ -45,7 +45,7 @@ class MyNJILGA_Dues_Preview {
             return [];
         }
 
-        $config    = MyNJILGA_Dues_Settings::engine_config();
+        $config    = self::config_for_year( $duesYear );
         $slugMap   = self::resolve_configured_tags();
         $companies = \FluentCrm\App\Models\Company::with( [ 'subscribers.tags', 'owner' ] )->get();
 
@@ -126,7 +126,7 @@ class MyNJILGA_Dues_Preview {
             return null;
         }
 
-        $config  = MyNJILGA_Dues_Settings::engine_config();
+        $config  = self::config_for_year( $duesYear );
         $slugMap = self::resolve_configured_tags();
         $priced  = MyNJILGA_Pricing_Engine::price( [ self::roster_entry( $contact, $slugMap ) ], $config );
         $members = $priced['members'];
@@ -151,6 +151,38 @@ class MyNJILGA_Dues_Preview {
             $priced['totals']['total_cents'] > 0 ? 'draft' : self::EXCLUDED_ZERO_TOTAL
         );
         return self::persist_candidate( $candidate, MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+    }
+
+    /**
+     * The engine config for a year's preview: the settings, plus everyone
+     * whose dues for that year were already paid through an online join
+     * (MyNJILGA_Join_Fulfillment) — they stay on the firm's roster at $0,
+     * so re-running the preview for a year people have joined in never
+     * bills them a second time, and nobody else's tier shifts.
+     *
+     * @return array<string,mixed>
+     */
+    private static function config_for_year( int $duesYear ): array {
+        $config   = MyNJILGA_Dues_Settings::engine_config();
+        $livemode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+        $covered  = [];
+        $rows     = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [
+            MyNJILGA_Dues_Invoice_Table::STATUS_CREATED,
+            MyNJILGA_Dues_Invoice_Table::STATUS_PAID,
+        ], $livemode );
+        foreach ( $rows as $row ) {
+            if ( (string) $row->invoice_kind !== MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
+                continue;
+            }
+            foreach ( MyNJILGA_Dues_Snapshot::members( $row ) as $m ) {
+                $cid = (int) ( $m['contact_id'] ?? 0 );
+                if ( $cid > 0 ) {
+                    $covered[ $cid ] = 'paid via online join';
+                }
+            }
+        }
+        $config['dues_covered'] = $covered;
+        return $config;
     }
 
     // -------------------------------------------------------------------------

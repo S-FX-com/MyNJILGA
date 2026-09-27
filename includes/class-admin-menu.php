@@ -65,6 +65,11 @@ class MyNJILGA_Admin_Menu {
             MyNJILGA_Applications_Table::maybe_upgrade();
             $pending = MyNJILGA_Applications_Table::count_pending();
         }
+        // …plus online joins a person needs to act on.
+        if ( class_exists( 'MyNJILGA_Join_Orders_Table' ) ) {
+            MyNJILGA_Join_Orders_Table::maybe_upgrade();
+            $pending += MyNJILGA_Join_Orders_Table::needs_attention_count();
+        }
         $appsLabel = 'Applications' . ( $pending > 0 ? sprintf( ' <span class="awaiting-mod count-%1$d"><span class="pending-count">%1$d</span></span>', $pending ) : '' );
         add_submenu_page( self::SLUG_ROOT, 'Applications', $appsLabel, 'manage_options', self::SLUG_APPLICATIONS, [ 'MyNJILGA_Page_Applications', 'render' ] );
 

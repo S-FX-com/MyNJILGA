@@ -83,6 +83,37 @@ class MyNJILGA_Dues_Settings {
                 'application_notify_email' => '',
                 'application_success_text' => 'Thank you — your application has been received. NJILGA staff will review it and be in touch.',
                 'batch_size'               => 25,
+
+                // Online joining — the [njilga_join] shortcode (includes/join/).
+                // A paid join is membership on payment, no review: the money
+                // is the proof of intent. A join that comes to $0 has no such
+                // proof and waits for staff instead.
+                'join_enabled'             => true,
+                'join_notify_email'        => '', // '' = application_notify_email, then the admin email
+                'join_max_colleagues'      => 10, // 4 paid colleagues + a handful of the free seats beyond 5; more → contact NJILGA
+                // Existing firms: attach a joiner automatically only when their
+                // email domain already appears at the firm ('domain'), or
+                // always and review afterwards ('always').
+                'join_firm_match'          => 'domain',
+                // MM-DD from which a join pays for NEXT year (and covers the
+                // rest of this one). '' = only once next year's invoices exist.
+                'join_next_year_from'      => '',
+                'join_allow_ach'           => true,
+                'join_stripe_invoice'      => true, // Stripe's post-payment invoice PDF for each join
+                'join_invite_expiry_days'  => 30,
+                'join_prelaw_tag'          => 'pre-law', // added for "undergrad aspiring to law school" students
+                'join_municipalities'      => '', // one per line; '' = free-text field
+                'join_success_text'        => 'Welcome to NJILGA — your membership is active.',
+                // FluentCRM custom field slugs the join form writes to. A slug
+                // with no matching custom field is skipped (the Setup page
+                // lists which exist); the join record keeps every answer
+                // regardless.
+                'cf_attorney_id'           => 'nj_attorney_id',
+                'cf_bar_admission_date'    => 'nj_bar_admission_date',
+                'cf_municipality'          => 'municipality',
+                'cf_school'                => 'school',
+                'cf_student_status'        => 'student_status',
+                'cf_mailing_phone'         => 'mailing_phone',
             ],
             'categories' => [
                 [
@@ -278,6 +309,7 @@ class MyNJILGA_Dues_Settings {
             $s['general']['unpaid_tag'],
             $s['general']['pending_tag'],
             $s['general']['rejected_tag'],
+            $s['general']['join_prelaw_tag'],
         ];
         foreach ( $s['categories'] as $cat ) {
             $slugs[] = $cat['tag'];
@@ -286,6 +318,35 @@ class MyNJILGA_Dues_Settings {
             $slugs[] = $q['tag'];
         }
         return array_values( array_unique( array_filter( array_map( 'strval', $slugs ) ) ) );
+    }
+
+    /**
+     * The FluentCRM custom field slug each join answer is written to.
+     * '' = that answer is kept on the join record only.
+     *
+     * @return array<string,string> answer key => custom field slug
+     */
+    public static function join_custom_fields(): array {
+        $g = self::get()['general'];
+        return [
+            'attorney_id'         => sanitize_key( (string) ( $g['cf_attorney_id'] ?? '' ) ),
+            'bar_admission_date'  => sanitize_key( (string) ( $g['cf_bar_admission_date'] ?? '' ) ),
+            'municipality'        => sanitize_key( (string) ( $g['cf_municipality'] ?? '' ) ),
+            'school'              => sanitize_key( (string) ( $g['cf_school'] ?? '' ) ),
+            'student_status'      => sanitize_key( (string) ( $g['cf_student_status'] ?? '' ) ),
+            'mailing_phone'       => sanitize_key( (string) ( $g['cf_mailing_phone'] ?? '' ) ),
+        ];
+    }
+
+    /**
+     * Municipality choices for the join form, one per line in Settings.
+     * Empty = the form shows a free-text field instead of a select.
+     *
+     * @return array<int,string>
+     */
+    public static function municipality_options(): array {
+        $lines = preg_split( '/\r\n|\r|\n/', (string) self::general( 'join_municipalities', '' ) );
+        return array_values( array_unique( array_filter( array_map( 'trim', (array) $lines ), 'strlen' ) ) );
     }
 
     public static function year_tag( string $patternKey, int $year ): string {

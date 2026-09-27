@@ -49,6 +49,14 @@ class MyNJILGA_Payment_Listener {
         if ( ! $invoiceRow ) {
             return; // Not a dues invoice — some other invoice.
         }
+        // An online join's row is written, ledgered and settled by
+        // MyNJILGA_Join_Fulfillment alone. Letting a webhook or reconcile
+        // of the same payment in here would book it a second time under a
+        // different object id (and a Checkout invoice's out-of-band flag
+        // as off-Stripe money).
+        if ( (string) ( $invoiceRow->invoice_kind ?? '' ) === MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
+            return;
+        }
 
         if ( ! empty( $payment ) ) {
             $ledgerData = $payment;
@@ -140,6 +148,53 @@ class MyNJILGA_Payment_Listener {
         );
 
         return [ 'members' => $touched, 'roles_granted' => $granted, 'roles_skipped' => $skipped ];
+    }
+
+    /**
+     * A member paid for before they had a website account — a colleague
+     * covered by an online join, someone on a firm invoice — gets their
+     * category's role the first time the account appears (registration,
+     * or their next login), rather than only at the next payment. Only
+     * ever grants; never removes. Hooked on user_register and wp_login.
+     *
+     * @param int|\WP_User $user
+     */
+    public static function sync_role_for_user( $user ): void {
+        try {
+            $user = $user instanceof \WP_User ? $user : get_user_by( 'id', (int) $user );
+            if ( ! $user || ! MyNJILGA_Members_Data::fluentcrm_active() || ! function_exists( 'FluentCrmApi' ) ) {
+                return;
+            }
+            $contact = FluentCrmApi( 'contacts' )->getContactByUserRef( (int) $user->ID );
+            if ( ! $contact && ! empty( $user->user_email ) ) {
+                $contact = FluentCrmApi( 'contacts' )->getContactByUserRef( (string) $user->user_email );
+            }
+            if ( ! $contact || ! MyNJILGA_Tags::has_slug( $contact, (string) MyNJILGA_Dues_Settings::general( 'paid_tag', 'dues-paid' ) ) ) {
+                return;
+            }
+            // Never re-point a contact another account already owns.
+            if ( ! empty( $contact->user_id ) && (int) $contact->user_id !== (int) $user->ID ) {
+                return;
+            }
+            if ( empty( $contact->user_id ) ) {
+                $contact->user_id = (int) $user->ID;
+                $contact->save();
+            }
+            $role = '';
+            foreach ( MyNJILGA_Dues_Settings::categories() as $cat ) {
+                if ( (string) $cat['tag'] !== '' && MyNJILGA_Tags::has_slug( $contact, (string) $cat['tag'] ) ) {
+                    $role = (string) $cat['role'];
+                    break;
+                }
+            }
+            if ( $role === '' ) {
+                $default = MyNJILGA_Dues_Settings::category( (string) MyNJILGA_Dues_Settings::general( 'default_category', '' ) );
+                $role    = $default ? (string) $default['role'] : '';
+            }
+            self::grant_role( $contact, $role );
+        } catch ( \Throwable $e ) {
+            // Never let a CRM hiccup break a login.
+        }
     }
 
     /**

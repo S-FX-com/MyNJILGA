@@ -2,8 +2,8 @@
 /**
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
- * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
- * Version:     3.0.0
+ * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
+ * Version:     3.1.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -65,6 +65,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-events-table.p
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-customer-map.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoicing-notes.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/interface-invoice-gateway.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/interface-checkout-gateway.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-invoice-gateway.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-webhook.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-reconciler.php';
@@ -87,6 +88,17 @@ require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-review.p
 require_once NJILGA_REPORT_DIR . 'includes/class-page-applications.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-firm-status-page.php';
 
+// Online joining — [njilga_join]: join and pay through Stripe Checkout,
+// with the firm upsell and colleague invitations. See includes/join/.
+require_once NJILGA_REPORT_DIR . 'includes/join/class-join-orders-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/join/class-join-invites-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/join/class-join-pricing.php';
+require_once NJILGA_REPORT_DIR . 'includes/join/class-join-documents.php';
+require_once NJILGA_REPORT_DIR . 'includes/join/class-join-invites.php';
+require_once NJILGA_REPORT_DIR . 'includes/join/class-join-fulfillment.php';
+require_once NJILGA_REPORT_DIR . 'includes/join/class-join-view.php';
+require_once NJILGA_REPORT_DIR . 'includes/join/class-join-form.php';
+
 add_action( 'admin_menu', [ 'MyNJILGA_Admin_Menu', 'register' ] );
 
 // Keep My NJILGA → Reports highlighted while viewing a hidden report page.
@@ -101,11 +113,20 @@ register_activation_hook( __FILE__, [ 'MyNJILGA_Applications_Table', 'maybe_upgr
 register_activation_hook( __FILE__, [ 'MyNJILGA_Dues_Payments_Table', 'maybe_upgrade' ] );
 register_activation_hook( __FILE__, [ 'MyNJILGA_Stripe_Events_Table', 'maybe_upgrade' ] );
 register_activation_hook( __FILE__, [ 'MyNJILGA_Stripe_Customer_Map', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Join_Orders_Table', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Join_Invites_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Applications_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Dues_Payments_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Stripe_Events_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Stripe_Customer_Map', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Join_Orders_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Join_Invites_Table', 'maybe_upgrade' ] );
+
+// Endpoints provisioned before a release that added webhook events (the
+// online-join Checkout events, disputes) get them added once, here,
+// rather than needing Stripe reconnected.
+add_action( 'admin_init', [ 'MyNJILGA_Stripe_Connection', 'maybe_sync_webhook_events' ] );
 
 // Background invoice creation (Action Scheduler chunks) — the hook must be
 // registered on every request so the scheduler's worker can find it.
@@ -126,9 +147,25 @@ MyNJILGA_Stripe_Reconciler::register();
 // before the "order paid" hook is bound.
 add_action( 'plugins_loaded', [ 'MyNJILGA_Payment_Listener', 'register' ], 20 );
 
-// Public shortcodes: [njilga_membership_application], [njilga_firm_dues_status].
+// Public shortcodes: [njilga_membership_application], [njilga_firm_dues_status],
+// [njilga_join] (online joining; its tables are created on first use as
+// well as on admin_init, since a public page can be the first request
+// after an update).
 MyNJILGA_Application_Form::register();
 MyNJILGA_Firm_Status_Page::register();
+MyNJILGA_Join_Form::register();
+MyNJILGA_Join_Documents::register();
+add_action( 'init', static function () {
+    MyNJILGA_Join_Orders_Table::maybe_upgrade();
+    MyNJILGA_Join_Invites_Table::maybe_upgrade();
+} );
+
+// A member paid for before they had an account (a colleague covered by an
+// online join, say) gets their role when the account first appears.
+add_action( 'user_register', [ 'MyNJILGA_Payment_Listener', 'sync_role_for_user' ], 20 );
+add_action( 'wp_login', static function ( $login, $user ) {
+    MyNJILGA_Payment_Listener::sync_role_for_user( $user );
+}, 20, 2 );
 
 // Setup page: create a missing tag via the FluentCRM Tags API.
 add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_create_tag' ] );
@@ -191,5 +228,6 @@ add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_CONNECT,      
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_WEBHOOK_SAVE, [ 'MyNJILGA_Page_Settings', 'handle_webhook_save' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_SWITCH_MODE,  [ 'MyNJILGA_Page_Settings', 'handle_switch_mode' ] );
 
-// Applications review queue.
+// Applications review queue, and the Online joins tab beside it.
 add_action( 'admin_post_' . MyNJILGA_Page_Applications::ACTION_DECIDE, [ 'MyNJILGA_Page_Applications', 'handle_decide' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Applications::ACTION_JOIN, [ 'MyNJILGA_Page_Applications', 'handle_join_action' ] );

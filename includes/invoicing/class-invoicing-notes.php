@@ -8,7 +8,9 @@
 class MyNJILGA_Invoicing_Notes {
 
     public static function log( int $companyId, string $title, string $description ): void {
-        if ( ! class_exists( '\\FluentCrm\\App\\Models\\CompanyNote' ) ) {
+        // No firm, no note — a student who joined online has no Company to
+        // hang one on, and a note on "Company #0" is an orphan row.
+        if ( $companyId <= 0 || ! class_exists( '\\FluentCrm\\App\\Models\\CompanyNote' ) ) {
             return;
         }
         \FluentCrm\App\Models\CompanyNote::create( [

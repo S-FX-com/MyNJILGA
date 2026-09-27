@@ -9,7 +9,8 @@
  *     "version": 2,
  *     "dues_year": 2027,
  *     "billing_mode": "firm" | "individual" | "split_assessment",
- *     "invoice_kind": "combined" | "dues" | "assessment",
+ *     "invoice_kind": "combined" | "dues" | "assessment" | "join",
+ *     "source": "online_join", "join_id": 12,   // join rows only
  *     "company": { "id": 12, "name": "Smith & Jones LLP" },
  *     "owner":   { "contact_id": 5, "name": "...", "first_name": "...", "last_name": "...", "email": "..." },
  *     "bill_to": { "contact_id": 5, "name": "...", "first_name": "...", "last_name": "...", "email": "..." },
@@ -46,6 +47,7 @@ class MyNJILGA_Dues_Snapshot {
     const KIND_COMBINED   = 'combined';   // dues + assessment on one invoice (firm / individual mode)
     const KIND_DUES       = 'dues';       // dues only (split_assessment: the firm invoice)
     const KIND_ASSESSMENT = 'assessment'; // assessment only (split_assessment: one per assessed member)
+    const KIND_JOIN       = 'join';       // online join paid through Stripe Checkout (MyNJILGA_Join_Fulfillment) — settles dues
 
     /**
      * Build a v2 snapshot array.

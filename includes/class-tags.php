@@ -487,6 +487,32 @@ class MyNJILGA_Tags {
     }
 
     /**
+     * Whether the subscriber carries the tag with this exact title (or its
+     * slug) — WITHOUT creating it. For the year tags ("Dues Paid 2026"):
+     * asking whether someone is current must never mint a tag as a side
+     * effect.
+     */
+    public static function has_title( $subscriber, string $title ): bool {
+        if ( ! $subscriber || ! class_exists( '\\FluentCrm\\App\\Models\\Tag' ) ) {
+            return false;
+        }
+        $tag = \FluentCrm\App\Models\Tag::where( 'slug', sanitize_title( $title ) )->first();
+        if ( ! $tag ) {
+            $tag = \FluentCrm\App\Models\Tag::where( 'title', $title )->first();
+        }
+        return $tag ? (bool) $subscriber->hasAnyTagId( [ (int) $tag->id ] ) : false;
+    }
+
+    /**
+     * Whether the subscriber carries a settings-configured tag by slug
+     * (resolve_slug() rules). False when the tag doesn't exist.
+     */
+    public static function has_slug( $subscriber, string $slug ): bool {
+        $id = self::resolve_slug( $slug );
+        return $id && $subscriber ? (bool) $subscriber->hasAnyTagId( [ $id ] ) : false;
+    }
+
+    /**
      * Attach one of the plugin's known tags (by SLUG_* constant) to a
      * subscriber, creating the tag first if it doesn't exist yet. Used by
      * the invoicing flow to keep the evergreen `dues-paid` / `unpaid-dues`

@@ -115,6 +115,12 @@ class MyNJILGA_Stripe_Reconciler {
             if ( $onlyRowId !== null && (int) $row->id !== $onlyRowId ) {
                 continue;
             }
+            // Online-join rows answer to their Checkout Session, not to an
+            // invoice this class could re-fetch — MyNJILGA_Join_Fulfillment::
+            // sweep() is their reconciler (run from run_daily() below).
+            if ( (string) ( $row->invoice_kind ?? '' ) === MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
+                continue;
+            }
 
             $result['checked']++;
 
@@ -609,6 +615,18 @@ class MyNJILGA_Stripe_Reconciler {
             // errors array; reaching here means something broader (e.g.
             // the DB itself unavailable) — never let that break the
             // Action Scheduler worker.
+        }
+
+        // Online joins: anything still waiting on Stripe, paid-but-not-
+        // applied, or claimed by a run that died — and student documents
+        // from joins that never became memberships.
+        try {
+            if ( class_exists( 'MyNJILGA_Join_Fulfillment' ) ) {
+                MyNJILGA_Join_Fulfillment::sweep();
+                MyNJILGA_Join_Fulfillment::purge_documents();
+            }
+        } catch ( \Throwable $e ) {
+            // Per-join isolation lives inside sweep(); this is the backstop.
         }
 
         // The spec's weekly event-log prune, folded into this existing

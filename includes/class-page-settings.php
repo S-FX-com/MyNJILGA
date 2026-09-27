@@ -105,6 +105,7 @@ class MyNJILGA_Page_Settings {
         wp_nonce_field( self::ACTION_SAVE );
 
         self::render_general( $s, $tags );
+        self::render_joining( $s, $tags );
         self::render_categories( $s, $tags, $roles );
         self::render_assessment( $s, $tags );
         self::render_firm_overrides( $s );
@@ -274,6 +275,7 @@ class MyNJILGA_Page_Settings {
             'Invoices: Write',
             'Credit notes: Read',
             'Webhook Endpoints: Write',
+            'Checkout Sessions: Write (online joining — [njilga_join])',
         ];
     }
 
@@ -463,6 +465,74 @@ class MyNJILGA_Page_Settings {
         echo '<p class="njilga-help">Shown to the applicant after the <code>[njilga_membership_application]</code> form is submitted.</p></td></tr>';
 
         self::text_row( 'general[batch_size]', 'Invoice creation batch size', (string) (int) $g['batch_size'], 'Invoices created per background job (Action Scheduler). Default 25.' );
+
+        echo '</tbody></table></div>';
+    }
+
+    private static function render_joining( array $s, array $tags ): void {
+        $g = $s['general'];
+        MyNJILGA_Admin_UI::section(
+            'Online joining',
+            'The <code>[njilga_join category="…"]</code> shortcode on each Membership page: join and pay through Stripe Checkout, with the firm upsell and colleague invitations. See <a href="' . esc_url( add_query_arg( 'tab', 'joins', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) ) ) . '">Applications → Online joins</a>.'
+        );
+        echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
+
+        echo '<tr><th scope="row">Online joining</th><td>';
+        printf( '<label class="njilga-check-label"><input type="checkbox" name="general[join_enabled]" value="1"%s> <span>Accept online joins</span></label>', checked( ! empty( $g['join_enabled'] ), true, false ) );
+        echo '<p class="njilga-help">A paid join is a membership as soon as Stripe confirms the payment — no review. A join that comes to $0 (a free category) waits for staff on Online joins. The public always joins in Stripe <strong>Live</strong> mode, whichever mode is active here; staff can rehearse in Test by adding <code>?njilga_test=1</code> to a Membership page\'s address.</p></td></tr>';
+
+        self::text_row( 'general[join_notify_email]', 'Notify staff of online joins', $g['join_notify_email'], 'Comma-separated. Blank = the application notification address above, then the site admin email.' );
+        self::text_row( 'general[join_max_colleagues]', 'Most colleagues per join', (string) (int) $g['join_max_colleagues'], 'The firm upsell (tier-eligible categories only): how many colleagues one payer can add. Seats beyond the free tier cost nothing, so keep this modest; 0 turns the upsell off.' );
+
+        echo '<tr><th scope="row">Joining an existing firm</th><td><div class="njilga-radio-list">';
+        foreach ( [
+            'domain' => 'Attach automatically only when the joiner\'s email domain is already at the firm; otherwise hold for staff to confirm (recommended)',
+            'always' => 'Always attach, and flag it for staff to review afterwards',
+        ] as $val => $label ) {
+            printf( '<label class="njilga-check-label"><input type="radio" name="general[join_firm_match]" value="%s"%s> <span>%s</span></label>', esc_attr( $val ), checked( (string) $g['join_firm_match'], $val, false ), esc_html( $label ) );
+        }
+        echo '</div><p class="njilga-help">Free-mail addresses (gmail.com and the like) never count as a match. A joiner is never made Owner of a firm that already exists, and colleagues who already belong to another firm, carry another category, or are marked inactive always wait for staff.</p></td></tr>';
+
+        self::text_row( 'general[join_next_year_from]', 'Joins cover next year from', (string) $g['join_next_year_from'], 'MM-DD, e.g. 10-01. From this date a join pays next year\'s dues and covers the rest of this year. Blank = only once next year\'s invoices have been created — from then on it always does, so a late joiner is never missing from next year\'s already-frozen invoices.' );
+
+        echo '<tr><th scope="row">Payment</th><td>';
+        printf( '<label class="njilga-check-label"><input type="checkbox" name="general[join_allow_ach]" value="1"%s> <span>Offer US bank account (ACH) as well as card</span></label>', checked( ! empty( $g['join_allow_ach'] ), true, false ) );
+        printf( '<label class="njilga-check-label"><input type="checkbox" name="general[join_stripe_invoice]" value="1"%s> <span>Have Stripe issue a paid invoice (PDF) for each join</span></label>', checked( ! empty( $g['join_stripe_invoice'] ), true, false ) );
+        echo '<p class="njilga-help">A bank payment takes about four business days to clear; membership starts when it does. Stripe charges a small per-invoice fee for post-payment invoices — turn it off to rely on Stripe\'s payment receipt instead.</p></td></tr>';
+
+        self::text_row( 'general[join_invite_expiry_days]', 'Colleague invitations last', (string) (int) $g['join_invite_expiry_days'], 'Days. An expired link can be re-sent from Online joins.' );
+        self::text_row( 'general[join_prelaw_tag]', 'Pre-law tag', (string) $g['join_prelaw_tag'], 'Added (with the student category) for undergraduates who aspire to law school.', $tags );
+
+        echo '<tr><th scope="row"><label for="g-join-success">Welcome message</label></th><td>';
+        printf( '<textarea id="g-join-success" name="general[join_success_text]" rows="2" class="large-text">%s</textarea>', esc_textarea( (string) $g['join_success_text'] ) );
+        echo '<p class="njilga-help">Shown after a successful online join.</p></td></tr>';
+
+        echo '<tr><th scope="row"><label for="g-join-muni">Municipality choices</label></th><td>';
+        printf( '<textarea id="g-join-muni" name="general[join_municipalities]" rows="5" class="large-text" placeholder="One per line">%s</textarea>', esc_textarea( (string) $g['join_municipalities'] ) );
+        echo '<p class="njilga-help">One per line, for the professional form\'s Municipality select. Blank = a free-text field.</p></td></tr>';
+
+        // FluentCRM custom fields.
+        $known = MyNJILGA_Members_Data::fluentcrm_active() ? MyNJILGA_Join_Fulfillment::fluentcrm_custom_field_slugs() : [];
+        foreach ( [
+            'cf_attorney_id'        => 'NJ Attorney ID',
+            'cf_bar_admission_date' => 'Date of admission to the NJ Bar',
+            'cf_municipality'       => 'Municipality',
+            'cf_mailing_phone'      => 'Mailing-address phone (when different)',
+            'cf_school'             => 'Student\'s school',
+            'cf_student_status'     => 'Student\'s enrollment status',
+        ] as $key => $label ) {
+            $slug = (string) ( $g[ $key ] ?? '' );
+            $id   = 'f-' . $key;
+            $note = $slug === '' ? '' : ( in_array( $slug, $known, true ) ? '<div class="njilga-note-ok">&#10003; custom field exists</div>' : '<div class="njilga-note-warn">No FluentCRM custom field with this slug — answers are kept on the join record only. Add it under FluentCRM → Settings → Custom Fields.</div>' );
+            printf(
+                '<tr><th scope="row"><label for="%1$s">%2$s</label></th><td><input type="text" id="%1$s" name="general[%3$s]" value="%4$s" class="regular-text">%5$s<p class="njilga-help">FluentCRM contact custom field slug. Blank = don\'t store it on the contact.</p></td></tr>',
+                esc_attr( $id ),
+                esc_html( $label ),
+                esc_attr( $key ),
+                esc_attr( $slug ),
+                $note // Trusted markup built above.
+            );
+        }
 
         echo '</tbody></table></div>';
     }
@@ -684,6 +754,23 @@ class MyNJILGA_Page_Settings {
         $gen['mid_year_join_policy']     = array_key_exists( (string) ( $g['mid_year_join_policy'] ?? '' ), MyNJILGA_Dues_Settings::join_policy_labels() ) ? (string) $g['mid_year_join_policy'] : MyNJILGA_Dues_Settings::JOIN_FREE_UNTIL_NEXT_CYCLE;
         $gen['downgrade_remove_roles']   = ! empty( $g['downgrade_remove_roles'] );
         $gen['batch_size']               = max( 1, min( 200, (int) ( $g['batch_size'] ?? 25 ) ) );
+
+        // --- Online joining
+        $gen['join_enabled']            = ! empty( $g['join_enabled'] );
+        $gen['join_allow_ach']          = ! empty( $g['join_allow_ach'] );
+        $gen['join_stripe_invoice']     = ! empty( $g['join_stripe_invoice'] );
+        $gen['join_notify_email']       = sanitize_text_field( (string) ( $g['join_notify_email'] ?? '' ) );
+        $gen['join_max_colleagues']     = max( 0, min( 99, (int) ( $g['join_max_colleagues'] ?? 10 ) ) );
+        $gen['join_invite_expiry_days'] = max( 1, min( 365, (int) ( $g['join_invite_expiry_days'] ?? 30 ) ) );
+        $gen['join_firm_match']         = ( (string) ( $g['join_firm_match'] ?? '' ) ) === 'always' ? 'always' : 'domain';
+        $cut                            = trim( (string) ( $g['join_next_year_from'] ?? '' ) );
+        $gen['join_next_year_from']     = preg_match( '/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/', $cut ) ? $cut : '';
+        $gen['join_prelaw_tag']         = sanitize_title( (string) ( $g['join_prelaw_tag'] ?? '' ) );
+        $gen['join_success_text']       = sanitize_textarea_field( (string) ( $g['join_success_text'] ?? $defaults['general']['join_success_text'] ) );
+        $gen['join_municipalities']     = implode( "\n", array_filter( array_map( 'sanitize_text_field', (array) preg_split( '/\r\n|\r|\n/', (string) ( $g['join_municipalities'] ?? '' ) ) ), 'strlen' ) );
+        foreach ( [ 'cf_attorney_id', 'cf_bar_admission_date', 'cf_municipality', 'cf_school', 'cf_student_status', 'cf_mailing_phone' ] as $k ) {
+            $gen[ $k ] = sanitize_key( (string) ( $g[ $k ] ?? '' ) );
+        }
         foreach ( [ 'year_paid_tag_pattern', 'year_unpaid_tag_pattern', 'assessment_paid_pattern' ] as $k ) {
             if ( $gen[ $k ] === '' ) {
                 $gen[ $k ] = $defaults['general'][ $k ];

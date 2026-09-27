@@ -338,9 +338,18 @@ aren't just filtered slices of the same columns.
 
 ## 6. Not covered
 
-The two public shortcodes — `[njilga_membership_application]` and
-`[njilga_firm_dues_status]` — render on the **front end**, inside the
-site's own theme, and keep their own small scoped stylesheets. They
-deliberately do not load this admin stylesheet: matching the theme
-matters more there than matching the admin. If they are ever unified,
-the tokens in §2 are the place to start.
+The public shortcodes — `[njilga_membership_application]`,
+`[njilga_firm_dues_status]` and `[njilga_join]` — render on the **front
+end**, inside the site's own theme, and keep their own small scoped
+stylesheets. They deliberately do not load this admin stylesheet:
+matching the theme matters more there than matching the admin. If they
+are ever unified, the tokens in §2 are the place to start.
+
+`[njilga_join]` (`MyNJILGA_Join_View`) goes furthest: everything is under
+`.njilga-join`, its colours are custom properties a theme can override
+(`--nj-primary` navy, `--nj-accent` gold, `--nj-border`, `--nj-muted`, …),
+headings and body inherit the theme's fonts, and the layout follows the
+site's existing membership forms — white cards, grey labels over 48px
+inputs, a two-column grid for confirm-password/confirm-email that
+collapses on phones. It must work without JavaScript (one long form, one
+submit) and become a step-by-step wizard with it.

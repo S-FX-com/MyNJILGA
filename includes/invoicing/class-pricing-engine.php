@@ -13,7 +13,9 @@
  * Input config: MyNJILGA_Dues_Settings::engine_config() —
  *   [ 'default_category' => string, 'inactive_tag' => string,
  *     'categories' => ordered rows (see MyNJILGA_Dues_Settings::defaults()),
- *     'assessment' => [ label, price_cents, qualifiers[] ] ]
+ *     'assessment' => [ label, price_cents, qualifiers[] ],
+ *     'rank_in_roster_order' => bool (optional, default false — see rule 3),
+ *     'dues_covered' => [ contact_id => reason ] (optional — see rule 3a) ]
  *
  * Rules, in the order they're applied to each contact:
  *
@@ -33,6 +35,14 @@
  *      silently produces the wrong total: an exempt Past President whose
  *      surname sorts first must not "use up" the $125 1st-member slot,
  *      and must not push a 5th paying member into the free 6+ bracket.
+ *      With 'rank_in_roster_order' set, tier-eligible members are ranked
+ *      in the order given instead of alphabetically (online joins: the
+ *      payer is rank 1); the partition itself is unchanged.
+ *   3a. Already covered. A contact listed in 'dues_covered' has this
+ *      cycle's dues paid some other way (an online join) — $0 dues with
+ *      that reason as the note, ranked after the paying members like any
+ *      other non-paying member, so nobody else's tier shifts. Their
+ *      assessment is still owed: a join pays dues, not the dinner.
  *   4. Non-tier-eligible categories charge their flat price (normally $0).
  *   5. Assessment. An ACTIVE contact carrying any qualifying tag owes the
  *      assessment once (capped at one per person, labelled by the first
@@ -77,13 +87,18 @@ class MyNJILGA_Pricing_Engine {
         }
 
         // Pass 2 — partition. Group order IS billing order.
+        $covered  = (array) ( $config['dues_covered'] ?? [] );
         $rankable = []; // active + tier-eligible category
         $flat     = []; // active + non-tier-eligible category
+        $paid     = []; // active, dues already covered this cycle
         $noCat    = []; // active, no category
         $inactive = [];
         foreach ( $classified as $c ) {
+            $cid = (int) ( $c['entry']['contact_id'] ?? 0 );
             if ( $c['inactive'] ) {
                 $inactive[] = $c;
+            } elseif ( $cid > 0 && isset( $covered[ $cid ] ) && $c['category'] !== null ) {
+                $paid[] = $c;
             } elseif ( $c['category'] === null ) {
                 $noCat[] = $c;
             } elseif ( ! empty( $c['category']['tier_eligible'] ) ) {
@@ -92,8 +107,16 @@ class MyNJILGA_Pricing_Engine {
                 $flat[] = $c;
             }
         }
-        usort( $rankable, [ __CLASS__, 'compare' ] );
+        // An online join (MyNJILGA_Join_Pricing) ranks in the order the
+        // roster was given — the payer first, then the colleagues they
+        // added — so the person paying is the one labelled "1st Member".
+        // The total is identical either way; only who carries which tier
+        // label changes. The annual batch never sets this.
+        if ( empty( $config['rank_in_roster_order'] ) ) {
+            usort( $rankable, [ __CLASS__, 'compare' ] );
+        }
         usort( $flat, [ __CLASS__, 'compare' ] );
+        usort( $paid, [ __CLASS__, 'compare' ] );
         usort( $noCat, [ __CLASS__, 'compare' ] );
         usort( $inactive, [ __CLASS__, 'compare' ] );
 
@@ -117,6 +140,12 @@ class MyNJILGA_Pricing_Engine {
             $m                      = self::base_member( $c );
             $m['dues_cents']        = (int) ( $c['category']['price_cents'] ?? 0 );
             $m['dues_note']         = $m['dues_cents'] > 0 ? '' : (string) $c['category']['label'];
+            self::apply_assessment( $m, $c['tags'], $assessment );
+            $members[] = $m;
+        }
+        foreach ( $paid as $c ) {
+            $m               = self::base_member( $c );
+            $m['dues_note']  = (string) $covered[ (int) $c['entry']['contact_id'] ];
             self::apply_assessment( $m, $c['tags'], $assessment );
             $members[] = $m;
         }

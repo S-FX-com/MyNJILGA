@@ -54,7 +54,17 @@ class MyNJILGA_Stripe_Connection {
         'credit_note.created',
         'payment_intent.processing',
         'customer.deleted',
+        // Online joins (includes/join/) pay through Stripe Checkout.
+        'checkout.session.completed',
+        'checkout.session.async_payment_succeeded',
+        'checkout.session.async_payment_failed',
+        'checkout.session.expired',
+        // A dispute — including an ACH debit that bounced after it had
+        // succeeded — is flagged for review on the invoice it concerns.
+        'charge.dispute.created',
     ];
+
+    const OPTION_EVENTS_SYNCED = 'njilga_stripe_webhook_events_synced';
 
     // How long a health() account check is trusted before health() hits
     // Stripe again for that mode. Plain int (not a WordPress time
@@ -406,6 +416,8 @@ class MyNJILGA_Stripe_Connection {
         $now    = current_time( 'mysql' );
         $stored = self::get();
 
+        delete_transient( self::HEALTH_TRANSIENT_PREFIX . 'checkout_' . $mode );
+
         $stored[ $mode ] = [
             'secret_key'       => self::encrypt_value( $pastedKey ),
             'account_id'       => $accountId,
@@ -491,6 +503,72 @@ class MyNJILGA_Stripe_Connection {
             (string) ( $createResp['body']['id'] ?? '' ),
             (string) ( $createResp['body']['secret'] ?? '' ),
             '',
+        ];
+    }
+
+    /**
+     * An endpoint provisioned by an earlier version of this plugin only
+     * subscribes to the events that version knew. On admin_init, once per
+     * events list, add whatever WEBHOOK_EVENTS has gained since onto each
+     * connected mode's stored endpoint — so a site that updates doesn't
+     * need to reconnect Stripe for online joins to hear from it. A failed
+     * attempt waits 12 hours before trying again.
+     *
+     * Also notes the endpoint's API version: the handlers read payloads
+     * in the shape of MyNJILGA_Stripe_Client::API_VERSION, and an
+     * endpoint made by hand in the Dashboard may render another one.
+     */
+    public static function maybe_sync_webhook_events(): void {
+        $want = md5( implode( ',', self::WEBHOOK_EVENTS ) );
+        $done = get_option( self::OPTION_EVENTS_SYNCED, [] );
+        $done = is_array( $done ) ? $done : [];
+
+        foreach ( [ self::MODE_TEST, self::MODE_LIVE ] as $mode ) {
+            $webhookId = (string) ( self::get()[ $mode ]['webhook_id'] ?? '' );
+            if ( ( ( $done[ $mode ]['hash'] ?? '' ) === $want && ( $done[ $mode ]['webhook_id'] ?? '' ) === $webhookId ) || get_transient( 'njilga_stripe_events_retry_' . $mode ) ) {
+                continue;
+            }
+            $client    = self::is_connected( $mode ) ? self::client_for_mode( $mode ) : null;
+            if ( $webhookId === '' || $client === null ) {
+                continue;
+            }
+
+            $ep = $client->request( 'GET', '/webhook_endpoints/' . rawurlencode( $webhookId ) );
+            if ( ! $ep['ok'] ) {
+                set_transient( 'njilga_stripe_events_retry_' . $mode, 1, 12 * HOUR_IN_SECONDS );
+                continue;
+            }
+            $current = array_map( 'strval', (array) ( $ep['body']['enabled_events'] ?? [] ) );
+            $missing = in_array( '*', $current, true ) ? [] : array_values( array_diff( self::WEBHOOK_EVENTS, $current ) );
+            if ( $missing ) {
+                $patch = $client->request( 'POST', '/webhook_endpoints/' . rawurlencode( $webhookId ), [
+                    'enabled_events' => array_values( array_unique( array_merge( $current, self::WEBHOOK_EVENTS ) ) ),
+                ] );
+                if ( ! $patch['ok'] ) {
+                    set_transient( 'njilga_stripe_events_retry_' . $mode, 1, 12 * HOUR_IN_SECONDS );
+                    $done[ $mode ] = [ 'hash' => '', 'webhook_id' => $webhookId, 'missing' => $missing, 'api_version' => (string) ( $ep['body']['api_version'] ?? '' ), 'at' => current_time( 'mysql' ) ];
+                    update_option( self::OPTION_EVENTS_SYNCED, $done, false );
+                    continue;
+                }
+            }
+            $done[ $mode ] = [ 'hash' => $want, 'webhook_id' => $webhookId, 'missing' => [], 'api_version' => (string) ( $ep['body']['api_version'] ?? '' ), 'at' => current_time( 'mysql' ) ];
+            update_option( self::OPTION_EVENTS_SYNCED, $done, false );
+        }
+    }
+
+    /**
+     * What maybe_sync_webhook_events() last learned for a mode, for the
+     * Setup page: events it could not add, and the endpoint's API version.
+     *
+     * @return array{synced:bool,missing:array<int,string>,api_version:string}
+     */
+    public static function webhook_events_state( string $mode ): array {
+        $done = get_option( self::OPTION_EVENTS_SYNCED, [] );
+        $row  = is_array( $done ) && isset( $done[ $mode ] ) && is_array( $done[ $mode ] ) ? $done[ $mode ] : [];
+        return [
+            'synced'      => ( $row['hash'] ?? '' ) === md5( implode( ',', self::WEBHOOK_EVENTS ) ) && ( $row['webhook_id'] ?? '' ) === (string) ( self::get()[ $mode ]['webhook_id'] ?? '' ),
+            'missing'     => array_values( (array) ( $row['missing'] ?? [] ) ),
+            'api_version' => (string) ( $row['api_version'] ?? '' ),
         ];
     }
 
@@ -678,6 +756,38 @@ class MyNJILGA_Stripe_Connection {
      *
      * @return array{ok:bool,charges_enabled:bool,error:string}
      */
+    /**
+     * Can this mode's key create Checkout Sessions (the online join)?
+     * true / false, or null when it couldn't be established (Stripe
+     * unreachable, not connected) — callers treat null as "go ahead and
+     * let the real call report any problem".
+     *
+     * A restricted key set up from the checklist on Settings → Payments
+     * before online joining existed has no Checkout permission, and a
+     * READ probe would pass for a read-only key — so this asks Stripe to
+     * expire a session that doesn't exist. "No such checkout session"
+     * means the key may write sessions; a permission error means it may
+     * not. Nothing is created either way. Cached 6 hours per mode.
+     */
+    public static function checkout_access( string $mode ): ?bool {
+        $key    = self::HEALTH_TRANSIENT_PREFIX . 'checkout_' . $mode;
+        $cached = get_transient( $key );
+        if ( $cached === 'yes' || $cached === 'no' ) {
+            return $cached === 'yes';
+        }
+        $client = self::client_for_mode( $mode );
+        if ( $client === null ) {
+            return null;
+        }
+        $resp = $client->request( 'POST', '/checkout/sessions/cs_njilga_permission_probe/expire' );
+        if ( $resp['status'] === 0 || $resp['status'] >= 500 ) {
+            return null;
+        }
+        $denied = in_array( (int) $resp['status'], [ 401, 403 ], true ) || stripos( (string) $resp['error'], 'permission' ) !== false;
+        set_transient( $key, $denied ? 'no' : 'yes', 6 * HOUR_IN_SECONDS );
+        return ! $denied;
+    }
+
     private static function cached_account_check( string $mode, string $secretKey ): array {
         $transientKey = self::HEALTH_TRANSIENT_PREFIX . $mode;
         $cached       = get_transient( $transientKey );

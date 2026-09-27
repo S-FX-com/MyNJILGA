@@ -1,21 +1,32 @@
 <?php
 /**
- * My NJILGA → Applications — the enrollment review queue (spec §10).
+ * My NJILGA → Applications — the enrollment review queue (spec §10), and,
+ * on its second tab, Online joins: everyone who joined (or started to)
+ * through the [njilga_join] shortcode.
  */
 class MyNJILGA_Page_Applications {
 
     const ACTION_DECIDE = 'my_njilga_application_decide';
+    const ACTION_JOIN   = 'my_njilga_join_action';
 
     public static function render(): void {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( 'Access denied.' );
         }
         MyNJILGA_Applications_Table::maybe_upgrade();
+        MyNJILGA_Join_Orders_Table::maybe_upgrade();
+        MyNJILGA_Join_Invites_Table::maybe_upgrade();
 
-        MyNJILGA_Admin_UI::open(
-            'Membership Applications',
-            'Review the enrollment queue: approve to attach an applicant to their firm, or reject.'
-        );
+        $tab = self::current_tab();
+
+        MyNJILGA_Admin_UI::styles();
+        echo '<div class="wrap njilga-ui">';
+        if ( $tab === 'joins' ) {
+            MyNJILGA_Admin_UI::page_header( 'Online Joins', 'Everyone joining through the [njilga_join] shortcode: paid through Stripe Checkout, membership applied on payment, colleagues invited.' );
+        } else {
+            MyNJILGA_Admin_UI::page_header( 'Membership Applications', 'Review the enrollment queue: approve to attach an applicant to their firm, or reject.' );
+        }
+        self::render_tabs( $tab );
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
             MyNJILGA_Admin_UI::close();
@@ -26,6 +37,12 @@ class MyNJILGA_Page_Applications {
             $ok   = ! empty( $_GET['ok'] );
             $text = sanitize_text_field( wp_unslash( $_GET['msg'] ) );
             MyNJILGA_Admin_UI::callout( esc_html( $text ), $ok ? 'success' : 'error' );
+        }
+
+        if ( $tab === 'joins' ) {
+            self::render_joins();
+            MyNJILGA_Admin_UI::close();
+            return;
         }
 
         $policy = (string) MyNJILGA_Dues_Settings::general( 'mid_year_join_policy' );
@@ -41,6 +58,264 @@ class MyNJILGA_Page_Applications {
 
         MyNJILGA_Admin_UI::close();
     }
+
+    private static function current_tab(): string {
+        $tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( (string) $_GET['tab'] ) ) : '';
+        return $tab === 'joins' ? 'joins' : 'applications';
+    }
+
+    private static function render_tabs( string $active ): void {
+        $base = MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS );
+        MyNJILGA_Admin_UI::nav_tabs( [
+            [ 'label' => 'Applications', 'url' => $base, 'active' => $active === 'applications', 'count' => MyNJILGA_Applications_Table::count_pending() ],
+            [ 'label' => 'Online joins', 'url' => add_query_arg( 'tab', 'joins', $base ), 'active' => $active === 'joins', 'count' => MyNJILGA_Join_Orders_Table::needs_attention_count() ],
+        ] );
+    }
+
+    // -------------------------------------------------------------------------
+    // Online joins tab
+    // -------------------------------------------------------------------------
+
+    private static function render_joins(): void {
+        $T      = 'MyNJILGA_Join_Orders_Table';
+        $counts = MyNJILGA_Join_Orders_Table::counts_by_status();
+        $rows   = MyNJILGA_Join_Orders_Table::get_list( [], 300 );
+        $year   = MyNJILGA_Invoicing::current_dues_year();
+        $joined = 0;
+        foreach ( $rows as $r ) {
+            if ( $r->status === $T::STATUS_FULFILLED && (int) $r->dues_year === $year ) {
+                $joined++;
+            }
+        }
+        $attention = array_values( array_filter( $rows, [ $T, 'needs_attention' ] ) );
+
+        MyNJILGA_Admin_UI::stat_cards( [
+            [ 'label' => sprintf( 'Joined for %d', $year ), 'value' => $joined, 'variant' => 'success', 'icon' => 'check-circle' ],
+            [ 'label' => 'Awaiting payment', 'value' => (int) ( $counts[ $T::STATUS_PENDING ] ?? 0 ), 'variant' => 'info', 'icon' => 'inbox' ],
+            [ 'label' => 'Bank payment clearing', 'value' => (int) ( $counts[ $T::STATUS_PROCESSING ] ?? 0 ), 'variant' => 'info', 'icon' => 'refresh' ],
+            [ 'label' => 'Needs attention', 'value' => count( $attention ), 'variant' => $attention ? 'warning' : 'default', 'icon' => 'alert' ],
+        ] );
+
+        printf(
+            '<p class="njilga-section-desc">Paste <code>[njilga_join category="professional"]</code>, <code>[njilga_join category="law_student"]</code> or <code>[njilga_join category="emerging_professional"]</code> on each Membership page (any category key an applicant may pick in <a href="%s">Settings</a>). A paid join becomes a membership the moment Stripe confirms the payment; a join that comes to $0 waits here for a decision.%s</p>',
+            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ),
+            MyNJILGA_Join_Form::is_test_mode() ? ' <strong>Stripe is in Test mode</strong>, so the form is visible to staff only.' : ''
+        );
+
+        if ( $attention ) {
+            MyNJILGA_Admin_UI::section( 'Needs attention', 'Joins waiting on a decision, a payment that hasn\'t been applied yet, or people a join left off their firm until you confirm them.', count( $attention ) );
+            self::joins_table( $attention );
+        }
+
+        MyNJILGA_Admin_UI::section( 'All online joins', 'Newest first. Abandoned and expired attempts are kept so you can follow up.', count( $rows ) );
+        if ( ! $rows ) {
+            echo '<div class="njilga-card njilga-empty"><div class="njilga-empty-icon">' . MyNJILGA_Admin_UI::icon( 'inbox' ) . '</div><h2 class="njilga-empty-title">No online joins yet</h2><p class="njilga-empty-text">Once the shortcode is on a Membership page, every attempt shows up here — paid or not.</p></div>';
+            return;
+        }
+        self::joins_table( $rows );
+    }
+
+    /**
+     * @param array<int,object> $rows
+     */
+    private static function joins_table( array $rows ): void {
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Applicant</th><th>Membership</th><th>Firm</th><th>Colleagues</th><th class="njilga-col-num">Total</th><th>Status</th><th class="njilga-col-actions">Actions</th></tr></thead><tbody>';
+        foreach ( $rows as $join ) {
+            $category   = MyNJILGA_Dues_Settings::category( (string) $join->category_key );
+            $applicant  = MyNJILGA_Join_Orders_Table::json( $join, 'applicant' );
+            $colleagues = MyNJILGA_Join_Orders_Table::json( $join, 'colleagues' );
+            $progress   = MyNJILGA_Join_Orders_Table::json( $join, 'progress' );
+            $invites    = $colleagues ? MyNJILGA_Join_Invites_Table::get_for_join( (int) $join->id ) : [];
+            $accepted   = count( array_filter( $invites, static function ( $i ) { return $i->status !== MyNJILGA_Join_Invites_Table::STATUS_SENT; } ) );
+
+            // Applicant.
+            $detail = $join->form === MyNJILGA_Join_Orders_Table::FORM_STUDENT
+                ? ( ( $applicant['student_status'] ?? '' ) === 'undergrad' ? 'Undergraduate (pre-law)' : 'Enrolled law student' ) . ( ! empty( $applicant['school'] ) ? ' · ' . $applicant['school'] : '' )
+                : trim( ( ! empty( $applicant['attorney_id'] ) ? 'NJ Attorney ID ' . $applicant['attorney_id'] : '' ) . ( ! empty( $applicant['bar_admission_date'] ) ? ' · admitted ' . $applicant['bar_admission_date'] : '' ), ' ·' );
+            $cell = sprintf(
+                '<div class="njilga-firmcell"><span class="njilga-firmname">%s %s</span>%s<span class="njilga-subline"><a href="mailto:%s">%s</a> · %s</span>%s</div>',
+                esc_html( (string) $join->first_name ),
+                esc_html( (string) $join->last_name ),
+                empty( $join->livemode ) ? ' ' . MyNJILGA_Admin_UI::pill( 'Test', 'warning' ) : '',
+                esc_attr( (string) $join->email ),
+                esc_html( (string) $join->email ),
+                esc_html( (string) $join->created_at ),
+                $detail !== '' ? '<span class="njilga-subline">' . esc_html( $detail ) . '</span>' : ''
+            );
+
+            // Firm.
+            $firm = MyNJILGA_Admin_UI::blank();
+            if ( (int) $join->company_id > 0 && MyNJILGA_Members_Data::companies_module_active() ) {
+                $c    = \FluentCrm\App\Models\Company::find( (int) $join->company_id );
+                $firm = esc_html( $c ? (string) $c->name : 'Company #' . (int) $join->company_id ) . ' ' . MyNJILGA_Admin_UI::pill( ! empty( $progress['new_firm'] ) ? 'new firm' : 'existing', ! empty( $progress['new_firm'] ) ? 'info' : 'outline' );
+            } elseif ( (string) $join->new_company_name !== '' ) {
+                $firm = esc_html( (string) $join->new_company_name ) . ' ' . MyNJILGA_Admin_UI::pill( 'new firm', 'info' );
+            }
+            foreach ( (array) ( $progress['held'] ?? [] ) as $h ) {
+                $firm .= sprintf( '<span class="njilga-subline njilga-subline-warn">Not yet on the firm: %s — %s</span>', esc_html( (string) ( $h['name'] ?? '' ) ), esc_html( (string) ( $h['reason'] ?? '' ) ) );
+            }
+
+            // Colleagues.
+            $coll = MyNJILGA_Admin_UI::blank();
+            if ( $colleagues ) {
+                $names = array_map( static function ( $c ) { return trim( (string) ( $c['first_name'] ?? '' ) . ' ' . (string) ( $c['last_name'] ?? '' ) ); }, $colleagues );
+                $coll  = sprintf( '%d <span class="njilga-subline">%s</span>', count( $colleagues ), esc_html( implode( ', ', $names ) ) );
+                if ( $join->status === MyNJILGA_Join_Orders_Table::STATUS_FULFILLED ) {
+                    $coll .= sprintf( '<span class="njilga-subline">%d of %d set up an account</span>', $accepted, count( $invites ) );
+                }
+            }
+
+            // Status + anything staff should read.
+            [ $label, $variant ] = self::join_status_pill( (string) $join->status );
+            $status = MyNJILGA_Admin_UI::pill( $label, $variant );
+            foreach ( array_merge( (array) ( $progress['already_current'] ?? [] ), (array) ( $progress['checks'] ?? [] ) ) as $w ) {
+                $status .= '<span class="njilga-subline njilga-subline-warn">' . esc_html( (string) $w ) . '</span>';
+            }
+            if ( ! empty( $progress['document_unverified'] ) ) {
+                $status .= '<span class="njilga-subline njilga-subline-warn">Student ID / transcript not yet checked.</span>';
+            }
+            if ( (string) ( $join->last_error ?? '' ) !== '' ) {
+                $status .= '<span class="njilga-subline njilga-subline-warn">' . esc_html( (string) $join->last_error ) . '</span>';
+            }
+
+            printf(
+                '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td><td>%s</td><td class="njilga-col-actions">%s</td></tr>',
+                $cell,
+                esc_html( $category ? $category['label'] : (string) $join->category_key ) . '<span class="njilga-subline">' . (int) $join->dues_year . '</span>',
+                $firm,
+                $coll,
+                esc_html( MyNJILGA_Invoicing::money( (int) $join->total_cents ) ),
+                $status,
+                self::join_actions( $join, $progress, $invites, $accepted )
+            );
+        }
+        echo '</tbody></table></div></div>';
+    }
+
+    /**
+     * @return array{0:string,1:string} [label, pill variant]
+     */
+    private static function join_status_pill( string $status ): array {
+        $T = 'MyNJILGA_Join_Orders_Table';
+        switch ( $status ) {
+            case $T::STATUS_FULFILLED:  return [ 'Member', 'success' ];
+            case $T::STATUS_PENDING:    return [ 'Awaiting payment', 'info' ];
+            case $T::STATUS_PROCESSING: return [ 'Bank payment clearing', 'info' ];
+            case $T::STATUS_PAID:       return [ 'Paid — not applied yet', 'warning' ];
+            case $T::STATUS_FULFILLING: return [ 'Applying…', 'info' ];
+            case $T::STATUS_REVIEW:     return [ 'Needs a decision ($0)', 'warning' ];
+            case $T::STATUS_REJECTED:   return [ 'Rejected', 'muted' ];
+            case $T::STATUS_EXPIRED:    return [ 'Checkout expired', 'muted' ];
+            case $T::STATUS_FAILED:     return [ 'Bank payment failed', 'destructive' ];
+            case $T::STATUS_ABANDONED:  return [ 'Started over', 'muted' ];
+        }
+        return [ ucfirst( $status ), 'muted' ];
+    }
+
+    /**
+     * @param array<string,mixed> $progress
+     * @param array<int,object>   $invites
+     */
+    private static function join_actions( object $join, array $progress, array $invites, int $accepted ): string {
+        $T   = 'MyNJILGA_Join_Orders_Table';
+        $id  = (int) $join->id;
+        $btn = static function ( string $op, string $label, string $style, string $confirm = '' ) use ( $id ): string {
+            return MyNJILGA_Admin_UI::action_form( self::ACTION_JOIN, $label, [ 'join_id' => $id, 'op' => $op ], $style, '', $confirm, 'sm' );
+        };
+        $out = '';
+        switch ( (string) $join->status ) {
+            case $T::STATUS_REVIEW:
+                $out .= $btn( 'approve', 'Approve', 'primary', 'Approve this join? Membership is applied at no charge.' );
+                $out .= $btn( 'reject', 'Reject', 'danger-outline', 'Reject this join? The applicant is emailed.' );
+                break;
+            case $T::STATUS_PENDING:
+            case $T::STATUS_PROCESSING:
+                $out .= $btn( 'sync', 'Check payment', 'outline' );
+                break;
+            case $T::STATUS_PAID:
+            case $T::STATUS_FULFILLING:
+                $out .= $btn( 'sync', 'Retry applying', 'primary' );
+                break;
+            case $T::STATUS_FULFILLED:
+                if ( ! empty( $progress['held'] ) ) {
+                    $out .= $btn( 'confirm_held', 'Add to firm', 'primary', 'Attach the people listed to this firm?' );
+                    $out .= $btn( 'dismiss_held', 'Leave off firm', 'ghost', 'Leave them off the firm? Their memberships stand.' );
+                }
+                if ( $invites && $accepted < count( $invites ) ) {
+                    $out .= $btn( 'resend', 'Resend invites', 'outline', 'Email a fresh invitation link to each colleague who hasn\'t set up an account? Earlier links stop working.' );
+                }
+                if ( ! empty( $progress['already_current'] ) || ! empty( $progress['checks'] ) || ! empty( $progress['document_unverified'] ) || (string) ( $join->last_error ?? '' ) !== '' ) {
+                    $out .= $btn( 'ack', ! empty( $progress['document_unverified'] ) ? 'Mark checked' : 'Mark reviewed', 'ghost' );
+                }
+                if ( (int) $join->invoice_row_id > 0 ) {
+                    $row = MyNJILGA_Dues_Invoice_Table::get( (int) $join->invoice_row_id );
+                    if ( $row && ! empty( $row->hosted_invoice_url ) ) {
+                        $out .= sprintf( '<a class="njilga-btn njilga-btn-ghost njilga-btn-sm" href="%s" target="_blank" rel="noopener">%sReceipt</a>', esc_url( (string) $row->hosted_invoice_url ), MyNJILGA_Admin_UI::icon( 'external' ) );
+                    }
+                }
+                break;
+        }
+        if ( (string) $join->document_path !== '' ) {
+            $out .= sprintf( '<a class="njilga-btn njilga-btn-ghost njilga-btn-sm" href="%s" target="_blank" rel="noopener">%sStudent ID</a>', esc_url( MyNJILGA_Join_Documents::view_url( $id ) ), MyNJILGA_Admin_UI::icon( 'file' ) );
+        }
+        return $out !== '' ? '<div class="njilga-actions">' . $out . '</div>' : MyNJILGA_Admin_UI::blank();
+    }
+
+    public static function handle_join_action(): void {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Access denied.' );
+        }
+        check_admin_referer( self::ACTION_JOIN );
+        $id = (int) ( $_POST['join_id'] ?? 0 );
+        $op = sanitize_key( wp_unslash( (string) ( $_POST['op'] ?? '' ) ) );
+
+        switch ( $op ) {
+            case 'approve':
+                $r = MyNJILGA_Join_Fulfillment::approve_review( $id, get_current_user_id(), '' );
+                break;
+            case 'reject':
+                $r = MyNJILGA_Join_Fulfillment::reject_review( $id, get_current_user_id(), '' );
+                break;
+            case 'sync':
+                $r = MyNJILGA_Join_Fulfillment::sync( $id, 'staff (Online joins)' );
+                break;
+            case 'confirm_held':
+                $r = MyNJILGA_Join_Fulfillment::confirm_held( $id );
+                break;
+            case 'dismiss_held':
+                $r = MyNJILGA_Join_Fulfillment::dismiss_held( $id );
+                break;
+            case 'resend':
+                $n = MyNJILGA_Join_Invites::resend( $id );
+                $r = [ 'ok' => $n > 0, 'message' => $n > 0 ? sprintf( 'Sent %d fresh invitation%s.', $n, $n === 1 ? '' : 's' ) : 'No invitations were waiting.' ];
+                break;
+            case 'ack':
+                $join = MyNJILGA_Join_Orders_Table::get( $id );
+                if ( $join ) {
+                    $progress = MyNJILGA_Join_Orders_Table::json( $join, 'progress' );
+                    $progress['reviewed_notes'] = array_merge( (array) ( $progress['reviewed_notes'] ?? [] ), (array) ( $progress['already_current'] ?? [] ), (array) ( $progress['checks'] ?? [] ), (string) $join->last_error !== '' ? [ (string) $join->last_error ] : [] );
+                    if ( ! empty( $progress['document_unverified'] ) ) {
+                        $progress['document_checked_by'] = get_current_user_id();
+                        $progress['document_checked_at'] = current_time( 'mysql' );
+                    }
+                    $progress['already_current']     = [];
+                    $progress['checks']              = [];
+                    $progress['document_unverified'] = false;
+                    MyNJILGA_Join_Orders_Table::update( $id, [ 'progress' => $progress, 'last_error' => null ] );
+                }
+                $r = [ 'ok' => (bool) $join, 'message' => 'Marked reviewed.' ];
+                break;
+            default:
+                $r = [ 'ok' => false, 'message' => 'Unknown action.' ];
+        }
+
+        wp_safe_redirect( add_query_arg( [ 'tab' => 'joins', 'msg' => rawurlencode( (string) $r['message'] ), 'ok' => ! empty( $r['ok'] ) ? 1 : 0 ], MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) ) );
+        exit;
+    }
+
+    // -------------------------------------------------------------------------
+    // Applications tab
+    // -------------------------------------------------------------------------
 
     private static function render_pending(): void {
         $rows = MyNJILGA_Applications_Table::get_pending();
@@ -101,8 +376,8 @@ class MyNJILGA_Page_Applications {
                 self::firm_label( $app ),
                 esc_html( $cat ? $cat['label'] : $app->category_key ),
                 MyNJILGA_Admin_UI::pill(
-                    ucfirst( $app->status ),
-                    $app->status === MyNJILGA_Applications_Table::STATUS_APPROVED ? 'success' : 'destructive'
+                    $app->status === MyNJILGA_Applications_Table::STATUS_SUPERSEDED ? 'Joined online' : ucfirst( $app->status ),
+                    $app->status === MyNJILGA_Applications_Table::STATUS_APPROVED ? 'success' : ( $app->status === MyNJILGA_Applications_Table::STATUS_SUPERSEDED ? 'info' : 'destructive' )
                 ),
                 $user ? esc_html( $user->display_name ) : '—',
                 esc_html( (string) $app->decided_at ),
