@@ -133,13 +133,14 @@ class MyNJILGA_Join_Invites {
     }
 
     /**
-     * The role a joiner's new account gets: always Subscriber when the
-     * site has it, never a "New User Default Role" someone raised for
-     * another purpose. The membership role is added on top by the dues
-     * role sync.
+     * The role a joiner's new account gets: Subscriber when the site has
+     * it, and otherwise none at all — never the "New User Default Role",
+     * which someone may have raised to a member role for another purpose,
+     * and this account has paid for nothing yet. The membership role is
+     * added on top by the dues role sync once payment is confirmed.
      */
     public static function new_account_role(): string {
-        return get_role( 'subscriber' ) ? 'subscriber' : (string) get_option( 'default_role', 'subscriber' );
+        return get_role( 'subscriber' ) ? 'subscriber' : '';
     }
 
     /**

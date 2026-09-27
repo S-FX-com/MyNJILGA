@@ -414,12 +414,32 @@ class MyNJILGA_Stripe_Webhook {
             'last_error'     => $message,
             'last_synced_at' => current_time( 'mysql' ),
         ] );
-        $join = MyNJILGA_Join_Orders_Table::get_by_payment_intent( self::extract_ref_id( $dataObject['payment_intent'] ?? null ) );
+        self::flag_join( $row, $dataObject, $message );
+
+        self::finish_processed( $eventId, (int) $row->id );
+    }
+
+    /**
+     * Put a refund, credit-note or dispute note on the online join behind
+     * a row as well. Staff work joins from Applications → Online joins,
+     * which reads the join record (the Invoicing page keeps join rows out
+     * of its attention counts), so a note left only on the row would
+     * reach no-one.
+     *
+     * @param array<string,mixed> $dataObject The event's object (for its PaymentIntent).
+     */
+    private static function flag_join( object $row, array $dataObject, string $message ): void {
+        $joinId = (string) ( $row->invoice_kind ?? '' ) === MyNJILGA_Dues_Snapshot::KIND_JOIN
+            ? (int) ( MyNJILGA_Dues_Snapshot::decode( $row )['join_id'] ?? 0 )
+            : 0;
+        $join = $joinId > 0 ? MyNJILGA_Join_Orders_Table::get( $joinId ) : null;
+        if ( ! $join ) {
+            $piId = self::extract_ref_id( $dataObject['payment_intent'] ?? null );
+            $join = $piId !== '' ? MyNJILGA_Join_Orders_Table::get_by_payment_intent( $piId ) : null;
+        }
         if ( $join ) {
             MyNJILGA_Join_Orders_Table::update( (int) $join->id, [ 'last_error' => $message ] );
         }
-
-        self::finish_processed( $eventId, (int) $row->id );
     }
 
     /**
@@ -941,12 +961,13 @@ class MyNJILGA_Stripe_Webhook {
         // Stripe's charge carries the CUMULATIVE refunded total, which is
         // what this column should hold — summing our own ledger rows would
         // drift the moment a refund arrived that we never saw.
+        $message = sprintf(
+            'Refunded %s on %s — review membership status.',
+            MyNJILGA_Invoicing::money( abs( $refundAmount ) ),
+            current_time( 'Y-m-d' )
+        );
         $fields = [
-            'last_error'     => sprintf(
-                'Refunded %s on %s — review membership status.',
-                MyNJILGA_Invoicing::money( abs( $refundAmount ) ),
-                current_time( 'Y-m-d' )
-            ),
+            'last_error'     => $message,
             'stripe_status'  => (string) ( $dataObject['status'] ?? '' ),
             'last_synced_at' => current_time( 'mysql' ),
         ];
@@ -954,6 +975,7 @@ class MyNJILGA_Stripe_Webhook {
             $fields['amount_refunded_cents'] = abs( (int) $dataObject['amount_refunded'] );
         }
         MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, $fields );
+        self::flag_join( $row, $dataObject, $message );
 
         self::finish_processed( $eventId, (int) $row->id );
     }
@@ -996,15 +1018,17 @@ class MyNJILGA_Stripe_Webhook {
         ];
         MyNJILGA_Dues_Payments_Table::record( $ledger );
 
+        $message = sprintf(
+            'A credit note for %s was issued on %s — review membership status.',
+            MyNJILGA_Invoicing::money( abs( $amount ) ),
+            current_time( 'Y-m-d' )
+        );
         MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
-            'last_error'     => sprintf(
-                'A credit note for %s was issued on %s — review membership status.',
-                MyNJILGA_Invoicing::money( abs( $amount ) ),
-                current_time( 'Y-m-d' )
-            ),
+            'last_error'     => $message,
             'stripe_status'  => (string) ( $dataObject['status'] ?? '' ),
             'last_synced_at' => current_time( 'mysql' ),
         ] );
+        self::flag_join( $row, $dataObject, $message );
 
         self::finish_processed( $eventId, (int) $row->id );
     }

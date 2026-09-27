@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
- * Version:     3.1.2
+ * Version:     3.1.3
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
