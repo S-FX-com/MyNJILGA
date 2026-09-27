@@ -13,7 +13,7 @@
  */
 class MyNJILGA_Join_Documents {
 
-    const MAX_BYTES     = 8388608; // 8 MB
+    const MAX_BYTES     = 8388608; // 8 MB — our own ceiling; the server's may be lower (max_bytes()).
     const ACTION_VIEW   = 'my_njilga_join_document';
 
     /** extension => mime — what a phone photo of an ID card or a PDF transcript is. */
@@ -56,24 +56,55 @@ class MyNJILGA_Join_Documents {
     }
 
     /**
+     * The largest document the form really accepts: our own ceiling, or
+     * less where PHP's upload_max_filesize / post_max_size is lower (the
+     * default 2 MB would otherwise refuse a phone photo the form said
+     * was fine).
+     */
+    public static function max_bytes(): int {
+        $server = function_exists( 'wp_max_upload_size' ) ? (int) wp_max_upload_size() : 0;
+        return $server > 0 ? min( self::MAX_BYTES, $server ) : self::MAX_BYTES;
+    }
+
+    /**
+     * max_bytes() for people: "8 MB", "2 MB", "1.5 MB".
+     */
+    public static function max_label(): string {
+        return self::size_label( self::max_bytes() );
+    }
+
+    /**
+     * A byte count as the form states a limit — rounded down, so it
+     * never promises more than is accepted.
+     */
+    public static function size_label( int $bytes ): string {
+        if ( $bytes >= 1048576 ) {
+            $mb = floor( $bytes / 1048576 * 10 ) / 10;
+            return rtrim( rtrim( number_format( $mb, 1, '.', '' ), '0' ), '.' ) . ' MB';
+        }
+        return max( 1, (int) floor( $bytes / 1024 ) ) . ' KB';
+    }
+
+    /**
      * Validate and store one entry of $_FILES.
      *
      * @param array<string,mixed> $file
      * @return array{ok:bool,path?:string,name?:string,mime?:string,error?:string}
      */
     public static function store( array $file ): array {
-        $err = (int) ( $file['error'] ?? UPLOAD_ERR_NO_FILE );
+        $err      = (int) ( $file['error'] ?? UPLOAD_ERR_NO_FILE );
+        $tooLarge = 'That file is too large — the limit is ' . self::max_label() . '. A photo of your student ID is usually much smaller than a scan.';
         if ( $err === UPLOAD_ERR_NO_FILE ) {
             return [ 'ok' => false, 'error' => 'Please upload your student ID or transcript.' ];
         }
         if ( $err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE ) {
-            return [ 'ok' => false, 'error' => 'That file is too large — the limit is 8 MB.' ];
+            return [ 'ok' => false, 'error' => $tooLarge ];
         }
         if ( $err !== UPLOAD_ERR_OK || empty( $file['tmp_name'] ) || ! is_uploaded_file( (string) $file['tmp_name'] ) ) {
             return [ 'ok' => false, 'error' => 'The upload did not come through — please try again.' ];
         }
-        if ( (int) ( $file['size'] ?? 0 ) > self::MAX_BYTES ) {
-            return [ 'ok' => false, 'error' => 'That file is too large — the limit is 8 MB.' ];
+        if ( (int) ( $file['size'] ?? 0 ) > self::max_bytes() ) {
+            return [ 'ok' => false, 'error' => $tooLarge ];
         }
 
         $name  = sanitize_file_name( (string) ( $file['name'] ?? 'document' ) );
@@ -133,11 +164,15 @@ class MyNJILGA_Join_Documents {
         }
 
         $mime = in_array( (string) $join->document_mime, self::ALLOWED, true ) ? (string) $join->document_mime : 'application/octet-stream';
+        // Shown in the browser only where it renders natively; HEIC and
+        // anything unrecognised download instead.
+        $inline = in_array( $mime, [ 'image/jpeg', 'image/png', 'image/webp', 'application/pdf' ], true );
         nocache_headers();
         header( 'Content-Type: ' . $mime );
         header( 'Content-Length: ' . (string) filesize( $path ) );
         header( 'X-Content-Type-Options: nosniff' );
-        header( 'Content-Disposition: inline; filename="' . str_replace( [ '"', "\r", "\n" ], '', (string) $join->document_name ) . '"' );
+        header( 'Referrer-Policy: no-referrer' );
+        header( 'Content-Disposition: ' . ( $inline ? 'inline' : 'attachment' ) . '; filename="' . str_replace( [ '"', '\\', "\r", "\n" ], '', (string) $join->document_name ) . '"' );
         readfile( $path ); // phpcs:ignore
         exit;
     }

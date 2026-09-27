@@ -164,6 +164,25 @@ class MyNJILGA_Invoice_Creator {
             return [ 'ok' => false, 'error' => 'Every roster member owes $0 — nothing to invoice.' ];
         }
 
+        // The snapshot was frozen when the preview ran. Anyone who has
+        // since paid this year's dues through an online join would be
+        // billed a second time by it, so the row goes back to draft —
+        // Refresh Firms only re-prices drafts, and prices them at $0 as
+        // "paid via online join" — rather than out to Stripe.
+        if ( $kind !== MyNJILGA_Dues_Snapshot::KIND_JOIN && MyNJILGA_Dues_Snapshot::settles_dues( $invoiceRow ) ) {
+            $paid = self::members_paid_by_join( $members, MyNJILGA_Dues_Invoice_Table::join_paid_contacts( $duesYear, ! empty( $invoiceRow->livemode ) ) );
+            if ( $paid ) {
+                MyNJILGA_Dues_Invoice_Table::return_to_draft( (int) $invoiceRow->id );
+                return [ 'ok' => false, 'error' => sprintf(
+                    '%s already paid %d dues through an online join since this invoice was previewed. Click Refresh Firms to re-price %s (they will be listed at $0), then create it. Nothing was sent to %s.',
+                    implode( ', ', array_column( $paid, 'name' ) ),
+                    $duesYear,
+                    MyNJILGA_Dues_Snapshot::company_name( $invoiceRow ),
+                    $gateway->name()
+                ) ];
+            }
+        }
+
         // Bill-to identity frozen at generation time — the customer match
         // has to use the email the invoice was actually addressed to, even
         // if the contact's live email has since changed.
@@ -252,6 +271,34 @@ class MyNJILGA_Invoice_Creator {
         );
 
         return [ 'ok' => true ];
+    }
+
+    /**
+     * The members a dues invoice would charge who have already paid the
+     * year's dues through an online join. Only a member the snapshot
+     * actually bills dues for counts: someone already priced at $0 (paid
+     * via online join, a 6th-or-later member, inactive) costs nothing to
+     * leave on, and an assessment line is not dues.
+     *
+     * @param array<int,array<string,mixed>> $members  A snapshot's members.
+     * @param array<int,int>                 $joinPaid contact id => join row id (MyNJILGA_Dues_Invoice_Table::join_paid_contacts()).
+     * @return array<int,array{contact_id:int,name:string,join_row_id:int}>
+     */
+    public static function members_paid_by_join( array $members, array $joinPaid ): array {
+        $out = [];
+        foreach ( $members as $m ) {
+            $cid = (int) ( $m['contact_id'] ?? 0 );
+            if ( $cid <= 0 || ! isset( $joinPaid[ $cid ] ) || (int) ( $m['dues_cents'] ?? 0 ) <= 0 ) {
+                continue;
+            }
+            $name  = (string) ( $m['name'] ?? '' );
+            $out[] = [
+                'contact_id'  => $cid,
+                'name'        => $name !== '' ? $name : 'Contact #' . $cid,
+                'join_row_id' => (int) $joinPaid[ $cid ],
+            ];
+        }
+        return $out;
     }
 
     /**

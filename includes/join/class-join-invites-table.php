@@ -11,6 +11,9 @@
  *
  * Statuses:
  *   sent              token emailed, not used yet
+ *   claiming          an account is being created through it right now
+ *                     (accepted_at holds when that began; a claim older
+ *                     than CLAIM_STALE_SECONDS is presumed dead)
  *   accepted          they created their account through it
  *   existing_account  they already had an account with that email — the
  *                     email told them to log in; no token was issued
@@ -21,8 +24,12 @@ class MyNJILGA_Join_Invites_Table {
     const DB_VERSION        = '1.0.0';
 
     const STATUS_SENT             = 'sent';
+    const STATUS_CLAIMING         = 'claiming';
     const STATUS_ACCEPTED         = 'accepted';
     const STATUS_EXISTING_ACCOUNT = 'existing_account';
+
+    /** Creating an account takes seconds; a claim this old died with its request. */
+    const CLAIM_STALE_SECONDS = 120;
 
     public static function table_name(): string {
         global $wpdb;
@@ -95,6 +102,27 @@ class MyNJILGA_Join_Invites_Table {
         return (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $table WHERE join_id = %d ORDER BY id ASC", $joinId ) ); // phpcs:ignore
     }
 
+    /**
+     * Every invite for several joins in one query.
+     *
+     * @param array<int,int> $joinIds
+     * @return array<int,array<int,object>> join id => its invites, oldest first
+     */
+    public static function get_for_joins( array $joinIds ): array {
+        global $wpdb;
+        $joinIds = array_values( array_unique( array_filter( array_map( 'intval', $joinIds ) ) ) );
+        if ( ! $joinIds ) {
+            return [];
+        }
+        $table        = self::table_name();
+        $placeholders = implode( ',', array_fill( 0, count( $joinIds ), '%d' ) );
+        $out          = [];
+        foreach ( (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $table WHERE join_id IN ($placeholders) ORDER BY id ASC", $joinIds ) ) as $invite ) { // phpcs:ignore
+            $out[ (int) $invite->join_id ][] = $invite;
+        }
+        return $out;
+    }
+
     public static function find( int $joinId, string $email ) {
         global $wpdb;
         $table = self::table_name();
@@ -104,10 +132,11 @@ class MyNJILGA_Join_Invites_Table {
     /**
      * Create the invite for one colleague, or re-issue it — a fresh token
      * and a fresh expiry, which retires whatever link was emailed before.
-     * An already-accepted invite is left exactly as it is.
+     * An already-accepted invite is left exactly as it is, and so is one
+     * whose account is being created this moment.
      *
      * @param array{contact_id:int,email:string,first_name:string,last_name:string} $person
-     * @return array{id:int,status:string} status is 'accepted' when nothing was (re)issued.
+     * @return array{id:int,status:string} status is 'accepted' or 'claiming' when nothing was (re)issued.
      */
     public static function issue( int $joinId, array $person, ?string $tokenHash, string $status, string $expiresAt ): array {
         global $wpdb;
@@ -116,8 +145,8 @@ class MyNJILGA_Join_Invites_Table {
         $email    = strtolower( (string) $person['email'] );
         $existing = self::find( $joinId, $email );
 
-        if ( $existing && $existing->status === self::STATUS_ACCEPTED ) {
-            return [ 'id' => (int) $existing->id, 'status' => self::STATUS_ACCEPTED ];
+        if ( $existing && ( $existing->status === self::STATUS_ACCEPTED || self::is_being_claimed( $existing ) ) ) {
+            return [ 'id' => (int) $existing->id, 'status' => (string) $existing->status ];
         }
 
         $data = [
@@ -143,8 +172,47 @@ class MyNJILGA_Join_Invites_Table {
     }
 
     /**
+     * Take the invite for one account creation BEFORE the account exists.
+     * The status test and the write are one UPDATE, so of two submits at
+     * once exactly one wins, and the loser never creates a user it would
+     * then have to delete (which can take the colleague's FluentCRM
+     * contact with it). A claim left by a request that died can be taken
+     * over once stale.
+     */
+    public static function claim( int $id, string $tokenHash ): bool {
+        global $wpdb;
+        $table = self::table_name();
+        return (int) $wpdb->query( $wpdb->prepare( // phpcs:ignore
+            "UPDATE $table SET status = %s, accepted_at = %s WHERE id = %d AND token_hash = %s AND ( status = %s OR ( status = %s AND ( accepted_at IS NULL OR accepted_at < %s ) ) )",
+            self::STATUS_CLAIMING,
+            current_time( 'mysql' ),
+            $id,
+            $tokenHash,
+            self::STATUS_SENT,
+            self::STATUS_CLAIMING,
+            self::stale_before()
+        ) ) === 1;
+    }
+
+    /**
+     * Hand a claim back when the account couldn't be created (a taken
+     * username, say), so the link works again.
+     */
+    public static function release_claim( int $id, string $tokenHash ): void {
+        global $wpdb;
+        $table = self::table_name();
+        $wpdb->query( $wpdb->prepare( // phpcs:ignore
+            "UPDATE $table SET status = %s, accepted_at = NULL WHERE id = %d AND token_hash = %s AND status = %s",
+            self::STATUS_SENT,
+            $id,
+            $tokenHash,
+            self::STATUS_CLAIMING
+        ) );
+    }
+
+    /**
      * Single use: the token is cleared in the same write that marks the
-     * invite accepted, and only if it is still the one presented.
+     * claimed invite accepted, and only if it is still the one presented.
      */
     public static function mark_accepted( int $id, string $tokenHash, int $userId ): bool {
         global $wpdb;
@@ -155,9 +223,23 @@ class MyNJILGA_Join_Invites_Table {
             current_time( 'mysql' ),
             $userId,
             $id,
-            self::STATUS_SENT,
+            self::STATUS_CLAIMING,
             $tokenHash
         ) ) === 1;
+    }
+
+    /**
+     * Whether an account is being created through this invite right now
+     * (a claim that hasn't gone stale).
+     */
+    public static function is_being_claimed( object $invite ): bool {
+        return $invite->status === self::STATUS_CLAIMING
+            && ! empty( $invite->accepted_at )
+            && (string) $invite->accepted_at >= self::stale_before();
+    }
+
+    private static function stale_before(): string {
+        return gmdate( 'Y-m-d H:i:s', (int) current_time( 'timestamp' ) - self::CLAIM_STALE_SECONDS );
     }
 
     public static function is_expired( object $invite ): bool {

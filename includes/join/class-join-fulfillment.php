@@ -30,6 +30,54 @@
  */
 class MyNJILGA_Join_Fulfillment {
 
+    /**
+     * Public mailbox providers. An address at one says nothing about where
+     * someone works, so these never count as a firm's own domain (see
+     * domain_matches()). Kept broad on purpose: a firm domain wrongly
+     * listed here only means its joiners wait for staff, while a public
+     * domain missing from it lets anyone who opens a free mailbox there
+     * attach themselves, unchecked, to any firm with a member using it.
+     * Sites adjust it with the `my_njilga_free_mail_domains` filter.
+     */
+    const FREE_MAIL_DOMAINS = [
+        // Google, Microsoft, Yahoo, AOL, Apple.
+        'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'passport.com', 'windowslive.com',
+        'yahoo.com', 'ymail.com', 'rocketmail.com', 'aol.com', 'aim.com', 'icloud.com', 'me.com', 'mac.com', 'privaterelay.appleid.com',
+        // US broadband and phone companies (many still issue mailboxes).
+        'comcast.net', 'xfinity.com', 'verizon.net', 'att.net', 'sbcglobal.net', 'bellsouth.net', 'pacbell.net', 'swbell.net',
+        'ameritech.net', 'flash.net', 'prodigy.net', 'snet.net', 'wans.net', 'nvbell.net', 'optonline.net', 'optimum.net',
+        'cox.net', 'charter.net', 'spectrum.net', 'rr.com', 'twc.com', 'earthlink.net', 'mindspring.com', 'frontier.com',
+        'frontiernet.net', 'centurylink.net', 'centurytel.net', 'embarqmail.com', 'q.com', 'windstream.net', 'suddenlink.net',
+        'mediacombb.net', 'wowway.com', 'atlanticbb.net', 'rcn.com', 'erols.com', 'patmedia.net', 'ptd.net', 'epix.net',
+        'juno.com', 'netzero.com', 'netzero.net', 'peoplepc.com', 'excite.com', 'lycos.com', 'usa.net', 'cs.com', 'compuserve.com',
+        // Privacy and independent providers, and address-forwarding services.
+        'protonmail.com', 'protonmail.ch', 'proton.me', 'pm.me', 'tutanota.com', 'tutanota.de', 'tutamail.com', 'tuta.io', 'tuta.com',
+        'keemail.me', 'hushmail.com', 'hush.com', 'mailfence.com', 'posteo.de', 'posteo.net', 'runbox.com', 'startmail.com',
+        'fastmail.com', 'fastmail.fm', 'hey.com', 'duck.com', 'mozmail.com', 'simplelogin.com', 'simplelogin.co', 'aleeas.com',
+        'anonaddy.com', 'anonaddy.me', 'addy.io', 'disroot.org', 'riseup.net', 'zoho.com', 'zohomail.com', 'zohomail.eu',
+        'inbox.com', 'mail2world.com',
+        // mail.com and its free "vanity" domains.
+        'mail.com', 'email.com', 'usa.com', 'post.com', 'myself.com', 'iname.com', 'writeme.com', 'cheerful.com', 'europe.com',
+        'asia.com', 'dr.com', 'doctor.com', 'engineer.com', 'techie.com', 'consultant.com', 'accountant.com', 'lawyer.com',
+        'counsellor.com', 'financier.com', 'workmail.com', 'contractor.net', 'graduate.org', 'teacher.com', 'politician.com',
+        'minister.com', 'secretary.net', 'socialworker.net', 'representative.com', 'activist.com', 'musician.org', 'programmer.net',
+        // GMX, Yandex and other European and international providers.
+        'gmx.com', 'gmx.us', 'gmx.net', 'web.de', 't-online.de', 'freenet.de', 'arcor.de', 'yandex.com', 'yandex.ru', 'ya.ru',
+        'mail.ru', 'bk.ru', 'inbox.ru', 'list.ru', 'rambler.ru', 'libero.it', 'virgilio.it', 'tiscali.it', 'alice.it', 'tin.it',
+        'orange.fr', 'wanadoo.fr', 'free.fr', 'laposte.net', 'sfr.fr', 'neuf.fr', 'btinternet.com', 'sky.com', 'virginmedia.com',
+        'blueyonder.co.uk', 'ntlworld.com', 'talktalk.net', 'seznam.cz', 'wp.pl', 'o2.pl', 'onet.pl', 'interia.pl',
+        'shaw.ca', 'rogers.com', 'sympatico.ca', 'bell.net', 'telus.net', 'videotron.ca', 'bigpond.com', 'bigpond.net.au',
+        'optusnet.com.au', 'xtra.co.nz', 'terra.com.br', 'uol.com.br', 'bol.com.br', 'rediffmail.com', 'qq.com', 'foxmail.com',
+        '163.com', '126.com', 'yeah.net', 'sina.com', 'sohu.com', 'aliyun.com', 'naver.com', 'daum.net', 'hanmail.net',
+    ];
+
+    /**
+     * Providers that run the same mailbox service under many country
+     * domains (yahoo.co.uk, hotmail.fr, gmx.de, yandex.kz) — matched by
+     * name, so none of those needs a list entry of its own.
+     */
+    const FREE_MAIL_FAMILIES = [ 'gmail', 'googlemail', 'yahoo', 'ymail', 'hotmail', 'outlook', 'live', 'windowslive', 'msn', 'aol', 'gmx', 'yandex', 'protonmail', 'tutanota' ];
+
     // -------------------------------------------------------------------------
     // Entry points
     // -------------------------------------------------------------------------
@@ -52,11 +100,25 @@ class MyNJILGA_Join_Fulfillment {
         if ( $join->status === $T::STATUS_FULFILLED ) {
             return self::result( true, $join->status, 'Already fulfilled.' );
         }
-        if ( ! in_array( $join->status, [ $T::STATUS_PENDING, $T::STATUS_PROCESSING, $T::STATUS_PAID, $T::STATUS_FULFILLING ], true ) ) {
+        // Closed by us, but its checkout may still have been paid (a
+        // resume opening a new checkout while the old one was being
+        // expired, say) — asked below, so that money is never dropped.
+        $closed = in_array( $join->status, [ $T::STATUS_EXPIRED, $T::STATUS_ABANDONED, $T::STATUS_FAILED ], true );
+        if ( ! $closed && ! in_array( $join->status, [ $T::STATUS_PENDING, $T::STATUS_PROCESSING, $T::STATUS_PAID, $T::STATUS_FULFILLING ], true ) ) {
             return self::result( false, $join->status, 'This join is closed (' . $join->status . ').' );
         }
         if ( (string) $join->stripe_session_id === '' ) {
-            return self::result( false, $join->status, 'No checkout on file for this join.' );
+            // A $0 join staff approved whose run died part-way (a fatal
+            // error or timeout — run()'s catch never ran) is left claimed
+            // with no checkout. Take the stale claim over, as
+            // approve_review() would, and run() resumes from `progress`.
+            if ( $join->status === $T::STATUS_FULFILLING && (int) $join->total_cents === 0 ) {
+                if ( ! MyNJILGA_Join_Orders_Table::claim( $joinId, [] ) ) {
+                    return self::result( false, $join->status, 'Another process is completing this join — try again in a few minutes.' );
+                }
+                return self::run( $joinId, $trigger, null );
+            }
+            return self::result( false, $join->status, $closed ? 'This join is closed (' . $join->status . ').' : 'No checkout on file for this join.' );
         }
 
         $mode = ! empty( $join->livemode ) ? MyNJILGA_Stripe_Connection::MODE_LIVE : MyNJILGA_Stripe_Connection::MODE_TEST;
@@ -74,6 +136,33 @@ class MyNJILGA_Join_Fulfillment {
 
         $status  = (string) $fresh['status'];
         $payment = (string) $fresh['payment_status'];
+        // Every transition below holds only while the join still carries
+        // the checkout just fetched.
+        $checked = [ 'stripe_session_id' => (string) $join->stripe_session_id ];
+
+        if ( $closed ) {
+            if ( $status !== 'complete' || $payment !== 'paid' ) {
+                return self::result( false, $join->status, 'This join is closed (' . $join->status . ').' );
+            }
+            // Stripe took the money anyway. Reopen the join as paid, so it
+            // is applied like any other (or, if it doesn't verify, waits
+            // on the Online joins screen) and staff are told why.
+            $reopened = MyNJILGA_Join_Orders_Table::transition( $joinId, [ $join->status ], $T::STATUS_PAID, [
+                'paid_at'    => current_time( 'mysql' ),
+                'last_error' => sprintf( 'Stripe took payment on this join\'s checkout after the join had been closed (%s).', $join->status ),
+            ], $checked );
+            if ( ! $reopened ) {
+                $now = MyNJILGA_Join_Orders_Table::get( $joinId );
+                return self::result( false, $now ? (string) $now->status : '', 'This join changed while it was being checked.' );
+            }
+            $progress                  = MyNJILGA_Join_Orders_Table::json( $join, 'progress' );
+            $progress['reopened_from'] = (string) $join->status;
+            MyNJILGA_Join_Orders_Table::update( $joinId, [ 'progress' => $progress ] );
+            $join = MyNJILGA_Join_Orders_Table::get( $joinId );
+            if ( ! $join ) {
+                return self::result( false, '', 'Join not found.' );
+            }
+        }
 
         $problem = self::verify_session( $join, $fresh );
         if ( $problem !== '' ) {
@@ -81,25 +170,36 @@ class MyNJILGA_Join_Fulfillment {
             // paid so staff see it as such, but apply nothing until a
             // human has looked at why it doesn't match.
             if ( $status === 'complete' && $payment === 'paid' ) {
-                MyNJILGA_Join_Orders_Table::transition( $joinId, [ $T::STATUS_PENDING, $T::STATUS_PROCESSING ], $T::STATUS_PAID, [ 'paid_at' => current_time( 'mysql' ) ] );
+                MyNJILGA_Join_Orders_Table::transition( $joinId, [ $T::STATUS_PENDING, $T::STATUS_PROCESSING ], $T::STATUS_PAID, [ 'paid_at' => current_time( 'mysql' ) ], $checked );
             }
             MyNJILGA_Join_Orders_Table::update( $joinId, [ 'last_error' => $problem ] );
             return self::result( false, $join->status, $problem );
         }
 
         if ( $status === 'expired' ) {
-            MyNJILGA_Join_Orders_Table::transition( $joinId, [ $T::STATUS_PENDING ], $T::STATUS_EXPIRED );
+            MyNJILGA_Join_Orders_Table::transition( $joinId, [ $T::STATUS_PENDING ], $T::STATUS_EXPIRED, [], $checked );
             return self::result( false, $T::STATUS_EXPIRED, 'The checkout expired without payment.' );
         }
         if ( $status === 'open' ) {
             return self::result( false, $join->status, 'Waiting for payment.' );
         }
         if ( $payment === 'unpaid' ) {
-            // Complete but not yet paid: an ACH debit is clearing.
+            // Complete but not yet paid: an ACH debit is clearing — unless
+            // the bank already refused it. That normally arrives as
+            // checkout.session.async_payment_failed, but an endpoint set
+            // up by hand may not carry that event, and without this the
+            // join would sit "processing" for good, locking everyone on
+            // it out of joining again.
+            $failed = self::bank_payment_failure( $fresh );
+            if ( $failed !== null ) {
+                self::fail_bank_payment( $join, $failed );
+                $now = MyNJILGA_Join_Orders_Table::get( $joinId );
+                return self::result( false, $now ? (string) $now->status : $T::STATUS_FAILED, 'The bank payment failed.' );
+            }
             MyNJILGA_Join_Orders_Table::transition( $joinId, [ $T::STATUS_PENDING ], $T::STATUS_PROCESSING, [
                 'stripe_payment_intent_id' => (string) $fresh['payment_intent_id'],
                 'stripe_customer_id'       => (string) $fresh['customer'],
-            ] );
+            ], $checked );
             return self::result( true, $T::STATUS_PROCESSING, 'Bank payment is processing.' );
         }
         if ( $payment !== 'paid' && $payment !== 'no_payment_required' ) {
@@ -173,26 +273,75 @@ class MyNJILGA_Join_Fulfillment {
 
         switch ( $type ) {
             case 'checkout.session.async_payment_failed':
-                if ( MyNJILGA_Join_Orders_Table::transition( (int) $join->id, [ $T::STATUS_PENDING, $T::STATUS_PROCESSING ], $T::STATUS_FAILED, [ 'last_error' => 'The bank payment failed.' ] ) ) {
-                    self::join_mail(
-                        $join,
-                        (string) $join->email,
-                        'Your NJILGA membership payment did not go through',
-                        sprintf(
-                            "Hi %s,\n\nYour bank reported that the payment for your NJILGA membership could not be completed, so your membership has not been activated.\n\nYou can try again, with a card or another account, here:\n%s\n\nNJILGA",
-                            $join->first_name,
-                            (string) $join->source_url
-                        )
-                    );
-                }
+                self::fail_bank_payment( $join, '' );
                 break;
             case 'checkout.session.expired':
-                MyNJILGA_Join_Orders_Table::transition( (int) $join->id, [ $T::STATUS_PENDING ], $T::STATUS_EXPIRED );
+                // Only while this is still the join's checkout — a resume
+                // may have given it a new one since the event was sent.
+                MyNJILGA_Join_Orders_Table::transition( (int) $join->id, [ $T::STATUS_PENDING ], $T::STATUS_EXPIRED, [], [ 'stripe_session_id' => (string) ( $object['id'] ?? '' ) ] );
                 break;
             default: // completed / async_payment_succeeded
                 self::sync( (int) $join->id, 'webhook' );
         }
         return (int) $join->id;
+    }
+
+    /**
+     * The applicant's bank refused the ACH debit: close the join (only
+     * while it still carries the checkout that failed) and tell them.
+     * Reached from the async_payment_failed event, or from sync() seeing
+     * the failure on the PaymentIntent when that event never arrives.
+     */
+    private static function fail_bank_payment( object $join, string $detail ): bool {
+        $T      = 'MyNJILGA_Join_Orders_Table';
+        $failed = MyNJILGA_Join_Orders_Table::transition(
+            (int) $join->id,
+            [ $T::STATUS_PENDING, $T::STATUS_PROCESSING ],
+            $T::STATUS_FAILED,
+            [ 'last_error' => 'The bank payment failed.' . ( $detail !== '' ? ' Stripe said: ' . $detail : '' ) ],
+            [ 'stripe_session_id' => (string) $join->stripe_session_id ]
+        );
+        if ( $failed ) {
+            self::join_mail(
+                $join,
+                (string) $join->email,
+                'Your NJILGA membership payment did not go through',
+                sprintf(
+                    "Hi %s,\n\nYour bank reported that the payment for your NJILGA membership could not be completed, so your membership has not been activated.\n\nYou can try again, with a card or another account, here:\n%s\n\nNJILGA",
+                    $join->first_name,
+                    (string) $join->source_url
+                )
+            );
+        }
+        return $failed;
+    }
+
+    /**
+     * Whether a completed-but-unpaid checkout's bank debit has already
+     * failed: its PaymentIntent went back to needing a payment method,
+     * was canceled (microdeposit verification ran out, say), or carries
+     * a payment error while no longer working on the debit. Null = not
+     * failed (still clearing, or waiting on the payer to verify);
+     * otherwise Stripe's reason, '' when it gave none. Pure — tested
+     * directly.
+     *
+     * @param array<string,mixed> $session Normalized checkout.
+     */
+    public static function bank_payment_failure( array $session ): ?string {
+        $pi = is_array( $session['payment_intent'] ?? null ) ? $session['payment_intent'] : null;
+        if ( $pi === null ) {
+            return null; // Not expanded — nothing to judge by.
+        }
+        $status = (string) ( $pi['status'] ?? '' );
+        $error  = $pi['last_payment_error'] ?? null;
+        $reason = is_array( $error ) ? (string) ( $error['message'] ?? '' ) : '';
+        if ( in_array( $status, [ 'requires_payment_method', 'canceled' ], true ) ) {
+            return $reason;
+        }
+        if ( ! empty( $error ) && ! in_array( $status, [ 'processing', 'requires_action', 'requires_capture', 'succeeded' ], true ) ) {
+            return $reason;
+        }
+        return null;
     }
 
     /**
@@ -260,6 +409,9 @@ class MyNJILGA_Join_Fulfillment {
             } catch ( \Throwable $e ) {
                 // Per-join isolation; the next sweep tries again.
             }
+            // Seen today: whatever couldn't move goes to the back of the
+            // queue, so the next sweep reaches the rows behind it.
+            MyNJILGA_Join_Orders_Table::touch( (int) $join->id );
         }
         return [ 'checked' => $checked, 'fulfilled' => $fulfilled ];
     }
@@ -397,8 +549,9 @@ class MyNJILGA_Join_Fulfillment {
             // record is rewritten on a payer's say-so either: a colleague
             // who belongs to another firm, carries another category, or is
             // marked inactive/unsubscribed waits for staff. Everyone held
-            // is still a paid member — they are just not attached or
-            // re-categorised until staff confirm on the Online joins screen.
+            // is still a paid member — they are just not attached (nor,
+            // when their own record is the issue, re-categorised) until
+            // staff confirm on the Online joins screen.
             if ( empty( $progress['placed'] ) ) {
                 $held     = [];
                 $attach   = [];
@@ -416,7 +569,7 @@ class MyNJILGA_Join_Fulfillment {
                     if ( $payerOn ) {
                         $attach[] = $payerId;
                         $mine = self::email_domain( (string) $join->email );
-                        if ( $mine !== '' && ! self::is_free_mail( $mine ) ) {
+                        if ( $mine !== '' && ! self::free_mail( $mine ) ) {
                             $domains[] = $mine;
                         }
                         if ( $always && ! $newFirm && ! self::is_attached( $payerContact, $companyId ) && ! self::domain_matches( (string) $join->email, self::firm_domains( $companyId ) ) ) {
@@ -437,11 +590,18 @@ class MyNJILGA_Join_Fulfillment {
                         }
                         $contact = \FluentCrm\App\Models\Subscriber::find( $cid );
                         $name    = trim( (string) ( $c['first_name'] ?? '' ) . ' ' . (string) ( $c['last_name'] ?? '' ) );
-                        $reason  = self::colleague_hold_reason( $contact, $category, $companyId, $payerOn, $newFirm || $always, $domains, $email );
+                        [ $reason, $firmOnly ] = self::colleague_hold_reason( $contact, $category, $companyId, $payerOn, $newFirm || $always, $domains, $email );
                         if ( $reason === '' ) {
                             $attach[] = $cid;
                         } else {
                             $held[ $cid ] = [ 'email' => $email, 'name' => $name, 'reason' => $reason ];
+                            // Held off the firm only — nothing on their own
+                            // record contradicts the category they were
+                            // paid for, so it goes on now; if staff later
+                            // dismiss the firm link, the membership stands.
+                            if ( $firmOnly ) {
+                                self::apply_category_tags( $cid, $category, false, false );
+                            }
                         }
                     }
 
@@ -455,6 +615,19 @@ class MyNJILGA_Join_Fulfillment {
                     }
                 }
 
+                // Anyone here who is also on a firm's own invoice for the
+                // year — a frozen draft or approved row goes out exactly as
+                // it was priced, and one already out may get paid too.
+                foreach ( self::on_firm_invoices( $join, $payerId, $colleagues, $colleagueIds ) as $line ) {
+                    $checks[] = $line;
+                }
+                if ( $payerContact && (int) $join->wp_user_id > 0 && ! empty( $payerContact->user_id ) && (int) $payerContact->user_id !== (int) $join->wp_user_id ) {
+                    $checks[] = sprintf( 'The FluentCRM contact for %s is linked to a different website account (user #%d) than the one that paid (user #%d) — the membership is on that contact; check which account it belongs to.', (string) $join->email, (int) $payerContact->user_id, (int) $join->wp_user_id );
+                }
+                if ( ! empty( $progress['reopened_from'] ) ) {
+                    $checks[] = sprintf( 'Stripe took this payment after the join had been closed (%s), so it was applied late — check the applicant hasn\'t also paid through a newer join.', (string) $progress['reopened_from'] );
+                }
+
                 if ( (string) $join->document_path !== '' ) {
                     $progress['document_unverified'] = true;
                 }
@@ -464,9 +637,15 @@ class MyNJILGA_Join_Fulfillment {
                 $save();
             }
 
-            // 5. The invoice row everything else in the plugin reads.
+            // 5. The invoice row everything else in the plugin reads. A
+            // payer held off the firm is filed as an individual membership
+            // until staff confirm them (confirm_held() then moves it):
+            // the firm status page shows every row filed under a firm to
+            // all of its members, and this one would show an outsider's
+            // name, colleagues, amount and receipt.
             if ( empty( $progress['invoice_row_id'] ) ) {
-                $progress['invoice_row_id'] = self::create_invoice_row( $join, $priced, $payerId, $colleagueIds, $companyId, $companyName, $session );
+                $rowCompanyId = isset( $progress['held'][ $payerId ] ) ? 0 : $companyId;
+                $progress['invoice_row_id'] = self::create_invoice_row( $join, $priced, $payerId, $colleagueIds, $rowCompanyId, $rowCompanyId > 0 ? $companyName : '', $session );
                 $save();
                 MyNJILGA_Join_Orders_Table::update( $joinId, [ 'invoice_row_id' => (int) $progress['invoice_row_id'] ] );
             }
@@ -596,7 +775,39 @@ class MyNJILGA_Join_Fulfillment {
     // -------------------------------------------------------------------------
 
     /**
-     * Find the contact by email or create it; returns its id.
+     * The FluentCRM contact a website account is, with no side effects:
+     * the contact linked to the account, else the one with the account's
+     * email — but only if no other account owns it. FluentCRM links
+     * contacts to users by user_id, and staff can change a contact's
+     * email without touching the account, so the email alone would miss
+     * a member (and let them pay again) or find someone else's record.
+     * Unlike FluentCRM's getContactByUserRef(), this never re-points a
+     * contact's user_id.
+     *
+     * @return \FluentCrm\App\Models\Subscriber|null
+     */
+    public static function contact_for_user( int $userId, string $email ) {
+        if ( $userId <= 0 || ! class_exists( '\\FluentCrm\\App\\Models\\Subscriber' ) ) {
+            return null;
+        }
+        $contact = \FluentCrm\App\Models\Subscriber::where( 'user_id', $userId )->orderBy( 'id', 'ASC' )->first();
+        if ( $contact ) {
+            return $contact;
+        }
+        $email = strtolower( trim( $email ) );
+        if ( $email === '' ) {
+            return null;
+        }
+        $contact = \FluentCrm\App\Models\Subscriber::where( 'email', $email )->first();
+        return ( $contact && ( empty( $contact->user_id ) || (int) $contact->user_id === $userId ) ) ? $contact : null;
+    }
+
+    /**
+     * Find the contact or create it; returns its id. The payer's account
+     * decides first (contact_for_user()): the contact already linked to it
+     * is the one updated — under its own email, which is staff's to
+     * change — rather than a second contact made for the address typed on
+     * the form. Otherwise the contact with that email, else a new one.
      *
      * Status is written ONLY for a brand-new contact. An existing contact
      * who once unsubscribed from NJILGA email stays unsubscribed —
@@ -607,10 +818,15 @@ class MyNJILGA_Join_Fulfillment {
      */
     private static function upsert_contact( array $fields, array $custom, int $userId ): int {
         $email    = strtolower( trim( (string) ( $fields['email'] ?? '' ) ) );
-        $existing = \FluentCrm\App\Models\Subscriber::where( 'email', $email )->first();
+        $existing = self::contact_for_user( $userId, $email );
+        if ( ! $existing ) {
+            $existing = \FluentCrm\App\Models\Subscriber::where( 'email', $email )->first();
+        }
 
         $data = array_filter( $fields, static function ( $v ) { return (string) $v !== ''; } );
-        $data['email'] = $email;
+        // createOrUpdate() matches on email, so the existing contact's own
+        // address is what points it at that record (email is unique).
+        $data['email'] = $existing ? (string) $existing->email : $email;
         if ( ! $existing ) {
             $data['status'] = 'subscribed';
             $data['source'] = 'NJILGA online join';
@@ -969,43 +1185,48 @@ class MyNJILGA_Join_Fulfillment {
 
     /**
      * Why a colleague waits for staff rather than being put on the firm
-     * and given the join's category ('' = they don't). Pure over the
-     * contact's current state.
+     * and given the join's category ('' = they don't), and whether the
+     * wait is about the firm alone (their own record is fine, so the
+     * category can go on now). Pure over the contact's current state.
      *
      * @param \FluentCrm\App\Models\Subscriber|null $contact
      * @param array<int,string>                     $domains Firm domains (plus the payer's, when the payer was placed).
+     * @return array{0:string,1:bool} [reason, firm-only]
      */
-    private static function colleague_hold_reason( $contact, array $category, int $companyId, bool $payerOn, bool $anyDomain, array $domains, string $email ): string {
-        if ( ! $payerOn ) {
-            return 'waiting until the payer is confirmed at this firm';
-        }
+    private static function colleague_hold_reason( $contact, array $category, int $companyId, bool $payerOn, bool $anyDomain, array $domains, string $email ): array {
         if ( ! $contact ) {
-            return 'contact record not found';
+            return [ 'contact record not found', false ];
         }
         if ( in_array( (string) $contact->status, [ 'unsubscribed', 'bounced', 'complained', 'spammed' ], true ) ) {
-            return sprintf( 'their FluentCRM record is marked %s', (string) $contact->status );
+            return [ sprintf( 'their FluentCRM record is marked %s', (string) $contact->status ), false ];
         }
         $inactive = (string) MyNJILGA_Dues_Settings::general( 'inactive_tag', 'inactive' );
         if ( $inactive !== '' && MyNJILGA_Tags::has_slug( $contact, $inactive ) ) {
-            return sprintf( 'they carry the "%s" tag', $inactive );
+            return [ sprintf( 'they carry the "%s" tag', $inactive ), false ];
         }
         foreach ( MyNJILGA_Dues_Settings::categories() as $cat ) {
             if ( ! empty( $cat['applicant_selectable'] ) && $cat['key'] !== $category['key'] && (string) $cat['tag'] !== '' && MyNJILGA_Tags::has_slug( $contact, (string) $cat['tag'] ) ) {
-                return sprintf( 'already a %s member — the join paid the %s rate', (string) $cat['label'], (string) $category['label'] );
+                return [ sprintf( 'already a %s member — the join paid the %s rate', (string) $cat['label'], (string) $category['label'] ), false ];
             }
         }
+        // Already on this firm: attaching them changes nothing, whoever
+        // paid. On another one: say so even when the payer is held too,
+        // or confirming the payer would quietly add a second firm.
         if ( self::is_attached( $contact, $companyId ) ) {
-            return '';
+            return [ '', false ];
         }
         if ( self::attached_elsewhere( $contact, $companyId ) ) {
-            return 'already listed at another firm';
+            return [ 'already listed at another firm', true ];
+        }
+        if ( ! $payerOn ) {
+            return [ 'waiting until the payer is confirmed at this firm', true ];
         }
         // A firm this join just created (or Settings saying "always") has
         // no-one else's records to protect by domain.
         if ( $anyDomain || self::domain_matches( $email, $domains ) ) {
-            return '';
+            return [ '', false ];
         }
-        return 'email domain doesn\'t match the firm';
+        return [ 'email domain doesn\'t match the firm', true ];
     }
 
     /**
@@ -1057,7 +1278,7 @@ class MyNJILGA_Join_Fulfillment {
         $out = [];
         foreach ( $emails as $e ) {
             $d = self::email_domain( $e );
-            if ( $d !== '' && ! self::is_free_mail( $d ) ) {
+            if ( $d !== '' && ! self::free_mail( $d ) ) {
                 $out[ $d ] = true;
             }
         }
@@ -1069,7 +1290,7 @@ class MyNJILGA_Join_Fulfillment {
      */
     private static function domain_matches( string $email, array $domains ): bool {
         $d = self::email_domain( $email );
-        return $d !== '' && ! self::is_free_mail( $d ) && in_array( $d, $domains, true );
+        return $d !== '' && ! self::free_mail( $d ) && in_array( $d, $domains, true );
     }
 
     public static function email_domain( string $email ): string {
@@ -1077,14 +1298,45 @@ class MyNJILGA_Join_Fulfillment {
         return $at === false ? '' : strtolower( trim( substr( $email, $at + 1 ) ) );
     }
 
-    public static function is_free_mail( string $domain ): bool {
-        $free = [
-            'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'rocketmail.com', 'outlook.com', 'hotmail.com', 'live.com',
-            'msn.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com', 'comcast.net', 'verizon.net', 'att.net', 'optonline.net',
-            'optimum.net', 'protonmail.com', 'proton.me', 'pm.me', 'mail.com', 'gmx.com', 'gmx.us', 'zoho.com', 'yandex.com',
-            'fastmail.com', 'hey.com', 'duck.com',
-        ];
-        return in_array( strtolower( $domain ), $free, true );
+    /**
+     * Whether an address at this domain proves nothing about where
+     * someone works: it's on $list (default FREE_MAIL_DOMAINS), a
+     * subdomain of one (nj.rr.com), or a big provider's country domain
+     * (yahoo.co.uk, hotmail.fr, gmx.de). Pure — tested directly; the
+     * site's filtered list comes in through free_mail().
+     *
+     * @param array<int,string>|null $list
+     */
+    public static function is_free_mail( string $domain, ?array $list = null ): bool {
+        $domain = strtolower( trim( $domain, " \t\n\r\0\x0B." ) );
+        if ( $domain === '' ) {
+            return false;
+        }
+        $list   = array_map( 'strtolower', $list ?? self::FREE_MAIL_DOMAINS );
+        $labels = explode( '.', $domain );
+        for ( $i = 0, $n = count( $labels ); $i < $n - 1; $i++ ) {
+            if ( in_array( implode( '.', array_slice( $labels, $i ) ), $list, true ) ) {
+                return true;
+            }
+        }
+        return (bool) preg_match( '/^(?:' . implode( '|', self::FREE_MAIL_FAMILIES ) . ')\.(?:com|net|(?:(?:co|com)\.)?[a-z]{2})$/', $domain );
+    }
+
+    /**
+     * is_free_mail() against this site's list: FREE_MAIL_DOMAINS as
+     * filtered by `my_njilga_free_mail_domains` (add a provider NJILGA
+     * members use, or take out a domain that really is one firm's). The
+     * country-domain families always apply.
+     */
+    private static function free_mail( string $domain ): bool {
+        static $list = null;
+        if ( $list === null ) {
+            $list = array_values( array_filter( array_map(
+                static function ( $d ) { return strtolower( trim( (string) $d ) ); },
+                (array) apply_filters( 'my_njilga_free_mail_domains', self::FREE_MAIL_DOMAINS )
+            ) ) );
+        }
+        return self::is_free_mail( $domain, $list );
     }
 
     /**
@@ -1157,6 +1409,84 @@ class MyNJILGA_Join_Fulfillment {
     }
 
     /**
+     * People on this join who are also on a firm's own dues invoice for
+     * its year and Stripe mode that isn't paid — for the staff note, so
+     * they can be taken off it (the join has paid their dues). A draft or
+     * approved row goes out exactly as it was frozen when created; one
+     * already out would charge them a second time.
+     *
+     * @param array<int,array<string,mixed>> $colleagues
+     * @param array<string,int>              $colleagueIds email => contact id
+     * @return array<int,string> One line per person and invoice.
+     */
+    private static function on_firm_invoices( object $join, int $payerId, array $colleagues, array $colleagueIds ): array {
+        $people = [ $payerId => trim( $join->first_name . ' ' . $join->last_name ) ];
+        foreach ( $colleagues as $c ) {
+            $cid = (int) ( $colleagueIds[ strtolower( (string) ( $c['email'] ?? '' ) ) ] ?? 0 );
+            if ( $cid > 0 && ! isset( $people[ $cid ] ) ) {
+                $people[ $cid ] = trim( (string) ( $c['first_name'] ?? '' ) . ' ' . (string) ( $c['last_name'] ?? '' ) );
+            }
+        }
+        $year = (int) $join->dues_year;
+        $out  = [];
+        foreach ( $people as $cid => $name ) {
+            foreach ( MyNJILGA_Dues_Invoice_Table::open_rows_listing_contact( (int) $cid, $year, ! empty( $join->livemode ) ) as $row ) {
+                $firm = MyNJILGA_Dues_Snapshot::company_name( $row );
+                if ( (string) $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT ) {
+                    // A fresh preview prices them as paid via this join.
+                    $out[] = sprintf( '%1$s is also on %2$s\'s draft %3$d invoice (row #%4$d) — run Generate Preview for %3$d again before creating invoices, or they will be billed a second time.', $name, $firm, $year, (int) $row->id );
+                } elseif ( (string) $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_APPROVED ) {
+                    $out[] = sprintf( '%1$s is also on %2$s\'s approved %3$d invoice (row #%4$d), which isn\'t created in Stripe yet — take them off it before it is, or they will be billed a second time.', $name, $firm, $year, (int) $row->id );
+                } else {
+                    $out[] = sprintf( '%1$s is also on %2$s\'s %3$d invoice (row #%4$d), which has already gone out — adjust that invoice or refund one of the two so they aren\'t paid for twice.', $name, $firm, $year, (int) $row->id );
+                }
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Every FluentCRM contact a join names — its payer and the colleagues
+     * it pays for — as far as they can be found yet: the ids fulfillment
+     * has already recorded, else by the payer's account and by email.
+     * Nothing is created.
+     *
+     * @return array<int,int>
+     */
+    public static function contact_ids_for( object $join ): array {
+        if ( ! class_exists( '\\FluentCrm\\App\\Models\\Subscriber' ) ) {
+            return [];
+        }
+        $progress = MyNJILGA_Join_Orders_Table::json( $join, 'progress' );
+        $ids      = [ (int) ( $progress['contact_id'] ?? 0 ), (int) $join->applicant_contact_id ];
+        $known    = array_change_key_case( (array) ( $progress['colleague_ids'] ?? [] ), CASE_LOWER );
+        $emails   = [];
+        if ( empty( $progress['contact_id'] ) ) {
+            $payer = self::contact_for_user( (int) $join->wp_user_id, (string) $join->email );
+            if ( $payer ) {
+                $ids[] = (int) $payer->id;
+            } else {
+                $emails[] = strtolower( (string) $join->email );
+            }
+        }
+        foreach ( MyNJILGA_Join_Orders_Table::json( $join, 'colleagues' ) as $c ) {
+            $email = strtolower( trim( (string) ( $c['email'] ?? '' ) ) );
+            if ( ! empty( $known[ $email ] ) ) {
+                $ids[] = (int) $known[ $email ];
+            } elseif ( $email !== '' ) {
+                $emails[] = $email;
+            }
+        }
+        $emails = array_values( array_unique( array_filter( $emails ) ) );
+        if ( $emails ) {
+            foreach ( \FluentCrm\App\Models\Subscriber::whereIn( 'email', $emails )->get() as $sub ) {
+                $ids[] = (int) $sub->id;
+            }
+        }
+        return array_values( array_unique( array_filter( $ids ) ) );
+    }
+
+    /**
      * Staff confirmed the people a join left unattached: put them on the
      * firm (and give colleagues the join's category).
      *
@@ -1180,12 +1510,34 @@ class MyNJILGA_Join_Fulfillment {
                 self::apply_category_tags( $cid, $category, false, false );
             }
         }
+        // The payer was held, so their join was filed as an individual
+        // membership (see run(), step 5). Confirmed now: it belongs on
+        // the firm's record, where its members see it.
+        if ( isset( $held[ (int) $join->applicant_contact_id ] ) && (int) $join->invoice_row_id > 0 ) {
+            self::file_join_row_under( (int) $join->invoice_row_id, (int) $join->company_id );
+        }
         $names = array_map( static function ( $h ) { return (string) ( $h['name'] ?? $h['email'] ?? '' ); }, $held );
         $progress['held']           = [];
         $progress['held_confirmed'] = array_values( $names );
         MyNJILGA_Join_Orders_Table::update( $joinId, [ 'progress' => $progress ] );
         MyNJILGA_Invoicing_Notes::log( (int) $join->company_id, 'Online join confirmed', 'Staff confirmed as members of this firm: ' . implode( ', ', $names ) . '.' );
         return [ 'ok' => true, 'message' => 'Added to the firm: ' . implode( ', ', $names ) . '.' ];
+    }
+
+    /**
+     * Re-file a join's invoice row, written as an individual membership
+     * while its payer was held, under the firm staff confirmed them at.
+     * Only ever from "no firm" onto one, and only a join's own row.
+     */
+    private static function file_join_row_under( int $rowId, int $companyId ): void {
+        $row = MyNJILGA_Dues_Invoice_Table::get( $rowId );
+        if ( ! $row || $companyId <= 0 || (int) $row->fluentcrm_company_id !== 0 || (string) $row->invoice_kind !== MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
+            return;
+        }
+        $company             = MyNJILGA_Members_Data::companies_module_active() ? \FluentCrm\App\Models\Company::find( $companyId ) : null;
+        $snapshot            = MyNJILGA_Dues_Snapshot::decode( $row );
+        $snapshot['company'] = [ 'id' => $companyId, 'name' => $company ? (string) $company->name : '' ];
+        MyNJILGA_Dues_Invoice_Table::refile_join_row( $rowId, $companyId, MyNJILGA_Dues_Snapshot::encode( $snapshot ) );
     }
 
     /**

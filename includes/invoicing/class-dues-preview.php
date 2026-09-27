@@ -160,6 +160,11 @@ class MyNJILGA_Dues_Preview {
      * so re-running the preview for a year people have joined in never
      * bills them a second time, and nobody else's tier shifts.
      *
+     * That includes joins whose money is committed but not yet applied —
+     * an ACH debit clearing for days, or paid and waiting on a retry:
+     * they have no invoice row or "Dues Paid" tag yet, and a preview run
+     * in that window would otherwise freeze them onto the firm's invoice.
+     *
      * @return array<string,mixed>
      */
     private static function config_for_year( int $duesYear ): array {
@@ -178,6 +183,14 @@ class MyNJILGA_Dues_Preview {
                 $cid = (int) ( $m['contact_id'] ?? 0 );
                 if ( $cid > 0 ) {
                     $covered[ $cid ] = 'paid via online join';
+                }
+            }
+        }
+        foreach ( MyNJILGA_Join_Orders_Table::get_committed_for_year( $duesYear, $livemode ) as $join ) {
+            $reason = $join->status === MyNJILGA_Join_Orders_Table::STATUS_PROCESSING ? 'online join payment clearing' : 'paid via online join';
+            foreach ( MyNJILGA_Join_Fulfillment::contact_ids_for( $join ) as $cid ) {
+                if ( ! isset( $covered[ $cid ] ) ) {
+                    $covered[ $cid ] = $reason;
                 }
             }
         }

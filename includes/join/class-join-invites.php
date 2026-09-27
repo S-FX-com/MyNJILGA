@@ -47,8 +47,8 @@ class MyNJILGA_Join_Invites {
         $days    = max( 1, (int) MyNJILGA_Dues_Settings::general( 'join_invite_expiry_days', 30 ) );
         $expires = gmdate( 'Y-m-d H:i:s', (int) current_time( 'timestamp' ) + $days * 86400 );
         $issued  = MyNJILGA_Join_Invites_Table::issue( (int) $join->id, $person, MyNJILGA_Join_Invites_Table::hash_token( $token ), MyNJILGA_Join_Invites_Table::STATUS_SENT, $expires );
-        if ( $issued['status'] === MyNJILGA_Join_Invites_Table::STATUS_ACCEPTED ) {
-            return; // They already used an earlier link.
+        if ( $issued['status'] !== MyNJILGA_Join_Invites_Table::STATUS_SENT ) {
+            return; // They already used an earlier link, or are using it right now.
         }
 
         MyNJILGA_Join_Fulfillment::join_mail(
@@ -85,7 +85,7 @@ class MyNJILGA_Join_Invites {
         }
         $sent = 0;
         foreach ( MyNJILGA_Join_Invites_Table::get_for_join( $joinId ) as $invite ) {
-            if ( $invite->status === MyNJILGA_Join_Invites_Table::STATUS_ACCEPTED ) {
+            if ( $invite->status === MyNJILGA_Join_Invites_Table::STATUS_ACCEPTED || MyNJILGA_Join_Invites_Table::is_being_claimed( $invite ) ) {
                 continue;
             }
             self::send( $join, [
@@ -114,7 +114,12 @@ class MyNJILGA_Join_Invites {
      */
     public static function lookup( string $token ): array {
         $invite = MyNJILGA_Join_Invites_Table::get_by_token( $token );
-        if ( ! $invite || $invite->status !== MyNJILGA_Join_Invites_Table::STATUS_SENT ) {
+        if ( $invite && MyNJILGA_Join_Invites_Table::is_being_claimed( $invite ) ) {
+            return [ 'invite' => null, 'join' => null, 'error' => self::claimed_message() ];
+        }
+        // A stale claim (its request died) is still a usable invite:
+        // accept() can take it over.
+        if ( ! $invite || ! in_array( $invite->status, [ MyNJILGA_Join_Invites_Table::STATUS_SENT, MyNJILGA_Join_Invites_Table::STATUS_CLAIMING ], true ) ) {
             return [ 'invite' => null, 'join' => null, 'error' => 'This invitation link is not valid any more — it may already have been used. If you already created your account, just log in.' ];
         }
         if ( MyNJILGA_Join_Invites_Table::is_expired( $invite ) ) {
@@ -125,6 +130,16 @@ class MyNJILGA_Join_Invites {
             return [ 'invite' => null, 'join' => null, 'error' => 'This invitation is no longer valid. Please contact NJILGA.' ];
         }
         return [ 'invite' => $invite, 'join' => $join, 'error' => '' ];
+    }
+
+    /**
+     * The role a joiner's new account gets: always Subscriber when the
+     * site has it, never a "New User Default Role" someone raised for
+     * another purpose. The membership role is added on top by the dues
+     * role sync.
+     */
+    public static function new_account_role(): string {
+        return get_role( 'subscriber' ) ? 'subscriber' : (string) get_option( 'default_role', 'subscriber' );
     }
 
     /**
@@ -140,6 +155,15 @@ class MyNJILGA_Join_Invites {
             return [ 'ok' => false, 'error' => 'An account with this email already exists — please log in instead.', 'user_id' => 0 ];
         }
 
+        // Single use — claimed before the account exists, so of two
+        // submits at once only one ever creates a user. (Creating first
+        // and deleting the loser's user afterwards could make FluentCRM
+        // delete the colleague's paid contact along with it.)
+        $hash = MyNJILGA_Join_Invites_Table::hash_token( $token );
+        if ( ! MyNJILGA_Join_Invites_Table::claim( (int) $invite->id, $hash ) ) {
+            return [ 'ok' => false, 'error' => self::claimed_message(), 'user_id' => 0 ];
+        }
+
         $userId = wp_insert_user( [
             'user_login'   => $in['username'],
             'user_pass'    => $in['password'],
@@ -147,20 +171,18 @@ class MyNJILGA_Join_Invites {
             'first_name'   => $in['first_name'],
             'last_name'    => $in['last_name'],
             'display_name' => trim( $in['first_name'] . ' ' . $in['last_name'] ),
-            'role'         => (string) get_option( 'default_role', 'subscriber' ),
+            'role'         => self::new_account_role(),
         ] );
         if ( is_wp_error( $userId ) ) {
+            MyNJILGA_Join_Invites_Table::release_claim( (int) $invite->id, $hash );
             return [ 'ok' => false, 'error' => $userId->get_error_message(), 'user_id' => 0 ];
         }
         $userId = (int) $userId;
 
-        // Single use — only one request can win this, even if the form is
-        // submitted twice at once.
-        if ( ! MyNJILGA_Join_Invites_Table::mark_accepted( (int) $invite->id, MyNJILGA_Join_Invites_Table::hash_token( $token ), $userId ) ) {
-            require_once ABSPATH . 'wp-admin/includes/user.php';
-            wp_delete_user( $userId );
-            return [ 'ok' => false, 'error' => 'This invitation has already been used.', 'user_id' => 0 ];
-        }
+        // Ours since the claim. This only misses if the claim went stale
+        // and was taken over mid-request; the account stands either way —
+        // it is the invitee's own, made through their link.
+        MyNJILGA_Join_Invites_Table::mark_accepted( (int) $invite->id, $hash, $userId );
 
         $contactId = (int) $invite->contact_id;
         if ( $contactId > 0 && MyNJILGA_Members_Data::fluentcrm_active() && function_exists( 'FluentCrmApi' ) ) {
@@ -195,7 +217,7 @@ class MyNJILGA_Join_Invites {
                 // but only while they are still current.
                 $contact  = \FluentCrm\App\Models\Subscriber::find( $contactId );
                 $category = MyNJILGA_Dues_Settings::category( (string) MyNJILGA_Join_Orders_Table::get( (int) $invite->join_id )->category_key );
-                if ( $contact && $category && MyNJILGA_Tags::has_slug( $contact, (string) MyNJILGA_Dues_Settings::general( 'paid_tag', 'dues-paid' ) ) ) {
+                if ( $contact && $category && MyNJILGA_Tags::has_slug( $contact, (string) MyNJILGA_Dues_Settings::general( 'paid_tag', 'dues-paid' ) ) && MyNJILGA_Payment_Listener::paid_for_current_year( $contact ) ) {
                     MyNJILGA_Payment_Listener::grant_role( $contact, (string) $category['role'] );
                 }
             } catch ( \Throwable $e ) {
@@ -205,6 +227,10 @@ class MyNJILGA_Join_Invites {
         }
 
         return [ 'ok' => true, 'error' => '', 'user_id' => $userId ];
+    }
+
+    private static function claimed_message(): string {
+        return 'This invitation is being used right now. If you just sent the form, your account is being set up — log in with the username and password you chose in a moment.';
     }
 
     private static function link_contact_to_user( int $contactId, int $userId ): void {

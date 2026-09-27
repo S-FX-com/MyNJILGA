@@ -192,14 +192,43 @@ class MyNJILGA_Join_Orders_Table {
      * Stripe, every paid one whose fulfillment hasn't finished, and any
      * fulfillment claim that has gone stale.
      *
+     * Least recently looked at first — the sweep touch()es each row it
+     * visits — so rows that can't move on their own (a payment held back
+     * for review, a checkout in a Stripe mode no longer connected) go to
+     * the back of the queue instead of filling every batch ahead of a
+     * paid join whose webhook was missed. A pending join that never got
+     * a checkout has nothing to check at Stripe and is left out.
+     *
      * @return array<int,object>
      */
     public static function get_for_sweep(): array {
         global $wpdb;
         $table = self::table_name();
         return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT * FROM $table WHERE status IN (%s, %s, %s, %s) ORDER BY id ASC LIMIT 200",
+            "SELECT * FROM $table WHERE status IN (%s, %s, %s, %s) AND NOT ( status = %s AND ( stripe_session_id IS NULL OR stripe_session_id = '' ) ) ORDER BY updated_at ASC, id ASC LIMIT 200",
             self::STATUS_PENDING,
+            self::STATUS_PROCESSING,
+            self::STATUS_PAID,
+            self::STATUS_FULFILLING,
+            self::STATUS_PENDING
+        ) );
+    }
+
+    /**
+     * Joins for the year and mode whose money is committed — an ACH debit
+     * clearing, or paid and not yet (or only partly) applied. Their people
+     * carry no "Dues Paid" tag and no invoice row yet, so the preview asks
+     * for these to keep from billing them a second time.
+     *
+     * @return array<int,object>
+     */
+    public static function get_committed_for_year( int $duesYear, bool $livemode ): array {
+        global $wpdb;
+        $table = self::table_name();
+        return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status IN (%s, %s, %s) ORDER BY id ASC",
+            $duesYear,
+            $livemode ? 1 : 0,
             self::STATUS_PROCESSING,
             self::STATUS_PAID,
             self::STATUS_FULFILLING
@@ -215,6 +244,11 @@ class MyNJILGA_Join_Orders_Table {
         if ( in_array( $join->status, [ self::STATUS_REVIEW, self::STATUS_PAID ], true ) ) {
             return true;
         }
+        // A run that died part-way (fatal error, timeout) leaves its claim
+        // behind; once stale, Retry applying finishes it.
+        if ( $join->status === self::STATUS_FULFILLING ) {
+            return strtotime( (string) $join->updated_at ) < (int) current_time( 'timestamp' ) - self::CLAIM_STALE_SECONDS;
+        }
         if ( $join->status !== self::STATUS_FULFILLED ) {
             return false;
         }
@@ -229,9 +263,11 @@ class MyNJILGA_Join_Orders_Table {
         // encodes as an object, a non-empty `already_current` list as an
         // array of strings.
         return (int) $wpdb->get_var( $wpdb->prepare( // phpcs:ignore
-            "SELECT COUNT(*) FROM $table WHERE status IN (%s, %s) OR ( status = %s AND ( progress LIKE %s OR progress LIKE %s OR progress LIKE %s OR progress LIKE %s OR ( last_error IS NOT NULL AND last_error <> '' ) ) )",
+            "SELECT COUNT(*) FROM $table WHERE status IN (%s, %s) OR ( status = %s AND updated_at < %s ) OR ( status = %s AND ( progress LIKE %s OR progress LIKE %s OR progress LIKE %s OR progress LIKE %s OR ( last_error IS NOT NULL AND last_error <> '' ) ) )",
             self::STATUS_REVIEW,
             self::STATUS_PAID,
+            self::STATUS_FULFILLING,
+            gmdate( 'Y-m-d H:i:s', (int) current_time( 'timestamp' ) - self::CLAIM_STALE_SECONDS ),
             self::STATUS_FULFILLED,
             '%' . $wpdb->esc_like( '"held":{' ) . '%',
             '%' . $wpdb->esc_like( '"already_current":["' ) . '%',
@@ -341,7 +377,7 @@ class MyNJILGA_Join_Orders_Table {
      * status test and the write are one UPDATE, so there is no window
      * between reading "not yet fulfilled" and saying "mine".
      *
-     * @param array<int,string> $fromStatuses Statuses this caller may claim from.
+     * @param array<int,string> $fromStatuses Statuses this caller may claim from; empty = only take over a stale claim.
      */
     public static function claim( int $id, array $fromStatuses ): bool {
         global $wpdb;
@@ -349,9 +385,9 @@ class MyNJILGA_Join_Orders_Table {
         $now   = current_time( 'mysql' );
         $stale = gmdate( 'Y-m-d H:i:s', (int) current_time( 'timestamp' ) - self::CLAIM_STALE_SECONDS );
 
-        $in     = implode( ',', array_fill( 0, count( $fromStatuses ), '%s' ) );
+        $in     = $fromStatuses ? 'status IN (' . implode( ',', array_fill( 0, count( $fromStatuses ), '%s' ) ) . ') OR ' : '';
         $params = array_merge( [ self::STATUS_FULFILLING, $now, $id ], $fromStatuses, [ self::STATUS_FULFILLING, $stale ] );
-        $sql    = "UPDATE $table SET status = %s, updated_at = %s WHERE id = %d AND ( status IN ($in) OR ( status = %s AND updated_at < %s ) )";
+        $sql    = "UPDATE $table SET status = %s, updated_at = %s WHERE id = %d AND ( $in( status = %s AND updated_at < %s ) )";
 
         return (int) $wpdb->query( $wpdb->prepare( $sql, $params ) ) === 1; // phpcs:ignore
     }
@@ -361,10 +397,16 @@ class MyNJILGA_Join_Orders_Table {
      * $fromStatuses — the same compare-and-set as claim(), for the plain
      * transitions (pending → processing, pending → expired, …).
      *
+     * $where pins the row to more of what the caller read — above all the
+     * Checkout Session it just checked: "expired" is only true of THAT
+     * session, and a resume may have put a new, payable one on the join
+     * while Stripe was answering.
+     *
      * @param array<int,string>   $fromStatuses
      * @param array<string,mixed> $extra Other columns to write alongside.
+     * @param array<string,mixed> $where Extra column => value equality conditions (null = IS NULL).
      */
-    public static function transition( int $id, array $fromStatuses, string $toStatus, array $extra = [] ): bool {
+    public static function transition( int $id, array $fromStatuses, string $toStatus, array $extra = [], array $where = [] ): bool {
         global $wpdb;
         $extra['status']     = $toStatus;
         $extra['updated_at'] = current_time( 'mysql' );
@@ -387,7 +429,38 @@ class MyNJILGA_Join_Orders_Table {
         $params   = array_merge( $params, $fromStatuses );
         $sql      = "UPDATE $table SET " . implode( ', ', $sets ) . " WHERE id = %d AND status IN ($in)";
 
+        // Column names come from the whitelist, never from the caller.
+        [ $conds, $condFormat ] = self::whitelist( $where, false );
+        foreach ( $conds as $col => $val ) {
+            $fmt = array_shift( $condFormat );
+            if ( $val === null ) {
+                $sql .= " AND $col IS NULL";
+                continue;
+            }
+            $sql     .= " AND $col = $fmt";
+            $params[] = $val;
+        }
+
         return (int) $wpdb->query( $wpdb->prepare( $sql, $params ) ) === 1; // phpcs:ignore
+    }
+
+    /**
+     * Mark a join as just looked at, without changing anything else — the
+     * sweep does this to each row it visits, so it works through the
+     * whole backlog in turn (see get_for_sweep()).
+     */
+    public static function touch( int $id ): void {
+        global $wpdb;
+        $table = self::table_name();
+        $wpdb->query( $wpdb->prepare( // phpcs:ignore
+            "UPDATE $table SET updated_at = %s WHERE id = %d AND status IN (%s, %s, %s, %s)",
+            current_time( 'mysql' ),
+            $id,
+            self::STATUS_PENDING,
+            self::STATUS_PROCESSING,
+            self::STATUS_PAID,
+            self::STATUS_FULFILLING
+        ) );
     }
 
     /**

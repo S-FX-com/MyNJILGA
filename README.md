@@ -224,23 +224,29 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 1. The firm: the chosen Company; else an exact or normalised-name match ("Smith & Jones, LLP" = "Smith and Jones LLP"); else a new Company with the payer as Owner. A joiner is **never made Owner of a firm that already exists**.
 2. Contacts for the payer and every colleague, found by email or created. New colleague contacts are created **transactional/pending**, never subscribed — someone else typed their address. An existing unsubscribed contact is never resubscribed.
-3. **Who goes on the firm now.** For an existing firm, a joiner is attached automatically when their email domain is already at the firm (free-mail never counts) — Settings can switch this to "always, review afterwards". Colleagues who already belong to another firm, carry another category, or are marked inactive/unsubscribed are **held**: still paid members, but not attached or re-categorised until staff click **Add to firm** on Online joins.
+3. **Who goes on the firm now.** For an existing firm, a joiner is attached automatically when their email domain is already at the firm (free-mail never counts — a long built-in list, including country and subdomain variants, adjustable with the `my_njilga_free_mail_domains` filter) — Settings can switch this to "always, review afterwards". Anyone else is **held**: still a paid member, but not attached until staff click **Add to firm** (or **Leave off firm**) on Online joins. Someone held only over the firm (domain, another firm, payer not yet confirmed) gets the category tag straight away; someone whose own record is the question (another category, inactive, unsubscribed) isn't re-categorised until staff confirm. A held **payer**'s invoice row is filed as an individual membership — out of the firm's sight on its status page — and moves onto the firm when staff confirm.
 4. An `njilga_dues_invoices` row of kind **`join`**, written straight in as **paid**, whose snapshot names everyone — so the Payments ledger, the firm status page, the downgrade sweep (which protects them) and the next Generate Preview (which prices them at $0 for that year, "paid via online join") all see it — then the ledger row and `settle()`: `Dues Paid {year}`, `dues-paid`, roles, Company Note.
 5. Invitations, a welcome email to the payer, and a staff email (Settings → Online joining → notify).
 
 **Late in the year.** Once next year's invoices exist (or from the date set in Settings), a join pays **next** year's dues and covers the rest of this one — so a late joiner is never missing from next year's already-frozen invoices.
 
-**Never paid for twice.** The form refuses anyone already current for the year, anyone on an open firm invoice for it, and anyone on another join whose money is already committed (a clearing ACH debit); fulfillment re-checks and flags any overlap for a refund.
+**Never paid for twice.** The form refuses anyone already current for the year, anyone on a firm invoice for it (draft, approved or sent), and anyone on another join whose money is already committed (a clearing ACH debit) — for a colleague it says only that they can't be added online, never which. Fulfillment re-checks and flags any overlap; Generate Preview prices everyone on a paid or clearing join at $0; and **Create** refuses to bill a firm row that still lists someone a join has already paid for, asking staff to refresh that firm's preview first. On the Invoicing page, join rows sit under their own **Online joins** tab and don't count toward the batch's firm totals.
 
 **Mode.** The public always joins in **Live** mode, whichever mode the admin toggle is on — flipping to Test to try an invoice never takes sign-ups offline. Staff rehearse with `?njilga_test=1` on a Membership page: test card, and every email the test join sends goes to the tester.
 
-**$0 joins** (a category priced at $0) have no payment to prove intent, so they wait on **Online joins** for Approve/Reject.
+**$0 joins** (a category priced at $0) have no payment to prove intent, so the form ends in **Submit for approval** rather than Stripe, and they wait on **Online joins** for Approve/Reject.
 
-**Student documents** are stored outside the Media Library in `uploads/njilga-private/` (deny-all `.htaccess`, random 128-bit names; on nginx deny the path, or define `NJILGA_PRIVATE_DIR` outside the web root), shown to staff only, flagged "not yet checked" until staff mark them, and purged 30 days after a join that never became a membership.
+**Abuse limits.** The code, submit, new-account, colleague-conflict and invite-acceptance steps are rate-limited per client address and per verified email. Sending a code answers the same whether or not an account exists (an existing account gets a "log in instead" email), and code guesses are counted atomically. Logged-out forms carry a per-visitor token, so another site can't post a join — or a login — on a visitor's behalf. Behind a proxy or load balancer that doesn't restore the client address, return the real one from the `my_njilga_client_ip` filter, or every visitor shares one limit.
+
+**Invitations** open with "You're creating the account for *email*" and a **This isn't me** button that clears the invitation, so a forwarded or planted link can't pass itself off as the visitor's own join.
+
+**Student documents** are stored outside the Media Library in `uploads/njilga-private/` (deny-all `.htaccess`, random 128-bit names; on nginx deny the path, or define `NJILGA_PRIVATE_DIR` outside the web root), shown to staff only, flagged "not yet checked" until staff mark them, and purged 30 days after a join that never became a membership. The size limit shown and enforced is 8 MB or the server's own upload limit, whichever is lower.
 
 **Online joins** (Applications → Online joins) lists every attempt with its status — Awaiting payment, Bank payment clearing, Member, Needs a decision, Checkout expired… — and the actions each needs: Approve/Reject, Check payment / Retry, Add to firm / Leave off firm, Resend invites, Mark reviewed, the receipt and the student document. **Needs attention** (and the menu bubble) collects what a person must act on.
 
-**Webhook events.** Joins need `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired` (and `charge.dispute.created` is now subscribed for every payment). An endpoint provisioned by an earlier version gets them added automatically on the next admin page load; Setup → Online joining shows the result per mode.
+**Webhook events.** Joins need `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired` (and `charge.dispute.created` is now subscribed for every payment). An endpoint provisioned by an earlier version gets them added automatically on the next admin page load; one added by hand can't be read back, so Setup → Online joining lists the events to add to it. Without the webhook, the daily sweep still settles a join — including noticing a bank debit that failed.
+
+**Checkout availability** (whether the key may create Checkout Sessions) is checked from admin page loads and on connect, never on a public page view; Setup → Online joining shows the answer per mode with a **Re-check** button.
 
 ---
 
@@ -268,7 +274,7 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 ## CSV / Excel exports
 
-Each list page has a **Download CSV** button; **Membership by Firm** and the **Payments** ledger export a formatted `.xls`; **Reports** offers the **Executive Summary** `.xls` combining every report. No third-party libraries.
+Each list page has a **Download CSV** button; **Membership by Firm** and the **Payments** ledger export a formatted `.xls`; **Reports** offers the **Executive Summary** `.xls` combining every report. No third-party libraries. Names and firm names can come from the public join form, so a CSV cell that would start a spreadsheet formula (`=`, `+`, `-`, `@`) is written as text; the `.xls` exports already mark data cells as text.
 
 ---
 

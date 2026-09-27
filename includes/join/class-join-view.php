@@ -150,6 +150,16 @@ class MyNJILGA_Join_View {
         echo self::styles(); // phpcs:ignore
         ?>
         <div class="njilga-join">
+            <?php
+            // Anyone can be sent someone else's invitation link, and it
+            // takes over every join page for half an hour. Say up front
+            // whose account this is, with one click back to the normal
+            // join form (its own form: forms can't nest).
+            ?>
+            <div class="njilga-join__notice" role="status">
+                You're creating the account for <strong><?php echo esc_html( (string) $invite->email ); ?></strong>.
+                <form class="njilga-join__inline" method="post" action="<?php echo esc_url( MyNJILGA_Join_Form::page_url() ); ?>"><?php self::hidden( 'clear_invite' ); ?><button type="submit" class="njilga-join__toggle">This isn't me — clear this invitation</button></form>
+            </div>
             <form class="njilga-join__form" id="<?php echo esc_attr( $uid ); ?>" method="post" action="<?php echo esc_url( MyNJILGA_Join_Form::page_url() ); ?>">
                 <?php self::hidden( 'accept_invite' ); ?>
                 <div class="njilga-join__card">
@@ -183,6 +193,7 @@ class MyNJILGA_Join_View {
         </div>
         <?php
         self::password_script( $uid );
+        self::address_script( $uid );
         return (string) ob_get_clean();
     }
 
@@ -205,10 +216,19 @@ class MyNJILGA_Join_View {
         };
         $ladder     = (array) $a['ladder'];
         $price      = (int) ( $ladder[0]['price_cents'] ?? 0 );
+        // A $0 join never reaches Stripe: the server sends it to NJILGA
+        // staff to approve (STATUS_REVIEW). Free for certain only when
+        // the first seat costs nothing and no paid colleague seat can be
+        // added; the script flips the same copy by the live total.
+        $paidSeats = $a['colleagues'] && array_filter( $ladder, static function ( $t ): bool {
+            return (int) $t['price_cents'] > 0;
+        } );
+        $free      = $price === 0 && ! $paidSeats;
+        $reviewLbl = $free ? 'Review & submit' : 'Review & pay';
 
         $steps = $isStudent
-            ? [ 'enrollment' => 'Enrollment', 'details' => 'Your details', 'review' => 'Review & pay' ]
-            : array_filter( [ 'firm' => 'Your firm', 'details' => 'Your details', 'colleagues' => $a['colleagues'] ? 'Add colleagues' : '', 'review' => 'Review & pay' ] );
+            ? [ 'enrollment' => 'Enrollment', 'details' => 'Your details', 'review' => $reviewLbl ]
+            : array_filter( [ 'firm' => 'Your firm', 'details' => 'Your details', 'colleagues' => $a['colleagues'] ? 'Add colleagues' : '', 'review' => $reviewLbl ] );
 
         // Existing firm name for a re-rendered form.
         $firmName = (string) ( $old['firm_name'] ?? '' );
@@ -314,10 +334,11 @@ class MyNJILGA_Join_View {
                                 <input type="text" id="<?php echo esc_attr( $uid ); ?>-school" name="school" required maxlength="190" value="<?php echo $v( 'school' ); // phpcs:ignore ?>"<?php self::invalid( $errors, 'school', $uid ); ?>>
                                 <?php self::error( $errors, 'school', $uid ); ?>
                             </div>
+                            <?php [ $maxBytes, $maxLabel ] = self::upload_limit(); ?>
                             <div class="njilga-join__field" data-upload>
                                 <label class="njilga-join__label" for="<?php echo esc_attr( $uid ); ?>-doc">Student ID or transcript <span class="njilga-join__req">*</span></label>
-                                <input type="file" id="<?php echo esc_attr( $uid ); ?>-doc" name="student_document" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,application/pdf,image/*"<?php self::invalid( $errors, 'student_document', $uid ); ?>>
-                                <p class="njilga-join__hint">Enrolled law students only. A photo of your student ID or a PDF transcript, up to 8 MB. Only NJILGA staff can see it.</p>
+                                <input type="file" id="<?php echo esc_attr( $uid ); ?>-doc" name="student_document" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,application/pdf,image/*" data-max-bytes="<?php echo (int) $maxBytes; ?>" data-max-label="<?php echo esc_attr( $maxLabel ); ?>"<?php self::invalid( $errors, 'student_document', $uid ); ?>>
+                                <p class="njilga-join__hint">Enrolled law students only. A photo of your student ID or a PDF transcript, up to <?php echo esc_html( $maxLabel ); ?>. Only NJILGA staff can see it.</p>
                                 <?php self::error( $errors, 'student_document', $uid ); ?>
                             </div>
                         </div>
@@ -373,16 +394,19 @@ class MyNJILGA_Join_View {
                 <?php endif; ?>
 
                 <fieldset class="njilga-join__step njilga-join__card" data-step="review">
-                    <legend class="njilga-join__title">Review &amp; pay</legend>
+                    <legend class="njilga-join__title"><?php echo esc_html( $reviewLbl ); ?></legend>
                     <table class="njilga-join__summary" data-summary>
                         <tbody>
                             <tr><td><?php echo esc_html( (string) $category['label'] ); ?> — you</td><td class="njilga-join__num"><?php echo esc_html( self::dollars( $price ) ); ?></td></tr>
                         </tbody>
                         <tfoot><tr><th>Total</th><th class="njilga-join__num" data-total><?php echo esc_html( self::dollars( $price ) ); ?></th></tr></tfoot>
                     </table>
-                    <noscript><p class="njilga-join__hint"><?php echo esc_html( $a['colleagues'] ? self::ladder_sentence( $ladder ) . ' Your total, including any colleagues, is shown on the payment page before you pay.' : 'Your total is shown on the payment page before you pay.' ); ?></p></noscript>
-                    <p class="njilga-join__muted">You'll pay on Stripe's secure page<?php echo MyNJILGA_Dues_Settings::general( 'join_allow_ach', true ) ? ' by card or US bank account' : ' by card'; ?>. Your membership — and any colleagues' — starts as soon as the payment clears.</p>
-                    <div class="njilga-join__actions"><button type="submit" class="njilga-join__btn njilga-join__btn--primary" data-submit>Continue to secure payment</button></div>
+                    <?php if ( ! $free ) : ?>
+                        <noscript><p class="njilga-join__hint"><?php echo esc_html( $a['colleagues'] ? self::ladder_sentence( $ladder ) . ' Your total, including any colleagues, is shown on the payment page before you pay.' : 'Your total is shown on the payment page before you pay.' ); ?></p></noscript>
+                    <?php endif; ?>
+                    <p class="njilga-join__muted" data-pay-note<?php echo $free ? ' hidden' : ''; ?>>You'll pay on Stripe's secure page<?php echo MyNJILGA_Dues_Settings::general( 'join_allow_ach', true ) ? ' by card or US bank account' : ' by card'; ?>. Your membership — and any colleagues' — starts as soon as the payment clears.</p>
+                    <p class="njilga-join__muted" data-review-note<?php echo $free ? '' : ' hidden'; ?>>Your membership comes to no charge, so there's nothing to pay. NJILGA staff will review your application and email you once your membership is confirmed.</p>
+                    <div class="njilga-join__actions"><button type="submit" class="njilga-join__btn njilga-join__btn--primary" data-submit><?php echo esc_html( $free ? 'Submit for approval' : 'Continue to secure payment' ); ?></button></div>
                 </fieldset>
             </form>
 
@@ -400,6 +424,17 @@ class MyNJILGA_Join_View {
     private static function hidden( string $action ): void {
         printf( '<input type="hidden" name="%s" value="%s">', esc_attr( MyNJILGA_Join_Form::ACTION_FIELD ), esc_attr( $action ) );
         wp_nonce_field( MyNJILGA_Join_Form::NONCE_ACTION . '_' . $action, MyNJILGA_Join_Form::NONCE_FIELD, false );
+    }
+
+    /**
+     * The student upload limit the server really enforces — PHP's own is
+     * often below MAX_BYTES (2 MB out of the box), and promising 8 MB
+     * there means a refused file and a re-typed form.
+     *
+     * @return array{0:int,1:string} [bytes, "8 MB"]
+     */
+    private static function upload_limit(): array {
+        return [ MyNJILGA_Join_Documents::max_bytes(), MyNJILGA_Join_Documents::max_label() ];
     }
 
     private static function action_button( string $action, string $label, string $variant ): string {
@@ -539,10 +574,13 @@ class MyNJILGA_Join_View {
      */
     private static function colleague_row( string $uid, int $i, array $r, array $errors ): void {
         $err = $i >= 0 ? (string) ( $errors[ 'colleague_' . $i ] ?? '' ) : '';
-        printf( '<div class="njilga-join__colleague%s" data-colleague-row>', $err !== '' ? ' is-invalid' : '' );
-        printf( '<div class="njilga-join__field"><label class="njilga-join__label">First name</label><input type="text" name="colleague_first[]" autocomplete="off" maxlength="100" value="%s"></div>', esc_attr( (string) ( $r['first_name'] ?? '' ) ) );
-        printf( '<div class="njilga-join__field"><label class="njilga-join__label">Last name</label><input type="text" name="colleague_last[]" autocomplete="off" maxlength="100" value="%s"></div>', esc_attr( (string) ( $r['last_name'] ?? '' ) ) );
-        printf( '<div class="njilga-join__field"><label class="njilga-join__label">Email</label><input type="email" name="colleague_email[]" autocomplete="off" maxlength="190" value="%s"></div>', esc_attr( (string) ( $r['raw_email'] ?? ( $r['email'] ?? '' ) ) ) );
+        // Rows are cloned from a <template>, so no ids: each input sits
+        // inside its own label, and the row is a group the script numbers
+        // ("Colleague 2") as rows come and go.
+        printf( '<div class="njilga-join__colleague%s" data-colleague-row role="group" aria-label="%s">', $err !== '' ? ' is-invalid' : '', esc_attr( $i >= 0 ? 'Colleague ' . ( $i + 1 ) : 'Colleague' ) );
+        printf( '<label class="njilga-join__field"><span class="njilga-join__label">First name</span><input type="text" name="colleague_first[]" autocomplete="off" maxlength="100" value="%s"></label>', esc_attr( (string) ( $r['first_name'] ?? '' ) ) );
+        printf( '<label class="njilga-join__field"><span class="njilga-join__label">Last name</span><input type="text" name="colleague_last[]" autocomplete="off" maxlength="100" value="%s"></label>', esc_attr( (string) ( $r['last_name'] ?? '' ) ) );
+        printf( '<label class="njilga-join__field"><span class="njilga-join__label">Email</span><input type="email" name="colleague_email[]" autocomplete="off" maxlength="190" value="%s"></label>', esc_attr( (string) ( $r['raw_email'] ?? ( $r['email'] ?? '' ) ) ) );
         echo '<button type="button" class="njilga-join__remove" data-remove-colleague aria-label="Remove this colleague" hidden>&times;</button>';
         if ( $err !== '' ) {
             echo '<p class="njilga-join__err">' . esc_html( $err ) . '</p>';
@@ -654,6 +692,8 @@ class MyNJILGA_Join_View {
 .njilga-join{--nj-primary:#1c2b45;--nj-primary-fg:#fff;--nj-accent:#c5a253;--nj-fg:#1f2937;--nj-muted:#6b7280;--nj-border:#d1d5db;--nj-card:#fff;--nj-soft:#f4f5f7;--nj-danger:#b42318;--nj-danger-bg:#fef3f2;--nj-success:#067647;--nj-success-bg:#ecfdf3;--nj-warn:#b54708;--nj-warn-bg:#fffaeb;--nj-radius:8px;max-width:960px;margin:0 auto;color:var(--nj-fg);box-sizing:border-box}
 .njilga-join *,.njilga-join *::before,.njilga-join *::after{box-sizing:border-box}
 .njilga-join [hidden]{display:none!important}
+.njilga-join [tabindex="-1"]:focus{outline:none}
+.njilga-join strong{font-weight:700}
 .njilga-join__card{background:var(--nj-card);border:1px solid #e5e7eb;border-radius:var(--nj-radius);box-shadow:0 1px 3px rgba(16,24,40,.06);padding:28px 36px;margin:0 0 24px;min-width:0}
 .njilga-join__card--success{border-color:#abefc6}
 .njilga-join__card--error{border-color:#fecdca}
@@ -725,17 +765,56 @@ class MyNJILGA_Join_View {
     // Scripts
     // -------------------------------------------------------------------------
 
+    /**
+     * Queue inline JavaScript for the footer rather than printing it in
+     * the shortcode's HTML. Block themes run wptexturize() over the whole
+     * rendered template, and it reads `i<steps.length` in an inline
+     * script as the start of a tag and rewrites the `&&` after it — a
+     * SyntaxError. Scripts queued through WordPress are printed after
+     * that filtering, untouched.
+     */
+    private static function add_script( string $js ): void {
+        if ( did_action( 'wp_print_footer_scripts' ) ) {
+            wp_print_inline_script_tag( $js ); // Rendered too late for the queue (rare).
+            return;
+        }
+        if ( ! wp_script_is( 'njilga-join', 'registered' ) ) {
+            wp_register_script( 'njilga-join', false, [], false, true );
+        }
+        wp_enqueue_script( 'njilga-join' );
+        wp_add_inline_script( 'njilga-join', $js );
+    }
+
     private static function password_script( string $uid ): void {
+        ob_start();
         ?>
-        <script>
         (function(){var f=document.getElementById(<?php echo wp_json_encode( $uid ); ?>);if(!f)return;
             f.querySelectorAll('[data-show-password]').forEach(function(b){b.hidden=false;b.addEventListener('click',function(){var show=b.textContent.indexOf('Show')===0;f.querySelectorAll('input[name=password],input[name=password_confirm]').forEach(function(i){i.type=show?'text':'password';});b.textContent=show?'Hide password':'Show password';});});
             var p=f.querySelector('input[name=password]'),c=f.querySelector('input[name=password_confirm]');
             function match(){if(c)c.setCustomValidity(c.value&&p&&c.value!==p.value?'The passwords don’t match.':'');}
             if(p&&c){p.addEventListener('input',match);c.addEventListener('input',match);}
         })();
-        </script>
         <?php
+        self::add_script( (string) ob_get_clean() );
+    }
+
+    /**
+     * "My mailing address is outside the United States": swap State/ZIP
+     * for Country, and move `required` with them so the browser doesn't
+     * insist on a US state for an overseas address. Its own script
+     * because the invite form has no wizard to carry it.
+     */
+    private static function address_script( string $uid ): void {
+        ob_start();
+        ?>
+        (function(){var f=document.getElementById(<?php echo wp_json_encode( $uid ); ?>);if(!f)return;var o=f.querySelector('[data-outside-us]');if(!o)return;
+            function sync(){var out=o.checked;
+                f.querySelectorAll('[data-us-only]').forEach(function(e){e.hidden=out;e.querySelectorAll('input,select').forEach(function(i){i.required=!out&&(i.name==='state'||i.name==='postal_code');});});
+                f.querySelectorAll('[data-intl-only]').forEach(function(e){e.hidden=!out;var c=e.querySelector('input[name=country]');if(c)c.required=out;});}
+            o.addEventListener('change',sync);sync();
+        })();
+        <?php
+        self::add_script( (string) ob_get_clean() );
     }
 
     /**
@@ -760,8 +839,9 @@ class MyNJILGA_Join_View {
             'checkCode'     => MyNJILGA_Join_Form::AJAX_CHECK_CODE,
         ];
         self::password_script( $uid );
+        self::address_script( $uid );
+        ob_start();
         ?>
-        <script>
         (function(){
             var cfg=<?php echo wp_json_encode( $config ); ?>;
             var form=document.getElementById(<?php echo wp_json_encode( $uid ); ?>);if(!form)return;
@@ -772,6 +852,7 @@ class MyNJILGA_Join_View {
             function priceFor(rank){var l=cfg.ladder;for(var i=0;i<l.length;i++){if(rank>=l[i].from&&(l[i].to===0||rank<=l[i].to))return l[i];}return l[l.length-1];}
             function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
             form.noValidate=true;
+            var free=false; // The live total is $0 (see summary()).
 
             // ---- Colleagues ------------------------------------------------
             var box=$('[data-colleagues]'),addBtn=$('[data-add-colleague]');
@@ -780,7 +861,7 @@ class MyNJILGA_Join_View {
             function syncColleagues(){
                 if(!box)return;var on=wantsColleagues();
                 box.hidden=!on;if(addBtn)addBtn.hidden=!on||rows().length>=cfg.max;
-                rows().forEach(function(r){$$('input',r).forEach(function(i){i.disabled=!on;i.required=on;});var x=$('[data-remove-colleague]',r);if(x)x.hidden=false;});
+                rows().forEach(function(r,n){r.setAttribute('aria-label','Colleague '+(n+1));$$('input',r).forEach(function(i){i.disabled=!on;i.required=on;});var x=$('[data-remove-colleague]',r);if(x)x.hidden=false;});
                 if(on&&!rows().length)addRow();
                 summary();
             }
@@ -793,17 +874,22 @@ class MyNJILGA_Join_View {
                 if(addBtn)addBtn.addEventListener('click',addRow);
                 syncColleagues();
             }
+            // The first problem with the colleagues, and the field it's about —
+            // so colleague 3's duplicate email is reported on colleague 3's email.
             function colleagueError(){
-                if(!wantsColleagues())return '';var seen={},payer=($('input[name=email]')||{}).value||'';seen[payer.trim().toLowerCase()]=1;
-                var rs=rows();if(!rs.length)return 'Add at least one colleague, or choose “No, just me”.';
-                for(var i=0;i<rs.length;i++){var v=$$('input',rs[i]).map(function(x){return x.value.trim();});
-                    if(!v[0]||!v[1])return 'Colleague '+(i+1)+': please give a first and last name.';
-                    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v[2]))return 'Colleague '+(i+1)+': please enter a valid email address.';
-                    var k=v[2].toLowerCase();if(seen[k])return 'Colleague '+(i+1)+': that email is already on this form.';seen[k]=1;}
-                return '';
+                if(!wantsColleagues())return null;var seen={},payer=($('input[name=email]')||{}).value||'';seen[payer.trim().toLowerCase()]=1;
+                var rs=rows();if(!rs.length)return {msg:'Add at least one colleague, or choose “No, just me”.',el:$('input[name=add_colleagues]')};
+                for(var i=0;i<rs.length;i++){var ins=$$('input',rs[i]),v=ins.map(function(x){return x.value.trim();}),who='Colleague '+(i+1)+': ';
+                    if(!v[0]||!v[1])return {msg:who+'please give a first and last name.',el:ins[v[0]?1:0]};
+                    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v[2]))return {msg:who+'please enter a valid email address.',el:ins[2]};
+                    var k=v[2].toLowerCase();if(seen[k])return {msg:who+'that email is already on this form.',el:ins[2]};seen[k]=1;}
+                return null;
             }
 
             // ---- Summary ---------------------------------------------------
+            // A $0 total goes to NJILGA staff for approval, not to Stripe, so the
+            // note and the button follow the live total.
+            function payLabel(){return free?'Submit for approval':'Continue to secure payment';}
             function summary(){
                 var t=$('[data-summary] tbody'),tot=$('[data-total]');if(!t)return;
                 var me=(($('input[name=first_name]')||{}).value||'').trim()+' '+(($('input[name=last_name]')||{}).value||'').trim();
@@ -813,16 +899,20 @@ class MyNJILGA_Join_View {
                 people.forEach(function(p,i){var tier=priceFor(i+1);total+=tier.price_cents;var what=cfg.colleagues?(tier.label+(tier.price_cents?'':' — no charge')):cfg.label;
                     html+='<tr><td>'+esc(p.name)+(p.you?' (you)':'')+'<br><span class="njilga-join__muted">'+esc(what)+'</span></td><td class="njilga-join__num">'+money(tier.price_cents)+'</td></tr>';});
                 t.innerHTML=html;if(tot)tot.textContent=money(total);
+                free=total===0;var pn=$('[data-pay-note]'),rn=$('[data-review-note]'),sb=$('[data-submit]');
+                if(pn)pn.hidden=free;if(rn)rn.hidden=!free;if(sb&&!sb.disabled)sb.textContent=payLabel();
             }
             $$('input[name=first_name],input[name=last_name]').forEach(function(i){i.addEventListener('input',summary);});
 
-            // ---- Address / student toggles -------------------------------
-            var outside=$('[data-outside-us]');
-            function syncAddress(){if(!outside)return;var o=outside.checked;$$('[data-us-only]').forEach(function(e){e.hidden=o;$$('input,select',e).forEach(function(i){i.required=!o&&(i.name==='state'||i.name==='postal_code');});});$$('[data-intl-only]').forEach(function(e){e.hidden=!o;var c=$('input[name=country]',e);if(c)c.required=o;});}
-            if(outside){outside.addEventListener('change',syncAddress);syncAddress();}
-            var up=$('[data-upload]'),schoolLabel=$('[data-school-label]');
+            // ---- Student toggles -----------------------------------------
+            var up=$('[data-upload]'),schoolLabel=$('[data-school-label]'),doc=up?$('input[type=file]',up):null;
             function syncStudent(){var s=$('input[name=student_status]:checked'),enrolled=!!(s&&s.value==='enrolled');if(up){up.hidden=!enrolled;var f=$('input[type=file]',up);if(f){f.required=enrolled;f.disabled=!enrolled;}}if(schoolLabel)schoolLabel.textContent=s?(enrolled?'Law school':'College or university'):'School';}
             $$('input[name=student_status]').forEach(function(i){i.addEventListener('change',syncStudent);});syncStudent();
+            // Over the server's limit, a file is refused only after the whole
+            // form has gone up — and past post_max_size PHP drops the POST and
+            // everything typed with it — so stop it here.
+            if(doc)doc.addEventListener('change',function(){var f=doc.files&&doc.files[0],max=parseInt(doc.getAttribute('data-max-bytes')||'0',10);
+                doc.setCustomValidity(f&&max>0&&f.size>max?'That file is too large — the limit is '+doc.getAttribute('data-max-label')+'. Please choose a smaller photo or PDF.':'');if(!doc.checkValidity())doc.reportValidity();});
             var phone=$('input[name=phone]'),mphone=$('input[name=mailing_phone]');
             if(phone&&mphone)phone.addEventListener('change',function(){if(!mphone.value)mphone.value=phone.value;});
             var em=$('input[name=email]'),emc=$('input[name=email_confirm]');
@@ -832,77 +922,137 @@ class MyNJILGA_Join_View {
             // ---- Firm type-ahead ----------------------------------------
             var firm=$('input[name=firm_name]');
             if(firm){
-                var hid=$('input[name=company_id]'),list=$('.njilga-join__suggest'),hint=$('[data-firm-hint]'),timer=null,items=[],active=-1,picked=firm.value;
+                var hid=$('input[name=company_id]'),list=$('.njilga-join__suggest'),hint=$('[data-firm-hint]'),timer=null,items=[],active=-1,picked=firm.value,lastQ='',lastData=[],guessed=false;
                 function close(){list.style.display='none';list.innerHTML='';firm.setAttribute('aria-expanded','false');active=-1;}
-                function pick(it){hid.value=it.id||0;firm.value=it.name;hint.textContent=it.id?('Existing firm selected: '+it.name):('“'+it.name+'” will be added as a new firm.');picked=firm.value;close();summary();}
-                function render(q,data){items=data.map(function(c){return {id:c.id,name:c.name};});
+                // A pending search would reopen the list under the choice.
+                function pick(it){clearTimeout(timer);hid.value=it.id||0;firm.value=it.name;hint.textContent=it.id?('Existing firm selected: '+it.name):('“'+it.name+'” will be added as a new firm.');guessed=false;picked=firm.value;close();summary();}
+                // A name typed but not picked. The server files the join under an
+                // existing firm of exactly that name (resolve_firm_choice), so an
+                // exact match is picked rather than called new; until a search
+                // has answered for this name, the hint says either can happen.
+                function settle(){var q=firm.value.trim();if(hid.value!=='0'||q===''||(hint.textContent&&!guessed))return;
+                    if(q.toLowerCase()!==lastQ.toLowerCase()){hint.textContent='“'+q+'” will be matched to an existing firm of that name, or added as a new firm.';guessed=true;return;}
+                    for(var i=0;i<lastData.length;i++){if(String(lastData[i].name).trim().toLowerCase()===q.toLowerCase()){pick(lastData[i]);return;}}
+                    hint.textContent='“'+q+'” will be added as a new firm.';guessed=false;}
+                function render(q,data,known){if(known!==false){lastQ=q;lastData=data;}
+                    // An answer that lands after the applicant has left the field
+                    // only settles the hint; it never reopens the list.
+                    if(document.activeElement!==firm){close();settle();return;}
+                    items=data.map(function(c){return {id:c.id,name:c.name};});
                     var exact=data.some(function(c){return c.name.toLowerCase()===q.toLowerCase();});if(!exact&&q.length>=2)items.push({id:0,name:q,isNew:true});
                     list.innerHTML='';if(!items.length){close();return;}
                     items.forEach(function(it,i){var li=document.createElement('li');li.setAttribute('role','option');li.id=form.id+'-opt-'+i;li.textContent=it.isNew?('Add your firm: “'+it.name+'”'):it.name;if(it.isNew)li.className='is-new';li.addEventListener('mousedown',function(e){e.preventDefault();pick(it);});list.appendChild(li);});
                     list.style.display='block';firm.setAttribute('aria-expanded','true');active=-1;}
                 function search(){var q=firm.value.trim();if(q.length<2){close();return;}
                     var body=new URLSearchParams({action:cfg.searchAction,q:q,_nonce:cfg.searchNonce});
-                    fetch(cfg.ajaxUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(function(r){return r.json();}).then(function(res){if(firm.value.trim()===q)render(q,(res&&res.success&&res.data)?res.data:[]);}).catch(function(){render(q,[]);});}
-                firm.addEventListener('input',function(){if(firm.value!==picked){hid.value='0';hint.textContent='';}clearTimeout(timer);timer=setTimeout(search,250);});
+                    fetch(cfg.ajaxUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}).then(function(r){return r.json();}).then(function(res){if(firm.value.trim()===q&&firm.value!==picked)render(q,(res&&res.success&&res.data)?res.data:[]);}).catch(function(){if(firm.value.trim()===q&&firm.value!==picked)render(q,[],false);});}
+                firm.addEventListener('input',function(){if(firm.value!==picked){hid.value='0';hint.textContent='';picked=null;}clearTimeout(timer);timer=setTimeout(search,250);});
                 firm.addEventListener('keydown',function(e){if(list.style.display!=='block')return;var lis=$$('li',list);
-                    if(e.key==='ArrowDown'){e.preventDefault();active=Math.min(active+1,lis.length-1);}else if(e.key==='ArrowUp'){e.preventDefault();active=Math.max(active-1,0);}else if(e.key==='Enter'){if(active>=0){e.preventDefault();pick(items[active]);}return;}else if(e.key==='Escape'){close();return;}else{return;}
+                    if(e.key==='ArrowDown'){e.preventDefault();active=Math.min(active+1,lis.length-1);}else if(e.key==='ArrowUp'){e.preventDefault();active=Math.max(active-1,0);}
+                    // Enter picks the highlighted firm, else just closes the list
+                    // (settling the hint) — never the form's Enter, which moves on.
+                    else if(e.key==='Enter'){e.preventDefault();clearTimeout(timer);if(active>=0)pick(items[active]);else{close();settle();}return;}
+                    else if(e.key==='Escape'){close();return;}else{return;}
                     lis.forEach(function(li,i){li.setAttribute('aria-selected',i===active?'true':'false');});if(lis[active])firm.setAttribute('aria-activedescendant',lis[active].id);});
-                firm.addEventListener('blur',function(){setTimeout(close,150);if(hid.value==='0'&&firm.value.trim()!==''&&!hint.textContent)hint.textContent='“'+firm.value.trim()+'” will be added as a new firm.';});
+                firm.addEventListener('blur',function(){setTimeout(close,150);settle();});
             }
 
             // ---- Email verification -------------------------------------
             // A 6-digit code proves the address before any account exists.
-            var codeBox=$('[data-code-field]'),codeIn=$('input[name=email_code]'),codeHint=$('[data-code-hint]'),resend=$('[data-resend-code]'),verified='';
+            // sentTo is the address a code really went to: only that one is
+            // asked for its code, and any other address gets one sent first.
+            var codeBox=$('[data-code-field]'),codeIn=$('input[name=email_code]'),codeHint=$('[data-code-hint]'),resend=$('[data-resend-code]'),verified='',sentTo='',sending=false,checking=false;
             if(codeBox&&!cfg.needsCode)codeBox.hidden=true;
             function post(action,data){data.action=action;data._nonce=cfg.codeNonce;return fetch(cfg.ajaxUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data).toString()}).then(function(r){return r.json();});}
             function curEmail(){return em?em.value.trim().toLowerCase():'';}
-            function sendCode(){codeHint.textContent='Sending a code to '+curEmail()+'…';return post(cfg.sendCode,{email:curEmail()}).then(function(res){
-                if(res&&res.success){codeBox.hidden=false;if(resend)resend.hidden=false;codeHint.textContent='We’ve emailed a 6-digit code to '+curEmail()+'. Enter it to continue.';codeIn.focus();}
-                else{codeBox.hidden=false;codeHint.textContent=(res&&res.data)||'We couldn’t send a code just now — please try again.';}}).catch(function(){codeBox.hidden=false;codeHint.textContent='We couldn’t send a code just now — please try again.';});}
-            function gate(done){
-                if(cfg.loggedIn||!codeBox||!em||verified===curEmail()){done();return;}
-                var c=(codeIn.value||'').replace(/\D+/g,'');
-                if(codeBox.hidden||c.length!==6){if(codeBox.hidden)sendCode();else{codeHint.textContent='Enter the 6-digit code we emailed to '+curEmail()+'.';codeIn.focus();}return;}
-                post(cfg.checkCode,{email:curEmail(),code:c}).then(function(res){if(res&&res.success){verified=curEmail();codeHint.textContent='Email confirmed.';done();}else{codeHint.textContent=(res&&res.data)||'That code isn’t right.';codeIn.focus();}}).catch(function(){codeHint.textContent='We couldn’t check the code just now — please try again.';});
+            if(cfg.needsCode)sentTo=curEmail(); // The server just sent (or kept) one for the posted address.
+            // "Send a new code" shows after every attempt, failed ones too.
+            function sendCode(){
+                if(sending||!codeBox)return;var to=curEmail();sending=true;codeBox.hidden=false;codeHint.textContent='Sending a code to '+to+'…';
+                post(cfg.sendCode,{email:to}).then(function(res){
+                    if(res&&res.success){if(sentTo!==to)codeIn.value='';sentTo=to;codeHint.textContent='We’ve emailed a 6-digit code to '+to+'. Enter it to continue.';codeIn.focus();}
+                    else codeHint.textContent=(res&&res.data)||'We couldn’t send a code just now — please try again.';
+                },function(){codeHint.textContent='We couldn’t send a code just now — please try again.';}).then(function(){sending=false;if(resend)resend.hidden=false;});
             }
-            if(em)em.addEventListener('input',function(){if(verified&&verified!==curEmail()){verified='';}if(codeIn&&!cfg.needsCode){codeIn.value='';}});
-            if(resend)resend.addEventListener('click',sendCode);
+            // done() once the address is proven; fail() whenever the applicant
+            // has something to do here first (the submit path re-enables its
+            // button and comes back to this step).
+            function gate(done,fail){
+                if(cfg.loggedIn||!codeBox||!em||verified===curEmail()){done();return;}
+                function no(msg){if(fail)fail();codeBox.hidden=false;if(resend)resend.hidden=false;if(msg)codeHint.textContent=msg;codeIn.focus();}
+                if(sending||checking){if(fail)fail();return;}
+                if(sentTo!==curEmail()){if(fail)fail();sendCode();return;}
+                var c=(codeIn.value||'').replace(/\D+/g,''),to=sentTo;
+                if(c.length!==6){no('Enter the 6-digit code we emailed to '+to+'.');return;}
+                checking=true;
+                post(cfg.checkCode,{email:to,code:c}).then(function(res){checking=false;if(res&&res.success){verified=to;codeHint.textContent='Email confirmed.';done();}else no((res&&res.data)||'That code isn’t right.');},function(){checking=false;no('We couldn’t check the code just now — please try again.');});
+            }
+            // A code belongs to the address it went to: after an edit the next
+            // Continue sends one to the new address, and the hint says so.
+            if(em)em.addEventListener('input',function(){if(verified&&verified!==curEmail())verified='';
+                if(codeBox&&!codeBox.hidden&&!sending)codeHint.textContent=sentTo&&sentTo===curEmail()?'Enter the 6-digit code we emailed to '+sentTo+'.':'We’ll email a code to this address when you continue.';});
+            if(resend)resend.addEventListener('click',function(){sendCode();});
             if(cfg.needsCode&&resend)resend.hidden=false;
 
             // ---- Wizard ----------------------------------------------------
             var steps=$$('[data-step]'),dots=wrap?$$('[data-step-dot]',wrap):[],nav=wrap?$('.njilga-join__steps',wrap):null,cur=0;
             if(nav)nav.hidden=false;
+            function next(i){var s=steps[i];if(!check(s))return;if(s.getAttribute('data-step')==='details')gate(function(){go(i+1);});else go(i+1);}
             steps.forEach(function(s,i){
                 var bar=document.createElement('div');bar.className='njilga-join__nav';
                 if(i>0){var b=document.createElement('button');b.type='button';b.className='njilga-join__btn njilga-join__btn--ghost';b.textContent='← Back';b.addEventListener('click',function(){go(i-1);});bar.appendChild(b);}else{bar.appendChild(document.createElement('span'));}
-                if(i<steps.length-1){var n=document.createElement('button');n.type='button';n.className='njilga-join__btn njilga-join__btn--primary';n.textContent='Continue';n.addEventListener('click',function(){if(!check(s))return;if(s.getAttribute('data-step')==='details')gate(function(){go(i+1);});else go(i+1);});bar.appendChild(n);s.appendChild(bar);}
+                if(i<steps.length-1){var n=document.createElement('button');n.type='button';n.className='njilga-join__btn njilga-join__btn--primary';n.textContent='Continue';n.addEventListener('click',function(){next(i);});bar.appendChild(n);s.appendChild(bar);}
                 else if(i>0){var act=$('.njilga-join__actions',s);if(act)act.insertBefore(bar.firstChild,act.firstChild);}
             });
             function check(s){
                 var fields=$$('input,select,textarea',s).filter(function(i){return !i.disabled&&i.type!=='hidden'&&!closestHidden(i);});
-                if(s.getAttribute('data-step')==='colleagues'){var ce=colleagueError();var first=rows()[0]?$('input',rows()[0]):$('input[name=add_colleagues]');if(ce&&first){first.setCustomValidity(ce);first.reportValidity();setTimeout(function(){first.setCustomValidity('');},0);return false;}}
+                if(s.getAttribute('data-step')==='colleagues'){var ce=colleagueError();if(ce&&ce.el){var el=ce.el;el.setCustomValidity(ce.msg);el.reportValidity();setTimeout(function(){el.setCustomValidity('');},0);return false;}}
                 for(var i=0;i<fields.length;i++){if(!fields[i].checkValidity()){fields[i].reportValidity();return false;}}
                 return true;
             }
-            function closestHidden(el){while(el&&el!==form){if(el.hidden)return true;el=el.parentNode;}return false;}
-            function go(i){cur=i;steps.forEach(function(s,j){s.hidden=j!==i;});dots.forEach(function(d,j){d.className=j===i?'is-current':(j<i?'is-done':'');});if(i===steps.length-1)summary();var top=wrap||form;if(top.scrollIntoView&&i>=0)top.scrollIntoView({behavior:'smooth',block:'start'});}
-            var gated=false;
+            // Hidden within its step — the code box before a code is sent, State
+            // for an overseas address. The step's own hidden flag doesn't count,
+            // so the check at submit covers the steps not showing too (after a
+            // re-render, the always-blank password on "Your details").
+            function closestHidden(el){while(el&&el!==form&&!el.hasAttribute('data-step')){if(el.hidden)return true;el=el.parentNode;}return false;}
+            function show(i){cur=i;steps.forEach(function(s,j){s.hidden=j!==i;});dots.forEach(function(d,j){d.className=j===i?'is-current':(j<i?'is-done':'');if(j===i)d.setAttribute('aria-current','step');else d.removeAttribute('aria-current');});}
+            function go(i){show(i);if(i===steps.length-1)summary();var top=wrap||form;if(top.scrollIntoView)top.scrollIntoView({behavior:'smooth',block:'start'});
+                // Hiding the old step took keyboard focus with it: start the new
+                // one at its heading, so Tab goes on into its fields and a screen
+                // reader announces where the applicant now is.
+                var h=$('.njilga-join__title',steps[i]);if(h){h.setAttribute('tabindex','-1');try{h.focus({preventScroll:true});}catch(x){h.focus();}}}
+            // Enter in a field is the browser's cue to submit the form — from
+            // whichever step is showing, as the pay button is the default button
+            // even while hidden. In the wizard it means Continue. (The firm
+            // type-ahead handles its own Enter first.)
+            form.addEventListener('keydown',function(e){var t=e.target;
+                if(e.key!=='Enter'||e.defaultPrevented||e.isComposing||!t||t.tagName!=='INPUT'||/^(button|submit|reset|file|image)$/.test(t.type))return;
+                e.preventDefault();if(cur<steps.length-1)next(cur);else{var b=$('[data-submit]');if(b&&!b.disabled)b.click();}});
+            var inFlight=false;
+            function busy(on){inFlight=on;var b=$('[data-submit]');if(b){b.disabled=on;b.textContent=on?(free?'Submitting…':'Opening secure payment…'):payLabel();}}
             form.addEventListener('submit',function(e){
+                // One post per click, however impatient: a second would race the
+                // first for the same username and code.
+                if(inFlight){e.preventDefault();return;}
+                // Submitted from an earlier step (a phone keyboard's Go): move on.
+                if(cur<steps.length-1){e.preventDefault();next(cur);return;}
                 for(var i=0;i<steps.length;i++){if(!check(steps[i])){e.preventDefault();go(i);setTimeout(function(){check(steps[cur]);},50);return;}}
-                if(!cfg.loggedIn&&codeBox&&!gated&&verified!==curEmail()){
+                busy(true);
+                if(!cfg.loggedIn&&codeBox&&verified!==curEmail()){
                     e.preventDefault();var d=0;steps.forEach(function(s,j){if(s.getAttribute('data-step')==='details')d=j;});
-                    if(cur!==d)go(d);gate(function(){gated=true;var btn=$('[data-submit]');if(btn){btn.disabled=true;btn.textContent='Opening secure payment…';}form.submit();});return;
+                    gate(function(){form.submit();},function(){busy(false);go(d);});
                 }
-                var btn=$('[data-submit]');if(btn){btn.disabled=true;btn.textContent='Opening secure payment…';}
             });
+            // Back from Stripe can restore this page exactly as it was left: busy.
+            window.addEventListener('pageshow',function(e){if(e.persisted)busy(false);});
             // Start where the server found a problem, else at the beginning.
             var start=0;
             if(cfg.hasErrors){for(var k=0;k<steps.length;k++){if($('[aria-invalid=true],.is-invalid',steps[k])){start=k;break;}}}
-            steps.forEach(function(s,j){s.hidden=j!==start;});dots.forEach(function(d,j){d.className=j===start?'is-current':(j<start?'is-done':'');});
+            show(start);
             summary();
             if(cfg.hasErrors){var n=wrap&&$('[data-errors]',wrap);if(n)n.focus();}
         })();
-        </script>
         <?php
+        self::add_script( (string) ob_get_clean() );
     }
 }

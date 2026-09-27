@@ -366,6 +366,27 @@ class MyNJILGA_Stripe_Webhook {
     }
 
     /**
+     * For the handlers that change a row's status: an online join's row is
+     * written already paid, and its status is the join's to decide
+     * (MyNJILGA_Join_Fulfillment), never an event's. Stripe doesn't
+     * guarantee event order and the return page usually fulfills first,
+     * so a late payment_intent.processing (or a void of an invoice
+     * Checkout already marked paid) would flip a paid join back to
+     * processing/voided — dropping its members out of the downgrade
+     * sweep's protection and the preview's "paid via online join", and
+     * the reconciler skips join rows, so nothing would ever put it back.
+     * Such an event is recorded as ignored against the row instead.
+     */
+    private static function skip_join_row_status( string $eventId, object $row ): bool {
+        if ( (string) ( $row->invoice_kind ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
+            return false;
+        }
+        MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [ 'last_synced_at' => current_time( 'mysql' ) ] );
+        self::finish_ignored( $eventId, (int) $row->id, 'Online join — its status is set by the join, not by this event.' );
+        return true;
+    }
+
+    /**
      * A dispute — for ACH, also how a debit that bounced AFTER succeeding
      * arrives. Same posture as a refund: flagged for a human, nothing
      * revoked automatically.
@@ -651,6 +672,9 @@ class MyNJILGA_Stripe_Webhook {
             self::finish_ignored( $eventId, null );
             return;
         }
+        if ( self::skip_join_row_status( $eventId, $row ) ) {
+            return;
+        }
 
         // ACH-in-flight — never settles membership, never touches the
         // payment ledger.
@@ -772,6 +796,9 @@ class MyNJILGA_Stripe_Webhook {
             self::finish_ignored( $eventId, null );
             return;
         }
+        if ( self::skip_join_row_status( $eventId, $row ) ) {
+            return;
+        }
 
         MyNJILGA_Dues_Invoice_Table::update_gateway_fields( (int) $row->id, [
             'status'         => MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED,
@@ -790,6 +817,9 @@ class MyNJILGA_Stripe_Webhook {
         $row = self::resolve_invoice_row( 'invoice.marked_uncollectible', $dataObject );
         if ( ! $row ) {
             self::finish_ignored( $eventId, null );
+            return;
+        }
+        if ( self::skip_join_row_status( $eventId, $row ) ) {
             return;
         }
 

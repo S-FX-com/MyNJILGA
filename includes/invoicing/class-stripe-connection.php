@@ -66,6 +66,19 @@ class MyNJILGA_Stripe_Connection {
 
     const OPTION_EVENTS_SYNCED = 'njilga_stripe_webhook_events_synced';
 
+    // The Checkout permission probe's last answer per mode (see
+    // checkout_access()) — an option, not a transient, so the public
+    // Membership page always has the last answer to read and never has
+    // to ask Stripe itself.
+    const OPTION_CHECKOUT_ACCESS = 'njilga_stripe_checkout_access';
+
+    // How long a definite answer from that probe stands before an admin
+    // page load asks again, and how long to wait after Stripe gave no
+    // answer at all (unreachable, a 5xx). Plain ints for the same reason
+    // as HEALTH_CACHE_TTL_SECONDS below.
+    const CHECKOUT_ACCESS_TTL_SECONDS   = 21600; // 6 hours
+    const CHECKOUT_ACCESS_RETRY_SECONDS = 600;   // 10 minutes
+
     // How long a health() account check is trusted before health() hits
     // Stripe again for that mode. Plain int (not a WordPress time
     // constant) so this file stays loadable without WordPress.
@@ -416,8 +429,6 @@ class MyNJILGA_Stripe_Connection {
         $now    = current_time( 'mysql' );
         $stored = self::get();
 
-        delete_transient( self::HEALTH_TRANSIENT_PREFIX . 'checkout_' . $mode );
-
         $stored[ $mode ] = [
             'secret_key'       => self::encrypt_value( $pastedKey ),
             'account_id'       => $accountId,
@@ -428,6 +439,13 @@ class MyNJILGA_Stripe_Connection {
             'last_verified_at' => $now,
         ];
         self::save( $stored );
+
+        // Whatever was known about the previous key's Checkout permission
+        // says nothing about this one: forget it, and ask about the new
+        // key now, while staff are here, rather than leave the public
+        // form to go without an answer.
+        self::forget_checkout_access( $mode );
+        self::probe_checkout_access( $mode );
 
         $result = [ 'ok' => true, 'error' => '', 'account_name' => $accountName ];
         if ( $warning !== '' ) {
@@ -517,11 +535,29 @@ class MyNJILGA_Stripe_Connection {
      * Also notes the endpoint's API version: the handlers read payloads
      * in the shape of MyNJILGA_Stripe_Client::API_VERSION, and an
      * endpoint made by hand in the Dashboard may render another one.
+     *
+     * An endpoint added by hand (the manual fallback on Settings →
+     * Payments stores only its signing secret, so there is no id to ask
+     * about) is looked up by this site's URL instead and only ever READ —
+     * its events are for staff to change — and recorded as 'manual', so
+     * Setup can say what it is missing, or, when the key may not read
+     * webhook endpoints at all, every event it must include.
+     *
+     * Also keeps the Checkout permission answer fresh (checkout_access()):
+     * this is an admin page load, which is where that probe belongs.
      */
     public static function maybe_sync_webhook_events(): void {
         $want = md5( implode( ',', self::WEBHOOK_EVENTS ) );
         $done = get_option( self::OPTION_EVENTS_SYNCED, [] );
         $done = is_array( $done ) ? $done : [];
+
+        if ( ! wp_doing_ajax() ) {
+            foreach ( [ self::MODE_TEST, self::MODE_LIVE ] as $mode ) {
+                if ( self::is_connected( $mode ) ) {
+                    self::checkout_access( $mode );
+                }
+            }
+        }
 
         foreach ( [ self::MODE_TEST, self::MODE_LIVE ] as $mode ) {
             $webhookId = (string) ( self::get()[ $mode ]['webhook_id'] ?? '' );
@@ -529,7 +565,19 @@ class MyNJILGA_Stripe_Connection {
                 continue;
             }
             $client    = self::is_connected( $mode ) ? self::client_for_mode( $mode ) : null;
-            if ( $webhookId === '' || $client === null ) {
+            if ( $client === null ) {
+                continue;
+            }
+            if ( $webhookId === '' ) {
+                if ( (string) ( self::get()[ $mode ]['webhook_secret'] ?? '' ) !== '' ) {
+                    $done[ $mode ] = self::manual_endpoint_state( $client, $mode, $want );
+                    update_option( self::OPTION_EVENTS_SYNCED, $done, false );
+                    if ( $done[ $mode ]['hash'] === '' ) {
+                        // Looked at again twice a day, so Setup catches up
+                        // once staff have fixed the endpoint in Stripe.
+                        set_transient( 'njilga_stripe_events_retry_' . $mode, 1, 12 * HOUR_IN_SECONDS );
+                    }
+                }
                 continue;
             }
 
@@ -557,18 +605,63 @@ class MyNJILGA_Stripe_Connection {
     }
 
     /**
+     * maybe_sync_webhook_events() for an endpoint added by hand: find it
+     * among the account's endpoints by this site's URL and read which of
+     * WEBHOOK_EVENTS it lacks. A key without read access to webhook
+     * endpoints (often why it was added by hand), or an endpoint at
+     * another URL, leaves 'checked' false — nothing is known about its
+     * events.
+     *
+     * @return array<string,mixed> The OPTION_EVENTS_SYNCED entry for the mode.
+     */
+    private static function manual_endpoint_state( MyNJILGA_Stripe_Client $client, string $mode, string $want ): array {
+        $state = [ 'hash' => '', 'webhook_id' => '', 'manual' => true, 'checked' => false, 'missing' => [], 'api_version' => '', 'at' => current_time( 'mysql' ) ];
+
+        $list = $client->request( 'GET', '/webhook_endpoints', [ 'limit' => 100 ] );
+        if ( ! $list['ok'] ) {
+            return $state;
+        }
+        $url = rest_url( 'njilga/v1/stripe-webhook' );
+        foreach ( (array) ( $list['body']['data'] ?? [] ) as $ep ) {
+            if ( ! is_array( $ep ) || (string) ( $ep['url'] ?? '' ) !== $url ) {
+                continue;
+            }
+            $current              = array_map( 'strval', (array) ( $ep['enabled_events'] ?? [] ) );
+            $state['checked']     = true;
+            $state['missing']     = in_array( '*', $current, true ) ? [] : array_values( array_diff( self::WEBHOOK_EVENTS, $current ) );
+            $state['api_version'] = (string) ( $ep['api_version'] ?? '' );
+            if ( ! $state['missing'] ) {
+                $state['hash'] = $want;
+            }
+            break;
+        }
+        return $state;
+    }
+
+    /**
      * What maybe_sync_webhook_events() last learned for a mode, for the
      * Setup page: events it could not add, and the endpoint's API version.
+     * 'endpoint' is how the mode's endpoint came to be: 'auto' (this
+     * plugin made or found it, and holds its id), 'manual' (added by hand
+     * — only its signing secret is on file) or 'none'. For a manual one,
+     * 'checked' says whether its events could be read at all; when not,
+     * nothing is known beyond the fact that it is on its own.
      *
-     * @return array{synced:bool,missing:array<int,string>,api_version:string}
+     * @return array{synced:bool,missing:array<int,string>,api_version:string,endpoint:string,checked:bool,recorded:bool}
      */
     public static function webhook_events_state( string $mode ): array {
-        $done = get_option( self::OPTION_EVENTS_SYNCED, [] );
-        $row  = is_array( $done ) && isset( $done[ $mode ] ) && is_array( $done[ $mode ] ) ? $done[ $mode ] : [];
+        $done  = get_option( self::OPTION_EVENTS_SYNCED, [] );
+        $row   = is_array( $done ) && isset( $done[ $mode ] ) && is_array( $done[ $mode ] ) ? $done[ $mode ] : [];
+        $block = self::get()[ $mode ];
+        $id    = (string) ( $block['webhook_id'] ?? '' );
         return [
-            'synced'      => ( $row['hash'] ?? '' ) === md5( implode( ',', self::WEBHOOK_EVENTS ) ) && ( $row['webhook_id'] ?? '' ) === (string) ( self::get()[ $mode ]['webhook_id'] ?? '' ),
+            'synced'      => ( $row['hash'] ?? '' ) === md5( implode( ',', self::WEBHOOK_EVENTS ) ) && ( $row['webhook_id'] ?? '' ) === $id,
             'missing'     => array_values( (array) ( $row['missing'] ?? [] ) ),
             'api_version' => (string) ( $row['api_version'] ?? '' ),
+            'endpoint'    => $id !== '' ? 'auto' : ( (string) ( $block['webhook_secret'] ?? '' ) !== '' ? 'manual' : 'none' ),
+            'checked'     => ! empty( $row['checked'] ) || empty( $row['manual'] ),
+            // Whether anything was recorded for the endpoint on file now.
+            'recorded'    => $row !== [] && ( $row['webhook_id'] ?? '' ) === $id,
         ];
     }
 
@@ -751,43 +844,150 @@ class MyNJILGA_Stripe_Connection {
     }
 
     /**
-     * GET /v1/account, cached for HEALTH_CACHE_TTL_SECONDS per mode so
-     * health() stays cheap to call often.
-     *
-     * @return array{ok:bool,charges_enabled:bool,error:string}
-     */
-    /**
      * Can this mode's key create Checkout Sessions (the online join)?
-     * true / false, or null when it couldn't be established (Stripe
-     * unreachable, not connected) — callers treat null as "go ahead and
-     * let the real call report any problem".
+     * true / false, or null when it hasn't been established (Stripe never
+     * answered, not connected) — callers treat null as "go ahead and let
+     * the real call report any problem".
      *
      * A restricted key set up from the checklist on Settings → Payments
      * before online joining existed has no Checkout permission, and a
      * READ probe would pass for a read-only key — so this asks Stripe to
      * expire a session that doesn't exist. "No such checkout session"
      * means the key may write sessions; a permission error means it may
-     * not. Nothing is created either way. Cached 6 hours per mode.
+     * not. Nothing is created either way.
+     *
+     * Only an admin page load ever asks (may_probe_checkout_access()).
+     * Everything else — above all the public Membership page, which calls
+     * this on every view and every submit — reads the last answer on file
+     * and never waits on Stripe, even when that answer is due a re-check:
+     * during a Stripe incident each view would otherwise sit through the
+     * client's 20-second timeout twice. A definite answer is re-asked after
+     * CHECKOUT_ACCESS_TTL_SECONDS; no answer at all is retried after
+     * CHECKOUT_ACCESS_RETRY_SECONDS, keeping whatever definite answer came
+     * before it. Setup's Re-check asks at once (recheck_checkout_access()).
      */
     public static function checkout_access( string $mode ): ?bool {
-        $key    = self::HEALTH_TRANSIENT_PREFIX . 'checkout_' . $mode;
-        $cached = get_transient( $key );
-        if ( $cached === 'yes' || $cached === 'no' ) {
-            return $cached === 'yes';
+        $entry = self::checkout_access_entry( $mode );
+        if ( time() >= $entry['next_check'] && self::may_probe_checkout_access() ) {
+            $entry = self::probe_checkout_access( $mode );
         }
-        $client = self::client_for_mode( $mode );
-        if ( $client === null ) {
-            return null;
-        }
-        $resp = $client->request( 'POST', '/checkout/sessions/cs_njilga_permission_probe/expire' );
-        if ( $resp['status'] === 0 || $resp['status'] >= 500 ) {
-            return null;
-        }
-        $denied = in_array( (int) $resp['status'], [ 401, 403 ], true ) || stripos( (string) $resp['error'], 'permission' ) !== false;
-        set_transient( $key, $denied ? 'no' : 'yes', 6 * HOUR_IN_SECONDS );
-        return ! $denied;
+        return self::checkout_access_answer( $entry['state'] );
     }
 
+    /**
+     * Ask Stripe now, whatever is on file — Setup's Re-check, for a key
+     * whose permission staff have just fixed (a 'no' would otherwise
+     * stand for hours).
+     */
+    public static function recheck_checkout_access( string $mode ): ?bool {
+        return self::checkout_access_answer( self::probe_checkout_access( $mode )['state'] );
+    }
+
+    /**
+     * When Stripe last gave a definite answer for this mode, as a site-time
+     * mysql datetime — '' when it never has.
+     */
+    public static function checkout_access_checked_at( string $mode ): string {
+        $at = self::checkout_access_entry( $mode )['checked_at'];
+        return $at > 0 ? (string) get_date_from_gmt( gmdate( 'Y-m-d H:i:s', $at ) ) : '';
+    }
+
+    /**
+     * What a probe's HTTP status says: 'yes', 'no', or 'unknown' when
+     * Stripe didn't answer (transport failure, a 5xx). Decided on the
+     * status alone: Stripe's 404 message echoes the id it couldn't find,
+     * so matching words in the text would misread it.
+     */
+    public static function checkout_probe_verdict( int $status ): string {
+        if ( $status === 0 || $status >= 500 ) {
+            return 'unknown';
+        }
+        return in_array( $status, [ 401, 403 ], true ) ? 'no' : 'yes';
+    }
+
+    /**
+     * The entry to keep after a probe. A definite verdict replaces what
+     * was there and stands for CHECKOUT_ACCESS_TTL_SECONDS. No answer
+     * keeps the last definite one — a known "no" must keep the form
+     * closed through a Stripe outage, a known "yes" open — and tries again
+     * after CHECKOUT_ACCESS_RETRY_SECONDS.
+     *
+     * @param array{state?:string,next_check?:int,checked_at?:int} $prior
+     * @return array{state:string,next_check:int,checked_at:int}
+     */
+    public static function next_checkout_access_entry( array $prior, string $verdict, int $now ): array {
+        if ( $verdict === 'yes' || $verdict === 'no' ) {
+            return [ 'state' => $verdict, 'next_check' => $now + self::CHECKOUT_ACCESS_TTL_SECONDS, 'checked_at' => $now ];
+        }
+        $state = (string) ( $prior['state'] ?? '' );
+        return [
+            'state'      => in_array( $state, [ 'yes', 'no' ], true ) ? $state : 'unknown',
+            'next_check' => $now + self::CHECKOUT_ACCESS_RETRY_SECONDS,
+            'checked_at' => (int) ( $prior['checked_at'] ?? 0 ),
+        ];
+    }
+
+    private static function checkout_access_answer( string $state ): ?bool {
+        return $state === 'yes' ? true : ( $state === 'no' ? false : null );
+    }
+
+    /**
+     * An admin screen, not an AJAX call (the heartbeat alone would do it
+     * every minute of every open admin tab) — the only kind of request
+     * that may wait on the probe.
+     */
+    private static function may_probe_checkout_access(): bool {
+        return is_admin() && ! wp_doing_ajax();
+    }
+
+    /**
+     * @return array{state:string,next_check:int,checked_at:int}
+     */
+    private static function checkout_access_entry( string $mode ): array {
+        $all   = get_option( self::OPTION_CHECKOUT_ACCESS, [] );
+        $entry = is_array( $all ) && isset( $all[ $mode ] ) && is_array( $all[ $mode ] ) ? $all[ $mode ] : [];
+        return [
+            'state'      => (string) ( $entry['state'] ?? 'unknown' ),
+            'next_check' => (int) ( $entry['next_check'] ?? 0 ),
+            'checked_at' => (int) ( $entry['checked_at'] ?? 0 ),
+        ];
+    }
+
+    /**
+     * Ask Stripe and keep the answer. Not connected (or the key won't
+     * decrypt) means there is nothing to ask with, and nothing is kept.
+     *
+     * @return array{state:string,next_check:int,checked_at:int}
+     */
+    private static function probe_checkout_access( string $mode ): array {
+        $client = self::client_for_mode( $mode );
+        if ( $client === null ) {
+            return [ 'state' => 'unknown', 'next_check' => 0, 'checked_at' => 0 ];
+        }
+        $resp  = $client->request( 'POST', '/checkout/sessions/cs_njilga_probe/expire' );
+        $entry = self::next_checkout_access_entry( self::checkout_access_entry( $mode ), self::checkout_probe_verdict( (int) $resp['status'] ), time() );
+
+        $all          = get_option( self::OPTION_CHECKOUT_ACCESS, [] );
+        $all          = is_array( $all ) ? $all : [];
+        $all[ $mode ] = $entry;
+        update_option( self::OPTION_CHECKOUT_ACCESS, $all );
+        return $entry;
+    }
+
+    private static function forget_checkout_access( string $mode ): void {
+        $all = get_option( self::OPTION_CHECKOUT_ACCESS, [] );
+        if ( is_array( $all ) && isset( $all[ $mode ] ) ) {
+            unset( $all[ $mode ] );
+            update_option( self::OPTION_CHECKOUT_ACCESS, $all );
+        }
+    }
+
+    /**
+     * GET /v1/account, cached for HEALTH_CACHE_TTL_SECONDS per mode so
+     * health() stays cheap to call often.
+     *
+     * @return array{ok:bool,charges_enabled:bool,error:string}
+     */
     private static function cached_account_check( string $mode, string $secretKey ): array {
         $transientKey = self::HEALTH_TRANSIENT_PREFIX . $mode;
         $cached       = get_transient( $transientKey );

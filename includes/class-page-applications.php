@@ -96,15 +96,27 @@ class MyNJILGA_Page_Applications {
             [ 'label' => 'Needs attention', 'value' => count( $attention ), 'variant' => $attention ? 'warning' : 'default', 'icon' => 'alert' ],
         ] );
 
+        // The public form always takes payment in Live mode, whichever way
+        // the admin Test/Live toggle is set (MyNJILGA_Join_Form::join_mode()),
+        // so what matters here is whether Live can take a checkout at all.
+        $live = MyNJILGA_Stripe_Connection::MODE_LIVE;
         printf(
-            '<p class="njilga-section-desc">Paste <code>[njilga_join category="professional"]</code>, <code>[njilga_join category="law_student"]</code> or <code>[njilga_join category="emerging_professional"]</code> on each Membership page (any category key an applicant may pick in <a href="%s">Settings</a>). A paid join becomes a membership the moment Stripe confirms the payment; a join that comes to $0 waits here for a decision.%s</p>',
-            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ),
-            MyNJILGA_Join_Form::is_test_mode() ? ' <strong>Stripe is in Test mode</strong>, so the form is visible to staff only.' : ''
+            '<p class="njilga-section-desc">Paste <code>[njilga_join category="professional"]</code>, <code>[njilga_join category="law_student"]</code> or <code>[njilga_join category="emerging_professional"]</code> on each Membership page (any category key an applicant may pick in <a href="%s">Settings</a>). A paid join becomes a membership the moment Stripe confirms the payment; a join that comes to $0 waits here for a decision. Visitors always pay in Stripe Live mode, whichever mode the admin toggle is on; staff can rehearse in Test by adding <code>?njilga_test=1</code> to the page\'s address.</p>',
+            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) )
         );
+        if ( ! MyNJILGA_Stripe_Connection::is_connected( $live ) ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>Stripe Live mode isn\'t connected</strong>, so the form tells visitors joining online is unavailable. Connect it under <a href="%s">Settings → Payments</a>.', esc_url( add_query_arg( 'tab', 'payments', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) ) ), 'warning' );
+        } elseif ( MyNJILGA_Stripe_Connection::checkout_access( $live ) === false ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>The Live Stripe key can\'t create Checkout Sessions</strong>, so the form tells visitors joining online is unavailable. Give the key "Checkout Sessions: Write", then re-check it on <a href="%s">Setup</a>.', esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) ) ), 'warning' );
+        }
+
+        // Everything the rows need, loaded once for both tables below —
+        // "Needs attention" is a subset of "All online joins".
+        $context = self::joins_context( $rows );
 
         if ( $attention ) {
             MyNJILGA_Admin_UI::section( 'Needs attention', 'Joins waiting on a decision, a payment that hasn\'t been applied yet, or people a join left off their firm until you confirm them.', count( $attention ) );
-            self::joins_table( $attention );
+            self::joins_table( $attention, $context );
         }
 
         MyNJILGA_Admin_UI::section( 'All online joins', 'Newest first. Abandoned and expired attempts are kept so you can follow up.', count( $rows ) );
@@ -112,20 +124,71 @@ class MyNJILGA_Page_Applications {
             echo '<div class="njilga-card njilga-empty"><div class="njilga-empty-icon">' . MyNJILGA_Admin_UI::icon( 'inbox' ) . '</div><h2 class="njilga-empty-title">No online joins yet</h2><p class="njilga-empty-text">Once the shortcode is on a Membership page, every attempt shows up here — paid or not.</p></div>';
             return;
         }
-        self::joins_table( $rows );
+        self::joins_table( $rows, $context );
     }
 
     /**
+     * The invites, firm names and invoice rows behind a list of joins, one
+     * query each, keyed for joins_table() — rather than up to three
+     * queries per row, for up to 300 rows, twice over.
+     *
      * @param array<int,object> $rows
+     * @return array{invites:array<int,array<int,object>>,firms:array<int,string>,invoice_rows:array<int,object>}
      */
-    private static function joins_table( array $rows ): void {
+    private static function joins_context( array $rows ): array {
+        $joinIds    = [];
+        $companyIds = [];
+        $rowIds     = [];
+        foreach ( $rows as $join ) {
+            if ( MyNJILGA_Join_Orders_Table::json( $join, 'colleagues' ) ) {
+                $joinIds[] = (int) $join->id;
+            }
+            if ( (int) $join->company_id > 0 ) {
+                $companyIds[] = (int) $join->company_id;
+            }
+            if ( $join->status === MyNJILGA_Join_Orders_Table::STATUS_FULFILLED && (int) $join->invoice_row_id > 0 ) {
+                $rowIds[] = (int) $join->invoice_row_id;
+            }
+        }
+
+        $firms = [];
+        if ( $companyIds && MyNJILGA_Members_Data::companies_module_active() ) {
+            foreach ( \FluentCrm\App\Models\Company::whereIn( 'id', array_values( array_unique( $companyIds ) ) )->get() as $c ) {
+                $firms[ (int) $c->id ] = (string) $c->name;
+            }
+        }
+
+        return [
+            'invites'      => self::invites_by_join( $joinIds ),
+            'firms'        => $firms,
+            'invoice_rows' => MyNJILGA_Dues_Invoice_Table::get_many( $rowIds ),
+        ];
+    }
+
+    /**
+     * Every invite for these joins, in one query — join id => its invites,
+     * oldest first, the same rows MyNJILGA_Join_Invites_Table::get_for_join()
+     * returns one join at a time.
+     *
+     * @param array<int,int> $joinIds
+     * @return array<int,array<int,object>>
+     */
+    private static function invites_by_join( array $joinIds ): array {
+        return MyNJILGA_Join_Invites_Table::get_for_joins( $joinIds );
+    }
+
+    /**
+     * @param array<int,object>   $rows
+     * @param array<string,mixed> $context joins_context()
+     */
+    private static function joins_table( array $rows, array $context ): void {
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Applicant</th><th>Membership</th><th>Firm</th><th>Colleagues</th><th class="njilga-col-num">Total</th><th>Status</th><th class="njilga-col-actions">Actions</th></tr></thead><tbody>';
         foreach ( $rows as $join ) {
             $category   = MyNJILGA_Dues_Settings::category( (string) $join->category_key );
             $applicant  = MyNJILGA_Join_Orders_Table::json( $join, 'applicant' );
             $colleagues = MyNJILGA_Join_Orders_Table::json( $join, 'colleagues' );
             $progress   = MyNJILGA_Join_Orders_Table::json( $join, 'progress' );
-            $invites    = $colleagues ? MyNJILGA_Join_Invites_Table::get_for_join( (int) $join->id ) : [];
+            $invites    = $colleagues ? ( $context['invites'][ (int) $join->id ] ?? [] ) : [];
             $accepted   = count( array_filter( $invites, static function ( $i ) { return $i->status !== MyNJILGA_Join_Invites_Table::STATUS_SENT; } ) );
 
             // Applicant.
@@ -146,8 +209,8 @@ class MyNJILGA_Page_Applications {
             // Firm.
             $firm = MyNJILGA_Admin_UI::blank();
             if ( (int) $join->company_id > 0 && MyNJILGA_Members_Data::companies_module_active() ) {
-                $c    = \FluentCrm\App\Models\Company::find( (int) $join->company_id );
-                $firm = esc_html( $c ? (string) $c->name : 'Company #' . (int) $join->company_id ) . ' ' . MyNJILGA_Admin_UI::pill( ! empty( $progress['new_firm'] ) ? 'new firm' : 'existing', ! empty( $progress['new_firm'] ) ? 'info' : 'outline' );
+                $name = $context['firms'][ (int) $join->company_id ] ?? '';
+                $firm = esc_html( $name !== '' ? $name : 'Company #' . (int) $join->company_id ) . ' ' . MyNJILGA_Admin_UI::pill( ! empty( $progress['new_firm'] ) ? 'new firm' : 'existing', ! empty( $progress['new_firm'] ) ? 'info' : 'outline' );
             } elseif ( (string) $join->new_company_name !== '' ) {
                 $firm = esc_html( (string) $join->new_company_name ) . ' ' . MyNJILGA_Admin_UI::pill( 'new firm', 'info' );
             }
@@ -186,7 +249,7 @@ class MyNJILGA_Page_Applications {
                 $coll,
                 esc_html( MyNJILGA_Invoicing::money( (int) $join->total_cents ) ),
                 $status,
-                self::join_actions( $join, $progress, $invites, $accepted )
+                self::join_actions( $join, $progress, $invites, $accepted, $context['invoice_rows'][ (int) $join->invoice_row_id ] ?? null )
             );
         }
         echo '</tbody></table></div></div>';
@@ -215,8 +278,9 @@ class MyNJILGA_Page_Applications {
     /**
      * @param array<string,mixed> $progress
      * @param array<int,object>   $invites
+     * @param object|null         $row      The join's invoice row, when it has one.
      */
-    private static function join_actions( object $join, array $progress, array $invites, int $accepted ): string {
+    private static function join_actions( object $join, array $progress, array $invites, int $accepted, $row = null ): string {
         $T   = 'MyNJILGA_Join_Orders_Table';
         $id  = (int) $join->id;
         $btn = static function ( string $op, string $label, string $style, string $confirm = '' ) use ( $id ): string {
@@ -247,11 +311,8 @@ class MyNJILGA_Page_Applications {
                 if ( ! empty( $progress['already_current'] ) || ! empty( $progress['checks'] ) || ! empty( $progress['document_unverified'] ) || (string) ( $join->last_error ?? '' ) !== '' ) {
                     $out .= $btn( 'ack', ! empty( $progress['document_unverified'] ) ? 'Mark checked' : 'Mark reviewed', 'ghost' );
                 }
-                if ( (int) $join->invoice_row_id > 0 ) {
-                    $row = MyNJILGA_Dues_Invoice_Table::get( (int) $join->invoice_row_id );
-                    if ( $row && ! empty( $row->hosted_invoice_url ) ) {
-                        $out .= sprintf( '<a class="njilga-btn njilga-btn-ghost njilga-btn-sm" href="%s" target="_blank" rel="noopener">%sReceipt</a>', esc_url( (string) $row->hosted_invoice_url ), MyNJILGA_Admin_UI::icon( 'external' ) );
-                    }
+                if ( $row && ! empty( $row->hosted_invoice_url ) ) {
+                    $out .= sprintf( '<a class="njilga-btn njilga-btn-ghost njilga-btn-sm" href="%s" target="_blank" rel="noopener">%sReceipt</a>', esc_url( (string) $row->hosted_invoice_url ), MyNJILGA_Admin_UI::icon( 'external' ) );
                 }
                 break;
         }
