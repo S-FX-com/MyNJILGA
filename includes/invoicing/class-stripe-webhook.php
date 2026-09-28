@@ -190,10 +190,16 @@ class MyNJILGA_Stripe_Webhook {
             return new WP_REST_Response( [ 'error' => 'Malformed event.' ], 400 );
         }
 
-        // 7. Idempotency gate — a duplicate delivery is a fast 200, nothing more.
-        $recorded = MyNJILGA_Stripe_Events_Table::record_received( $eventId, $type, $livemode, $objectId );
-        if ( ! $recorded ) {
+        // 7. Idempotency gate — a duplicate delivery is a fast 200, nothing
+        // more. A database failure is NOT a duplicate: answering 200 would
+        // lose the event (Stripe never resends an acknowledged delivery),
+        // so it gets a 503 and Stripe retries with backoff.
+        $recorded = MyNJILGA_Stripe_Events_Table::record( $eventId, $type, $livemode, $objectId );
+        if ( $recorded === MyNJILGA_Stripe_Events_Table::RECORD_DUPLICATE ) {
             return new WP_REST_Response( [ 'ok' => true ], 200 );
+        }
+        if ( $recorded !== MyNJILGA_Stripe_Events_Table::RECORD_NEW ) {
+            return new WP_REST_Response( [ 'error' => 'Could not record the event — please retry.' ], 503 );
         }
 
         // 8. Dispatch asynchronously so this response returns fast —

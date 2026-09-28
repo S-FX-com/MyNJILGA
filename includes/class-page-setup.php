@@ -615,7 +615,11 @@ class MyNJILGA_Page_Setup {
     private static function render_online_joining(): void {
         MyNJILGA_Admin_UI::section(
             'Online joining',
-            sprintf( 'The <code>[njilga_join]</code> shortcode takes payment through Stripe Checkout. The public always joins in <strong>Live</strong> mode; staff rehearse in Test with <code>?njilga_test=1</code>. <a href="%s">Online joins</a> lists every attempt.', esc_url( add_query_arg( 'tab', 'joins', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) ) ) )
+            sprintf(
+                'The <code>[njilga_join]</code> shortcode takes payment through Stripe Checkout. The public always joins in <strong>Live</strong> mode; staff rehearse in Test with <code>?njilga_test=1</code>. <a href="%s">Shortcodes</a> has the line to paste for each category and the pages that carry one; <a href="%s">Online joins</a> lists every attempt.',
+                esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SHORTCODES ) ),
+                esc_url( add_query_arg( 'tab', 'joins', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) ) )
+            )
         );
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Mode</th><th>Connected</th><th>Key can create checkouts</th><th>Webhook hears Checkout events</th><th>Endpoint API version</th></tr></thead><tbody>';
         foreach ( [ MyNJILGA_Stripe_Connection::MODE_LIVE, MyNJILGA_Stripe_Connection::MODE_TEST ] as $mode ) {
@@ -684,13 +688,18 @@ class MyNJILGA_Page_Setup {
         return MyNJILGA_Admin_UI::validation( 'Not checked yet (checked on the next admin page load)', false );
     }
 
+    /**
+     * A pointer, not a copy: the Shortcodes page builds its lines from the
+     * live categories and shows where each is used. The table that used
+     * to sit here named three category keys by hand, and went stale as
+     * soon as one was renamed in Settings.
+     */
     private static function render_shortcodes(): void {
-        MyNJILGA_Admin_UI::section( 'Shortcodes', 'Drop these on any page to expose the public-facing parts of the plugin.' );
-        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table njilga-kv"><tbody>';
-        echo '<tr><th><code>[njilga_join category="professional"]</code></th><td>Online joining with payment (Stripe Checkout). <code>category</code> is any category an applicant may pick — <code>professional</code> (with the firm upsell for colleagues), <code>law_student</code>, <code>emerging_professional</code>. Membership applies as soon as the payment clears; colleagues are emailed an invitation to create their account. Serves invitation links too.</td></tr>';
-        echo '<tr><th><code>[njilga_membership_application]</code></th><td>Public membership application form with firm autocomplete. Applicants land in <strong>My NJILGA → Applications</strong> and are never invoiced until approved.</td></tr>';
-        echo '<tr><th><code>[njilga_firm_dues_status]</code></th><td>Member-facing dues status: logged-in member sees their firm\'s invoices, full roster, amounts and payment link.</td></tr>';
-        echo '</tbody></table></div></div>';
+        MyNJILGA_Admin_UI::section( 'Shortcodes' );
+        printf(
+            '<div class="njilga-banner"><div><div class="njilga-banner-title">Shortcodes for the public pages</div><div class="njilga-banner-desc">Ready-to-paste lines for <code>[njilga_join]</code> (one per category an applicant may pick), <code>[njilga_membership_application]</code> and <code>[njilga_firm_dues_status]</code>: what each does, which to use, and the pages that carry them now.</div></div><a class="njilga-btn njilga-btn-outline" href="%s">Open Shortcodes</a></div>',
+            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SHORTCODES ) )
+        );
     }
 
     // -------------------------------------------------------------------------

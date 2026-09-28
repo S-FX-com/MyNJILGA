@@ -351,28 +351,75 @@ class MyNJILGA_Dues_Invoice_Table {
      * @return array<int,object>
      */
     public static function open_rows_listing_contact( int $contactId, int $duesYear, bool $livemode ): array {
-        global $wpdb;
-        if ( $contactId <= 0 ) {
-            return [];
-        }
-        $table = self::table_name();
-        // roster_snapshot is wp_json_encode() output: an integer id is
-        // written bare and followed by a comma, so this can't match 1234
-        // when looking for 123.
-        $like = '%' . $wpdb->esc_like( '"contact_id":' . $contactId . ',' ) . '%';
-        return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status IN (%s, %s, %s, %s, %s) AND invoice_kind NOT IN (%s, %s) AND roster_snapshot LIKE %s",
-            $duesYear,
-            $livemode ? 1 : 0,
+        return self::rows_listing_member( $contactId, $duesYear, $livemode, [
             self::STATUS_DRAFT,
             self::STATUS_APPROVED,
             self::STATUS_CREATED,
             self::STATUS_SENT,
             self::STATUS_PROCESSING,
-            MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT,
-            MyNJILGA_Dues_Snapshot::KIND_JOIN,
-            $like
+        ] );
+    }
+
+    /**
+     * Dues-settling rows for the year and mode, in any of $statuses, whose
+     * frozen roster lists this contact as a MEMBER — the people paying the
+     * invoice covers. Assessment-only rows never count (they settle no
+     * dues); online-join rows only with $withJoins.
+     *
+     * Every snapshot also names its Owner and bill-to as
+     * {"contact_id":N,...}, and a firm's Owner needn't be on its roster —
+     * matching those would tell an Owner who isn't a member that the
+     * firm's invoice covers them. So the LIKE only narrows what is
+     * fetched, and each row is decoded and its members[] checked.
+     *
+     * @param array<int,string> $statuses
+     * @return array<int,object>
+     */
+    public static function rows_listing_member( int $contactId, int $duesYear, bool $livemode, array $statuses, bool $withJoins = false ): array {
+        global $wpdb;
+        $statuses = array_values( array_filter( array_map( 'strval', $statuses ) ) );
+        if ( $contactId <= 0 || ! $statuses ) {
+            return [];
+        }
+        $table = self::table_name();
+        $kinds = $withJoins
+            ? [ MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT ]
+            : [ MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT, MyNJILGA_Dues_Snapshot::KIND_JOIN ];
+        // roster_snapshot is wp_json_encode() output: an integer id is
+        // written bare and followed by a comma, so this can't match 1234
+        // when looking for 123.
+        $like  = '%' . $wpdb->esc_like( '"contact_id":' . $contactId . ',' ) . '%';
+        $query = "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d"
+            . ' AND status IN (' . implode( ', ', array_fill( 0, count( $statuses ), '%s' ) ) . ')'
+            . ' AND invoice_kind NOT IN (' . implode( ', ', array_fill( 0, count( $kinds ), '%s' ) ) . ')'
+            . ' AND roster_snapshot LIKE %s ORDER BY id ASC';
+        $rows  = (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            $query,
+            array_merge( [ $duesYear, $livemode ? 1 : 0 ], $statuses, $kinds, [ $like ] )
         ) );
+        return array_values( array_filter( $rows, static function ( $row ) use ( $contactId ) {
+            return self::listed_member( $row, $contactId ) !== null;
+        } ) );
+    }
+
+    /**
+     * This contact's entry in a row's frozen members[] — null when the
+     * snapshot doesn't list them as a member (being its Owner or bill-to
+     * doesn't count). Pure — tested directly.
+     *
+     * @param object|string $rowOrJson
+     * @return array<string,mixed>|null
+     */
+    public static function listed_member( $rowOrJson, int $contactId ): ?array {
+        if ( $contactId <= 0 ) {
+            return null;
+        }
+        foreach ( MyNJILGA_Dues_Snapshot::members( $rowOrJson ) as $m ) {
+            if ( is_array( $m ) && (int) ( $m['contact_id'] ?? 0 ) === $contactId ) {
+                return $m;
+            }
+        }
+        return null;
     }
 
     /**

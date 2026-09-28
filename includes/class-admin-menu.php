@@ -19,6 +19,7 @@ class MyNJILGA_Admin_Menu {
     const SLUG_APPLICATIONS = 'my-njilga-applications';
     const SLUG_SETTINGS     = 'my-njilga-settings';
     const SLUG_SETUP        = 'my-njilga-setup';
+    const SLUG_SHORTCODES   = 'my-njilga-shortcodes';
 
     /**
      * Report detail pages that are reachable by URL (clicked into from the
@@ -75,6 +76,7 @@ class MyNJILGA_Admin_Menu {
 
         add_submenu_page( self::SLUG_ROOT, 'Dues & Billing Settings', 'Settings', 'manage_options', self::SLUG_SETTINGS, [ 'MyNJILGA_Page_Settings', 'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Setup',     'Setup',     'manage_options', self::SLUG_SETUP,     [ 'MyNJILGA_Page_Setup',      'render' ] );
+        add_submenu_page( self::SLUG_ROOT, 'Shortcodes', 'Shortcodes', 'manage_options', self::SLUG_SHORTCODES, [ 'MyNJILGA_Page_Shortcodes', 'render' ] );
 
         // Report detail pages: registered with an EMPTY parent slug. WordPress
         // keeps them in $submenu[''] — a bucket it never renders — so they stay
@@ -83,7 +85,18 @@ class MyNJILGA_Admin_Menu {
         // remove_submenu_page() instead breaks parent resolution and triggers a
         // "not allowed to access this page" error, so do NOT do that.
         foreach ( self::HIDDEN_PAGES as $slug => $page ) {
-            add_submenu_page( '', $page[0], $page[0], 'manage_options', $slug, [ $page[1], 'render' ] );
+            $hook = add_submenu_page( '', $page[0], $page[0], 'manage_options', $slug, [ $page[1], 'render' ] );
+            if ( $hook ) {
+                // get_admin_page_title() finds a title by walking the
+                // parent menu, and a '' parent has none, so admin-header
+                // would strip_tags(null) — a deprecation on every visit
+                // under PHP 8.1+. Hand WordPress the title before it looks.
+                $pageTitle = $page[0];
+                add_action( 'load-' . $hook, static function () use ( $pageTitle ): void {
+                    global $title;
+                    $title = $pageTitle; // phpcs:ignore WordPress.WP.GlobalVariablesOverride
+                } );
+            }
         }
     }
 

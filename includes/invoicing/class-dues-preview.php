@@ -15,7 +15,9 @@
  *   excluded_no_owner    Company has contacts but no Owner → no bill-to.
  *   excluded_zero_total  Nothing on the roster is billable this year.
  * Per-member exceptions (row still generated, but called out on the
- * card): contacts with no category tag when no default category is set.
+ * card): contacts with no category tag when no default category is set,
+ * and members on an online join whose payment hasn't settled — billed
+ * as usual, since that join may yet pay for nobody (join_coverage()).
  *
  * Billing modes (spec §3.4, per-firm override in Settings):
  *   firm              one 'combined' invoice to the Owner covering everyone.
@@ -34,6 +36,16 @@ class MyNJILGA_Dues_Preview {
     const EXCLUDED_NO_MEMBERS = 'excluded_no_members';
     const EXCLUDED_NO_OWNER   = 'excluded_no_owner';
     const EXCLUDED_ZERO_TOTAL = 'excluded_zero_total';
+
+    /**
+     * The dues_note on a member priced at $0 because an online join paid
+     * their dues. NOTE_JOIN_CLEARING was written by 3.1.3 for a join whose
+     * ACH debit was still clearing; nothing writes it now (only settled
+     * money covers anyone — see join_coverage()), but drafts carrying it
+     * may still exist, so it is still recognised.
+     */
+    const NOTE_JOIN_PAID     = 'paid via online join';
+    const NOTE_JOIN_CLEARING = 'online join payment clearing';
 
     /**
      * Compute (no DB writes) every invoice candidate for the year.
@@ -129,7 +141,7 @@ class MyNJILGA_Dues_Preview {
         $config  = self::config_for_year( $duesYear );
         $slugMap = self::resolve_configured_tags();
         $priced  = MyNJILGA_Pricing_Engine::price( [ self::roster_entry( $contact, $slugMap ) ], $config );
-        $members = $priced['members'];
+        $members = self::flag_join_pending( $priced['members'], $config );
         if ( empty( $members ) ) {
             return null;
         }
@@ -155,47 +167,109 @@ class MyNJILGA_Dues_Preview {
 
     /**
      * The engine config for a year's preview: the settings, plus everyone
-     * whose dues for that year were already paid through an online join
+     * whose dues for that year are already paid through an online join
      * (MyNJILGA_Join_Fulfillment) — they stay on the firm's roster at $0,
      * so re-running the preview for a year people have joined in never
-     * bills them a second time, and nobody else's tier shifts.
-     *
-     * That includes joins whose money is committed but not yet applied —
-     * an ACH debit clearing for days, or paid and waiting on a retry:
-     * they have no invoice row or "Dues Paid" tag yet, and a preview run
-     * in that window would otherwise freeze them onto the firm's invoice.
+     * bills them a second time, and nobody else's tier shifts — and, as
+     * 'dues_pending' (which the engine ignores), everyone on a join whose
+     * money hasn't settled, for flag_join_pending().
      *
      * @return array<string,mixed>
      */
     private static function config_for_year( int $duesYear ): array {
         $config   = MyNJILGA_Dues_Settings::engine_config();
-        $livemode = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
-        $covered  = [];
-        $rows     = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [
-            MyNJILGA_Dues_Invoice_Table::STATUS_CREATED,
-            MyNJILGA_Dues_Invoice_Table::STATUS_PAID,
-        ], $livemode );
-        foreach ( $rows as $row ) {
-            if ( (string) $row->invoice_kind !== MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
-                continue;
-            }
-            foreach ( MyNJILGA_Dues_Snapshot::members( $row ) as $m ) {
-                $cid = (int) ( $m['contact_id'] ?? 0 );
-                if ( $cid > 0 ) {
-                    $covered[ $cid ] = 'paid via online join';
-                }
-            }
-        }
-        foreach ( MyNJILGA_Join_Orders_Table::get_committed_for_year( $duesYear, $livemode ) as $join ) {
-            $reason = $join->status === MyNJILGA_Join_Orders_Table::STATUS_PROCESSING ? 'online join payment clearing' : 'paid via online join';
-            foreach ( MyNJILGA_Join_Fulfillment::contact_ids_for( $join ) as $cid ) {
-                if ( ! isset( $covered[ $cid ] ) ) {
-                    $covered[ $cid ] = $reason;
-                }
-            }
-        }
-        $config['dues_covered'] = $covered;
+        $coverage = self::join_coverage( $duesYear, MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+        $config['dues_covered'] = $coverage['covered'];
+        $config['dues_pending'] = $coverage['pending'];
         return $config;
+    }
+
+    /**
+     * Who online joins cover for a year and Stripe mode, as of now.
+     *
+     *   covered    contact id => NOTE_JOIN_PAID — settled money only: a
+     *              paid join's own invoice row, or a join whose payment is
+     *              in and checked but not yet applied (a failed run
+     *              waiting on a retry — it has no row or "Dues Paid" tag
+     *              yet, and a preview in that window would otherwise
+     *              freeze them onto the firm's invoice too).
+     *   pending    contact id => what they are waiting on — a join whose
+     *              ACH debit is still clearing, or that is paid but held
+     *              for staff because its checkout didn't verify. These
+     *              are NOT covered: the debit can still fail and a held
+     *              payment be refunded, and a firm invoice that listed
+     *              them at $0 would make them members for free when the
+     *              firm pays. They are priced as the firm would price
+     *              them and called out on the card instead.
+     *   join_rows  contact id => the paid join invoice row covering them
+     *              (MyNJILGA_Dues_Invoice_Table::join_paid_contacts()).
+     *
+     * Also what MyNJILGA_Invoice_Creator re-checks a frozen snapshot
+     * against before it goes out.
+     *
+     * @return array{covered:array<int,string>,pending:array<int,string>,join_rows:array<int,int>}
+     */
+    public static function join_coverage( int $duesYear, bool $livemode ): array {
+        $rows    = MyNJILGA_Dues_Invoice_Table::join_paid_contacts( $duesYear, $livemode );
+        $covered = array_fill_keys( array_keys( $rows ), self::NOTE_JOIN_PAID );
+        $pending = [];
+        foreach ( MyNJILGA_Join_Orders_Table::get_committed_for_year( $duesYear, $livemode ) as $join ) {
+            $settled = MyNJILGA_Join_Orders_Table::payment_settled( $join );
+            $waiting = sprintf(
+                'online join #%d, whose %s',
+                (int) $join->id,
+                $join->status === MyNJILGA_Join_Orders_Table::STATUS_PROCESSING
+                    ? 'bank payment is still clearing'
+                    : 'payment is held for staff review on the Online joins screen'
+            );
+            foreach ( MyNJILGA_Join_Fulfillment::contact_ids_for( $join ) as $cid ) {
+                if ( $settled ) {
+                    $covered[ $cid ] = self::NOTE_JOIN_PAID;
+                } elseif ( ! isset( $pending[ $cid ] ) ) {
+                    $pending[ $cid ] = $waiting;
+                }
+            }
+        }
+        return [
+            'covered'   => $covered,
+            'pending'   => array_diff_key( $pending, $covered ),
+            'join_rows' => $rows,
+        ];
+    }
+
+    /**
+     * Mark the members an unsettled online join names (config
+     * 'dues_pending', see join_coverage()) without changing their price —
+     * make_candidate() turns the mark into a note on the card, so staff
+     * can hold the invoice until the join settles one way or the other.
+     * Pure — tested directly.
+     *
+     * @param array<int,array<string,mixed>> $members Priced members.
+     * @param array<string,mixed>            $config
+     * @return array<int,array<string,mixed>>
+     */
+    public static function flag_join_pending( array $members, array $config ): array {
+        $pending = (array) ( $config['dues_pending'] ?? [] );
+        foreach ( $members as $i => $m ) {
+            $cid = (int) ( $m['contact_id'] ?? 0 );
+            if ( $cid > 0 && isset( $pending[ $cid ] ) ) {
+                $members[ $i ]['join_pending'] = (string) $pending[ $cid ];
+            }
+        }
+        return $members;
+    }
+
+    /**
+     * Whether a snapshot member is at $0 dues because an online join paid
+     * for them — as opposed to a 6th-or-later member, an exempt category
+     * or the inactive override. Pure — tested directly.
+     *
+     * @param array<string,mixed> $member
+     */
+    public static function priced_as_join_covered( array $member ): bool {
+        return (int) ( $member['dues_cents'] ?? 0 ) <= 0
+            && empty( $member['unbilled_reason'] )
+            && in_array( (string) ( $member['dues_note'] ?? '' ), [ self::NOTE_JOIN_PAID, self::NOTE_JOIN_CLEARING ], true );
     }
 
     // -------------------------------------------------------------------------
@@ -221,11 +295,11 @@ class MyNJILGA_Dues_Preview {
             // Still price the roster so the card can show what WOULD be
             // billed once an Owner is assigned.
             $priced = MyNJILGA_Pricing_Engine::price( self::roster_entries( $subs, $slugMap ), $config );
-            return [ self::make_candidate( $company, $duesYear, $mode, MyNJILGA_Dues_Snapshot::KIND_COMBINED, $owner, $owner, $priced['members'], self::EXCLUDED_NO_OWNER ) ];
+            return [ self::make_candidate( $company, $duesYear, $mode, MyNJILGA_Dues_Snapshot::KIND_COMBINED, $owner, $owner, self::flag_join_pending( $priced['members'], $config ), self::EXCLUDED_NO_OWNER ) ];
         }
 
         $priced  = MyNJILGA_Pricing_Engine::price( self::roster_entries( $subs, $slugMap ), $config );
-        $members = $priced['members'];
+        $members = self::flag_join_pending( $priced['members'], $config );
 
         if ( (int) $priced['totals']['total_cents'] <= 0 ) {
             return [ self::make_candidate( $company, $duesYear, $mode, MyNJILGA_Dues_Snapshot::KIND_COMBINED, $owner, $owner, $members, self::EXCLUDED_ZERO_TOTAL ) ];
@@ -368,9 +442,19 @@ class MyNJILGA_Dues_Preview {
      */
     private static function make_candidate( $company, int $duesYear, string $mode, string $kind, array $owner, array $billTo, array $members, string $status ): array {
         $noCategory = 0;
+        $notes      = [];
         foreach ( $members as $m ) {
             if ( ( $m['unbilled_reason'] ?? '' ) === MyNJILGA_Pricing_Engine::UNBILLED_NO_CATEGORY ) {
                 $noCategory++;
+            }
+            // Only where this invoice bills their dues — a split-assessment
+            // member's assessment invoice doesn't.
+            if ( ! empty( $m['join_pending'] ) && (int) ( $m['dues_cents'] ?? 0 ) > 0 ) {
+                $notes[] = sprintf(
+                    '%s is on %s — billed in full here, since that payment may yet cover nobody. If it settles, Refresh Firms re-prices them at $0; creating this invoice before then would bill them twice.',
+                    (string) ( $m['name'] ?? '' ) !== '' ? (string) $m['name'] : 'Contact #' . (int) ( $m['contact_id'] ?? 0 ),
+                    (string) $m['join_pending']
+                );
             }
         }
         return [
@@ -384,7 +468,7 @@ class MyNJILGA_Dues_Preview {
             'bill_to'      => $billTo,
             'members'      => array_values( $members ),
             'totals'       => MyNJILGA_Pricing_Engine::totals( $members ),
-            'notes'        => [],
+            'notes'        => $notes,
             'exceptions'   => [ 'no_category' => $noCategory ],
         ];
     }

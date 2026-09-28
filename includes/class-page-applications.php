@@ -100,8 +100,11 @@ class MyNJILGA_Page_Applications {
         // the admin Test/Live toggle is set (MyNJILGA_Join_Form::join_mode()),
         // so what matters here is whether Live can take a checkout at all.
         $live = MyNJILGA_Stripe_Connection::MODE_LIVE;
+        // The lines to paste live on the Shortcodes page, built from the
+        // current categories — naming keys here went stale on a rename.
         printf(
-            '<p class="njilga-section-desc">Paste <code>[njilga_join category="professional"]</code>, <code>[njilga_join category="law_student"]</code> or <code>[njilga_join category="emerging_professional"]</code> on each Membership page (any category key an applicant may pick in <a href="%s">Settings</a>). A paid join becomes a membership the moment Stripe confirms the payment; a join that comes to $0 waits here for a decision. Visitors always pay in Stripe Live mode, whichever mode the admin toggle is on; staff can rehearse in Test by adding <code>?njilga_test=1</code> to the page\'s address.</p>',
+            '<p class="njilga-section-desc">Paste a <code>[njilga_join category="…"]</code> line on each Membership page — <a href="%s">Shortcodes</a> has one ready to copy for every category an applicant may pick in <a href="%s">Settings</a>, and shows which pages already carry one. A paid join becomes a membership the moment Stripe confirms the payment; a join that comes to $0 waits here for a decision. Visitors always pay in Stripe Live mode, whichever mode the admin toggle is on; staff can rehearse in Test by adding <code>?njilga_test=1</code> to the page\'s address.</p>',
+            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SHORTCODES ) ),
             esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) )
         );
         if ( ! MyNJILGA_Stripe_Connection::is_connected( $live ) ) {
