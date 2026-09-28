@@ -5,9 +5,9 @@
  *
  * Front-end, inside the site's own theme, so (design.md §6) it keeps its
  * own small scoped stylesheet rather than loading the admin design
- * system: everything is under .njilga-join, colours are CSS custom
- * properties a theme can override (--nj-primary, --nj-accent, …), and
- * type inherits the theme's fonts.
+ * system: everything is under .njilga-join, and its fonts and colours
+ * are the site's own, via MyNJILGA_Front_Style (--nj-navy, --nj-blue,
+ * --nj-gold, … read from the theme's Automatic.css tokens).
  *
  * Works without JavaScript: every step renders as one long form with a
  * single submit, validated by the browser and again by the server. With
@@ -163,7 +163,7 @@ class MyNJILGA_Join_View {
             <form class="njilga-join__form" id="<?php echo esc_attr( $uid ); ?>" method="post" action="<?php echo esc_url( MyNJILGA_Join_Form::page_url() ); ?>">
                 <?php self::hidden( 'accept_invite' ); ?>
                 <div class="njilga-join__card">
-                    <h3 class="njilga-join__title">Create your NJILGA account</h3>
+                    <h3 class="njilga-join__title"><span class="njilga-join__eyebrow">Your invitation</span>Create your NJILGA account</h3>
                     <p><?php echo esc_html( sprintf( '%s %s has covered your %d NJILGA membership%s — it\'s already active. Choose a username and password to sign in to the website.', $join->first_name, $join->last_name, (int) $join->dues_year, $firm !== '' ? ' with ' . $firm : '' ) ); ?></p>
                     <?php self::general_error( $state ); ?>
                 </div>
@@ -217,6 +217,14 @@ class MyNJILGA_Join_View {
             ? [ 'enrollment' => 'Enrollment', 'details' => 'Your details', 'review' => $reviewLbl ]
             : array_filter( [ 'firm' => 'Your firm', 'details' => 'Your details', 'colleagues' => $a['colleagues'] ? 'Add colleagues' : '', 'review' => $reviewLbl ] );
 
+        // "Step 2 of 4" over each step's first heading (Inter eyebrows, as
+        // the site sets them over its own headings).
+        $stepKeys = array_keys( $steps );
+        $eyebrow  = static function ( string $key ) use ( $stepKeys ): string {
+            $i = array_search( $key, $stepKeys, true );
+            return $i === false ? '' : sprintf( '<span class="njilga-join__eyebrow">Step %d of %d</span>', $i + 1, count( $stepKeys ) );
+        };
+
         // Existing firm name for a re-rendered form.
         $firmName = (string) ( $old['firm_name'] ?? '' );
         if ( ! $isStudent && (int) ( $old['company_id'] ?? 0 ) > 0 && MyNJILGA_Members_Data::companies_module_active() ) {
@@ -234,6 +242,7 @@ class MyNJILGA_Join_View {
 
             <div class="njilga-join__plan">
                 <div>
+                    <span class="njilga-join__eyebrow">NJILGA Membership</span>
                     <div class="njilga-join__plan-name"><?php echo esc_html( (string) $category['label'] ); ?></div>
                     <div class="njilga-join__muted"><?php echo esc_html( self::covers( (int) $a['year'], (int) $a['current_year'] ) ); ?></div>
                 </div>
@@ -256,7 +265,7 @@ class MyNJILGA_Join_View {
 
                 <?php if ( $isStudent ) : ?>
                     <fieldset class="njilga-join__step njilga-join__card" data-step="enrollment">
-                        <legend class="njilga-join__title">Are you currently enrolled in law school?</legend>
+                        <legend class="njilga-join__title"><?php echo $eyebrow( 'enrollment' ); // phpcs:ignore ?>Are you currently enrolled in law school?</legend>
                         <div class="njilga-join__choices">
                             <?php foreach ( [ 'enrolled' => 'I am actively enrolled as a law student', 'undergrad' => 'I am an undergraduate student with aspirations to get into law school' ] as $val => $label ) : ?>
                                 <label class="njilga-join__choice"><input type="radio" name="student_status" value="<?php echo esc_attr( $val ); ?>" required<?php checked( (string) ( $old['student_status'] ?? '' ), $val ); ?>> <span><?php echo esc_html( $label ); ?></span></label>
@@ -266,7 +275,7 @@ class MyNJILGA_Join_View {
                     </fieldset>
                 <?php else : ?>
                     <fieldset class="njilga-join__step njilga-join__card" data-step="firm">
-                        <legend class="njilga-join__title">Which firm do you represent?</legend>
+                        <legend class="njilga-join__title"><?php echo $eyebrow( 'firm' ); // phpcs:ignore ?>Which firm do you represent?</legend>
                         <p class="njilga-join__muted">Start typing your firm's name and pick it from the list. Not there? Keep typing and choose <em>Add your firm</em>.</p>
                         <div class="njilga-join__field njilga-join__firm">
                             <label class="njilga-join__label" for="<?php echo esc_attr( $uid ); ?>-firm_name">Firm / organization <span class="njilga-join__req">*</span></label>
@@ -280,7 +289,7 @@ class MyNJILGA_Join_View {
                 <?php endif; ?>
 
                 <div class="njilga-join__step" data-step="details">
-                    <?php self::personal_card( $uid, $v, $errors, $a, $user, null ); ?>
+                    <?php self::personal_card( $uid, $v, $errors, $a, $user, null, $eyebrow( 'details' ) ); ?>
                     <div class="njilga-join__card">
                         <h3 class="njilga-join__title">Contact Details</h3>
                         <?php
@@ -314,7 +323,7 @@ class MyNJILGA_Join_View {
 
                 <?php if ( ! $isStudent && $a['colleagues'] ) : ?>
                     <fieldset class="njilga-join__step njilga-join__card" data-step="colleagues">
-                        <legend class="njilga-join__title">Bring your firm along</legend>
+                        <legend class="njilga-join__title"><?php echo $eyebrow( 'colleagues' ); // phpcs:ignore ?>Bring your firm along</legend>
                         <p><?php echo esc_html( self::ladder_sentence( $ladder ) ); ?> Pay for your colleagues now and we'll email each of them an invitation to set up their own account — their membership starts the moment yours does.</p>
                         <div class="njilga-join__choices">
                             <label class="njilga-join__choice"><input type="radio" name="add_colleagues" value="yes"<?php checked( (string) ( $old['add_colleagues'] ?? '' ), 'yes' ); ?>> <span>Yes — add colleagues from my firm and pay for them</span></label>
@@ -340,7 +349,7 @@ class MyNJILGA_Join_View {
                 <?php endif; ?>
 
                 <fieldset class="njilga-join__step njilga-join__card" data-step="review">
-                    <legend class="njilga-join__title"><?php echo esc_html( $reviewLbl ); ?></legend>
+                    <legend class="njilga-join__title"><?php echo $eyebrow( 'review' ); // phpcs:ignore ?><?php echo esc_html( $reviewLbl ); ?></legend>
                     <table class="njilga-join__summary" data-summary>
                         <tbody>
                             <tr><td><?php echo esc_html( (string) $category['label'] ); ?> — you</td><td class="njilga-join__num"><?php echo esc_html( self::dollars( $price ) ); ?></td></tr>
@@ -478,14 +487,15 @@ class MyNJILGA_Join_View {
      * @param WP_User|null         $user
      * @param object|null          $invite
      * @param array<string,string> $errors
+     * @param string               $eyebrowHtml Trusted markup for the "Step N of M" eyebrow.
      */
-    private static function personal_card( string $uid, callable $v, array $errors, array $a, $user, $invite ): void {
+    private static function personal_card( string $uid, callable $v, array $errors, array $a, $user, $invite, string $eyebrowHtml = '' ): void {
         $firstDefault = $invite ? (string) $invite->first_name : ( $user ? (string) $user->first_name : '' );
         $lastDefault  = $invite ? (string) $invite->last_name : ( $user ? (string) $user->last_name : '' );
         $newAccount   = ! $user;
         ?>
         <div class="njilga-join__card">
-            <h3 class="njilga-join__title">Personal Details</h3>
+            <h3 class="njilga-join__title"><?php echo $eyebrowHtml; // phpcs:ignore -- built from fixed words ?>Personal Details</h3>
             <?php if ( $user ) : ?>
                 <p class="njilga-join__muted"><?php echo esc_html( sprintf( 'Signed in as %s (%s).', $user->user_login, $user->user_email ) ); ?> <a href="<?php echo esc_url( wp_logout_url( (string) $a['action_url'] ) ); ?>">Not you?</a></p>
             <?php endif; ?>
@@ -827,78 +837,103 @@ class MyNJILGA_Join_View {
             return '';
         }
         self::$styled = true;
-        return '<style>
-.njilga-join{--nj-primary:#1c2b45;--nj-primary-fg:#fff;--nj-accent:#c5a253;--nj-fg:#1f2937;--nj-muted:#6b7280;--nj-border:#d1d5db;--nj-card:#fff;--nj-soft:#f4f5f7;--nj-danger:#b42318;--nj-danger-bg:#fef3f2;--nj-success:#067647;--nj-success-bg:#ecfdf3;--nj-warn:#b54708;--nj-warn-bg:#fffaeb;--nj-radius:8px;max-width:960px;margin:0 auto;color:var(--nj-fg);box-sizing:border-box}
+        MyNJILGA_Front_Style::enqueue_fonts();
+        return '<style>' . MyNJILGA_Front_Style::tokens( '.njilga-join' ) . '
+.njilga-join{max-width:920px;margin:0 auto;box-sizing:border-box;-webkit-font-smoothing:antialiased}
 .njilga-join *,.njilga-join *::before,.njilga-join *::after{box-sizing:border-box}
 .njilga-join [hidden]{display:none!important}
 .njilga-join [tabindex="-1"]:focus{outline:none}
-.njilga-join strong{font-weight:700}
-.njilga-join__card{background:var(--nj-card);border:1px solid #e5e7eb;border-radius:var(--nj-radius);box-shadow:0 1px 3px rgba(16,24,40,.06);padding:28px 36px;margin:0 0 24px;min-width:0}
-.njilga-join__card--success{border-color:#abefc6}
-.njilga-join__card--error{border-color:#fecdca}
+.njilga-join strong{font-weight:700;color:var(--nj-ink)}
+.njilga-join p{margin:0 0 16px}
+.njilga-join p:last-child{margin-bottom:0}
+.njilga-join a{color:var(--nj-blue);text-decoration:underline;text-underline-offset:2px}
+.njilga-join a:hover{color:var(--nj-blue-dark)}
+.njilga-join__eyebrow{display:block;font-family:var(--nj-font-ui);font-size:12px;font-weight:600;letter-spacing:.14em;line-height:1.4;text-transform:uppercase;color:var(--nj-blue);margin:0 0 10px}
+.njilga-join__plan{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;background:var(--nj-navy);color:#fff;border-radius:var(--nj-radius);padding:30px 40px;margin:0 0 28px}
+.njilga-join__plan .njilga-join__eyebrow{color:var(--nj-gold);margin-bottom:8px}
+.njilga-join__plan-name{font-family:var(--nj-font-head);font-size:30px;font-weight:700;line-height:1.2;color:#fff}
+.njilga-join__plan .njilga-join__muted{color:rgba(255,255,255,.78);font-size:15px;margin:8px 0 0}
+.njilga-join__plan-price{font-family:var(--nj-font-head);font-size:44px;font-weight:700;line-height:1;white-space:nowrap;color:#fff}
+.njilga-join__plan-price span{font-family:var(--nj-font-ui);font-size:14px;font-weight:500;margin-left:6px;opacity:.78}
+.njilga-join__steps{display:flex;flex-wrap:wrap;gap:12px 32px;list-style:none;margin:0 0 28px;padding:0;font-family:var(--nj-font-ui);font-size:14px;font-weight:500;color:var(--nj-muted)}
+.njilga-join__steps li{display:flex;align-items:center;gap:10px;margin:0}
+.njilga-join__steps li span{display:inline-flex;width:28px;height:28px;border-radius:50%;align-items:center;justify-content:center;border:1px solid var(--nj-field);background:#fff;font-size:12px;font-weight:600;color:var(--nj-muted)}
+.njilga-join__steps li.is-current{color:var(--nj-ink);font-weight:600}
+.njilga-join__steps li.is-current span,.njilga-join__steps li.is-done span{background:var(--nj-navy);border-color:var(--nj-navy);color:#fff}
+.njilga-join__steps li.is-done{color:var(--nj-text)}
+.njilga-join__card{background:#fff;border:1px solid var(--nj-line);border-radius:var(--nj-radius);box-shadow:0 1px 2px rgba(16,24,40,.04),0 4px 16px rgba(16,24,40,.04);padding:36px 40px;margin:0 0 24px;min-width:0}
+.njilga-join__card--success{border-top:4px solid var(--nj-success)}
+.njilga-join__card--error{border-top:4px solid var(--nj-danger)}
 .njilga-join fieldset.njilga-join__card{display:block}
-.njilga-join__title{font-size:1.35em;margin:0 0 14px;padding:0;line-height:1.25}
+.njilga-join__title{font-family:var(--nj-font-head);font-size:26px;font-weight:700;line-height:1.25;color:var(--nj-ink);margin:0 0 20px;padding:0;letter-spacing:0;text-transform:none}
 .njilga-join legend.njilga-join__title{float:left;width:100%}
 .njilga-join legend.njilga-join__title+*{clear:both}
-.njilga-join__optional{font-size:.7em;font-weight:400;color:var(--nj-muted)}
-.njilga-join__plan{display:flex;justify-content:space-between;align-items:center;gap:16px;background:var(--nj-primary);color:var(--nj-primary-fg);border-radius:var(--nj-radius);padding:18px 24px;margin:0 0 20px}
-.njilga-join__plan .njilga-join__muted{color:rgba(255,255,255,.75)}
-.njilga-join__plan-name{font-weight:700;font-size:1.1em}
-.njilga-join__plan-price{font-size:1.8em;font-weight:700;white-space:nowrap}
-.njilga-join__plan-price span{font-size:.45em;font-weight:400;margin-left:4px;opacity:.8}
-.njilga-join__steps{display:flex;flex-wrap:wrap;gap:8px 20px;list-style:none;margin:0 0 20px;padding:0;font-size:.9em;color:var(--nj-muted)}
-.njilga-join__steps li{display:flex;align-items:center;gap:8px}
-.njilga-join__steps li span{display:inline-flex;width:24px;height:24px;border-radius:50%;align-items:center;justify-content:center;border:1px solid var(--nj-border);font-size:.85em}
-.njilga-join__steps li.is-current{color:var(--nj-fg);font-weight:600}
-.njilga-join__steps li.is-current span,.njilga-join__steps li.is-done span{background:var(--nj-primary);border-color:var(--nj-primary);color:var(--nj-primary-fg)}
-.njilga-join__field{margin:0 0 16px;min-width:0}
-.njilga-join__label{display:block;color:var(--nj-muted);font-size:.95em;margin:0 0 6px}
+.njilga-join__title+p,.njilga-join legend.njilga-join__title+p{margin-top:-8px;margin-bottom:24px;color:var(--nj-text)}
+.njilga-join__optional{font-family:var(--nj-font-ui);font-size:13px;font-weight:500;color:var(--nj-muted)}
+.njilga-join__field{margin:0 0 20px;min-width:0}
+.njilga-join__label{display:block;font-family:var(--nj-font-ui);font-size:14px;font-weight:500;line-height:1.4;color:var(--nj-ink);margin:0 0 8px}
 .njilga-join__labelrow{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
-.njilga-join__req{color:var(--nj-danger)}
-.njilga-join input[type=text],.njilga-join input[type=email],.njilga-join input[type=tel],.njilga-join input[type=password],.njilga-join input[type=date],.njilga-join input[type=file],.njilga-join select{width:100%;min-height:48px;padding:10px 14px;border:1px solid #9ca3af;border-radius:6px;background:#fff;color:var(--nj-fg);font:inherit;margin:0}
-.njilga-join input[type=file]{padding:10px}
-.njilga-join input:focus,.njilga-join select:focus{outline:2px solid var(--nj-accent);outline-offset:1px;border-color:var(--nj-primary)}
+.njilga-join__labelrow .njilga-join__label{margin-bottom:8px}
+.njilga-join__req{color:var(--nj-danger);margin-left:2px}
+.njilga-join input[type=text],.njilga-join input[type=email],.njilga-join input[type=tel],.njilga-join input[type=password],.njilga-join input[type=date],.njilga-join input[type=file],.njilga-join select{display:block;width:100%;min-height:48px;padding:11px 14px;border:1px solid var(--nj-field);border-radius:var(--nj-radius-sm);background:#fff;color:var(--nj-ink);font-family:var(--nj-font-body);font-size:16px;line-height:1.4;margin:0;box-shadow:none;transition:border-color .15s,box-shadow .15s}
+.njilga-join input::placeholder{color:#9aa0a6;opacity:1}
+.njilga-join input[type=file]{padding:10px;font-size:15px}
+.njilga-join input:hover,.njilga-join select:hover{border-color:#9aa0a6}
+.njilga-join input:focus,.njilga-join select:focus{outline:none;border-color:var(--nj-blue);box-shadow:0 0 0 3px rgba(31,84,147,.18)}
 .njilga-join [aria-invalid=true],.njilga-join .is-invalid input{border-color:var(--nj-danger)}
-.njilga-join__grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
-.njilga-join__grid--name{grid-template-columns:minmax(96px,120px) 1fr 1fr}
-.njilga-join__hint.is-bad{color:#b42318}
-.njilga-join__static{min-height:48px;padding:12px 14px;border-radius:6px;background:var(--nj-soft)}
-.njilga-join__foot{margin:8px -36px -28px;padding:16px 36px;background:var(--nj-soft);border-top:1px solid #e5e7eb;border-radius:0 0 var(--nj-radius) var(--nj-radius)}
-.njilga-join__hint,.njilga-join__muted{color:var(--nj-muted);font-size:.9em;margin:6px 0 0}
-.njilga-join__err{color:var(--nj-danger);font-size:.9em;margin:6px 0 0}
-.njilga-join__notice{border:1px solid #bfdbfe;background:#eff6ff;border-radius:var(--nj-radius);padding:14px 18px;margin:0 0 20px}
+.njilga-join__grid{display:grid;grid-template-columns:1fr 1fr;gap:0 20px}
+.njilga-join__grid--name{grid-template-columns:minmax(96px,124px) 1fr 1fr}
+.njilga-join__static{min-height:48px;padding:12px 14px;border-radius:var(--nj-radius-sm);background:var(--nj-soft);color:var(--nj-ink)}
+.njilga-join__hint,.njilga-join__muted{color:var(--nj-muted);font-size:14px;line-height:1.5;margin:8px 0 0}
+.njilga-join__hint.is-bad{color:var(--nj-danger)}
+[data-add-colleague]+.njilga-join__hint{margin-top:16px}
+.njilga-join__err{color:var(--nj-danger);font-size:14px;line-height:1.5;margin:8px 0 0}
+.njilga-join__foot{margin:12px -40px -36px;padding:18px 40px;background:var(--nj-soft);border-top:1px solid var(--nj-line);border-radius:0 0 var(--nj-radius) var(--nj-radius);font-size:15px}
+.njilga-join__notice{border:1px solid #c0d6f2;border-left:4px solid var(--nj-blue);background:var(--nj-blue-soft);color:var(--nj-ink);border-radius:var(--nj-radius-sm);padding:16px 20px;margin:0 0 24px;font-size:15px;line-height:1.55}
 .njilga-join__notice ul{margin:8px 0 0 20px;padding:0}
-.njilga-join__notice--error{border-color:#fecdca;background:var(--nj-danger-bg);color:var(--nj-danger)}
-.njilga-join__notice--success{border-color:#abefc6;background:var(--nj-success-bg);color:var(--nj-success)}
-.njilga-join__notice--warning{border-color:#fedf89;background:var(--nj-warn-bg);color:var(--nj-warn)}
-.njilga-join__choices{display:grid;gap:10px;margin:0 0 12px}
-.njilga-join__choice{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--nj-border);border-radius:6px;padding:14px 16px;cursor:pointer}
-.njilga-join__choice:has(input:checked){border-color:var(--nj-primary);box-shadow:0 0 0 1px var(--nj-primary)}
-.njilga-join__choice input{margin-top:4px}
-.njilga-join__check{display:flex;gap:10px;align-items:center;margin:0 0 16px;color:var(--nj-muted)}
+.njilga-join__notice--error{border-color:#fecdca;border-left-color:var(--nj-danger);background:var(--nj-danger-bg);color:var(--nj-danger)}
+.njilga-join__notice--success{border-color:#abefc6;border-left-color:var(--nj-success);background:var(--nj-success-bg);color:var(--nj-success)}
+.njilga-join__notice--warning{border-color:#fedf89;border-left-color:var(--nj-gold);background:var(--nj-warn-bg);color:var(--nj-warn)}
+.njilga-join__choices{display:grid;gap:12px;margin:0 0 12px}
+.njilga-join__choice{display:flex;align-items:center;gap:14px;margin:0;padding:16px 20px;border:1px solid var(--nj-field);border-radius:var(--nj-radius-sm);background:#fff;color:var(--nj-ink);font-family:var(--nj-font-body);font-size:16px;line-height:1.45;cursor:pointer;transition:border-color .15s,background-color .15s,box-shadow .15s}
+.njilga-join__choice:hover{border-color:#9aa0a6}
+.njilga-join__choice:has(input:checked){border-color:var(--nj-navy);background:var(--nj-blue-soft);box-shadow:inset 0 0 0 1px var(--nj-navy)}
+.njilga-join__choice input,.njilga-join__check input{flex:0 0 auto;width:18px;height:18px;margin:0;accent-color:var(--nj-navy)}
+.njilga-join__choice span{color:inherit}
+.njilga-join__check{display:flex;gap:12px;align-items:center;margin:0 0 20px;color:var(--nj-text);font-size:15px;cursor:pointer}
 .njilga-join__firm{position:relative}
-.njilga-join__suggest{position:absolute;left:0;right:0;top:78px;z-index:50;background:#fff;border:1px solid var(--nj-border);border-radius:6px;list-style:none;margin:0;padding:4px 0;max-height:260px;overflow:auto;box-shadow:0 8px 24px rgba(16,24,40,.12);display:none}
-.njilga-join__suggest li{padding:10px 14px;cursor:pointer;margin:0}
+.njilga-join__suggest{position:absolute;left:0;right:0;top:82px;z-index:50;background:#fff;border:1px solid var(--nj-field);border-radius:var(--nj-radius-sm);list-style:none;margin:0;padding:6px 0;max-height:280px;overflow:auto;box-shadow:0 12px 32px rgba(16,24,40,.14);display:none}
+.njilga-join__suggest li{padding:11px 16px;cursor:pointer;margin:0;color:var(--nj-ink)}
 .njilga-join__suggest li:hover,.njilga-join__suggest li[aria-selected=true]{background:var(--nj-soft)}
-.njilga-join__suggest li.is-new{color:var(--nj-primary);font-weight:600;border-top:1px solid #eee}
-.njilga-join__colleague{display:grid;grid-template-columns:1fr 1fr 1.4fr 36px;gap:0 12px;align-items:end;padding:12px 0;border-top:1px solid #eee}
-.njilga-join__colleague .njilga-join__err{grid-column:1/-1;margin-top:0}
-.njilga-join__remove{width:36px;height:48px;margin:0 0 16px;border:0;background:none;color:var(--nj-muted);font-size:24px;cursor:pointer}
-.njilga-join__summary{width:100%;border-collapse:collapse;margin:0 0 12px}
-.njilga-join__summary td,.njilga-join__summary th{padding:10px 0;border-bottom:1px solid #eee;text-align:left;font-weight:400}
-.njilga-join__summary tfoot th{font-weight:700;border-bottom:0;font-size:1.1em}
-.njilga-join__num{text-align:right!important;white-space:nowrap;padding-left:16px!important}
-.njilga-join__actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:16px}
+.njilga-join__suggest li.is-new{color:var(--nj-blue);font-weight:600;border-top:1px solid var(--nj-line)}
+.njilga-join__colleagues{margin:8px 0 0}
+.njilga-join__colleague{display:grid;grid-template-columns:1fr 1fr 1.4fr 40px;gap:0 16px;align-items:end;padding:20px 0 4px;border-top:1px solid var(--nj-line)}
+.njilga-join__colleague .njilga-join__err{grid-column:1/-1;margin:0 0 12px}
+.njilga-join__remove{width:40px;height:48px;margin:0 0 20px;border:1px solid transparent;border-radius:var(--nj-radius-sm);background:none;color:var(--nj-muted);font-size:24px;line-height:1;cursor:pointer}
+.njilga-join__remove:hover{border-color:var(--nj-line);color:var(--nj-danger)}
+.njilga-join__summary{width:100%;border-collapse:collapse;margin:0 0 20px;font-size:16px}
+.njilga-join__summary td,.njilga-join__summary th{padding:14px 0;border-bottom:1px solid var(--nj-line);text-align:left;font-weight:400;vertical-align:top}
+.njilga-join__summary tfoot th{font-family:var(--nj-font-ui);font-weight:700;font-size:17px;color:var(--nj-ink);border-bottom:0;padding-top:18px}
+.njilga-join__summary .njilga-join__muted{display:block;margin:2px 0 0}
+.njilga-join__num{text-align:right!important;white-space:nowrap;padding-left:16px!important;color:var(--nj-ink)}
+.njilga-join__actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:28px 0 0;padding:24px 0 0;border-top:1px solid var(--nj-line)}
+.njilga-join__actions:only-child,.njilga-join__card>.njilga-join__actions:first-child{border-top:0;padding-top:0;margin-top:0}
 .njilga-join__inline{display:inline;margin:0}
-.njilga-join__btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:12px 28px;border-radius:6px;border:1px solid var(--nj-primary);font:inherit;font-weight:700;cursor:pointer;text-decoration:none;line-height:1.2}
-.njilga-join__btn--primary{background:var(--nj-primary);color:var(--nj-primary-fg)}
-.njilga-join__btn--primary:hover{background:var(--nj-accent);border-color:var(--nj-accent);color:#fff}
-.njilga-join__btn--ghost{background:transparent;color:var(--nj-primary)}
+.njilga-join__btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:12px 28px;border-radius:var(--nj-radius-sm);border:1px solid var(--nj-navy);font-family:var(--nj-font-ui);font-size:15px;font-weight:600;letter-spacing:.01em;line-height:1.2;cursor:pointer;text-decoration:none!important;transition:background-color .15s,border-color .15s,color .15s}
+.njilga-join__btn--primary{background:var(--nj-navy);color:#fff!important}
+.njilga-join__btn--primary:hover{background:var(--nj-blue);border-color:var(--nj-blue);color:#fff}
+.njilga-join__btn--ghost{background:#fff;color:var(--nj-navy)!important;border-color:var(--nj-field)}
+.njilga-join__btn--ghost:hover{border-color:var(--nj-navy);background:var(--nj-soft)}
+.njilga-join__btn:focus-visible,.njilga-join__toggle:focus-visible{outline:2px solid var(--nj-blue);outline-offset:2px}
 .njilga-join__btn[disabled]{opacity:.6;cursor:wait}
-.njilga-join__toggle{border:0;background:none;padding:0;color:var(--nj-primary);font:inherit;font-size:.9em;font-weight:600;cursor:pointer}
-.njilga-join__nav{display:flex;justify-content:space-between;gap:12px;margin:-4px 0 24px}
+.njilga-join__toggle{border:0;background:none;padding:0;margin:8px 0 0;color:var(--nj-blue);font-family:var(--nj-font-ui);font-size:13px;font-weight:600;cursor:pointer}
+.njilga-join__labelrow .njilga-join__toggle{margin:0}
+.njilga-join__toggle:hover{color:var(--nj-blue-dark);text-decoration:underline}
+.njilga-join__nav{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:28px 0 0;padding:24px 0 0;border-top:1px solid var(--nj-line)}
+.njilga-join__step:not(.njilga-join__card)>.njilga-join__nav{margin:4px 0 24px;padding:0;border-top:0}
+.njilga-join__actions .njilga-join__nav{margin:0;padding:0;border:0}
 .njilga-join__hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
-@media (max-width:640px){.njilga-join__card{padding:20px}.njilga-join__foot{margin:8px -20px -20px;padding:14px 20px}.njilga-join__grid{grid-template-columns:1fr}.njilga-join__colleague{grid-template-columns:1fr 36px}.njilga-join__colleague .njilga-join__field{grid-column:1}.njilga-join__remove{grid-row:1;grid-column:2}.njilga-join__plan{flex-direction:column;align-items:flex-start}}
+@media (max-width:640px){.njilga-join__card{padding:24px 20px}.njilga-join__foot{margin:12px -20px -24px;padding:16px 20px}.njilga-join__title{font-size:22px}.njilga-join__grid,.njilga-join__grid--name{grid-template-columns:1fr}.njilga-join__plan{flex-direction:column;align-items:flex-start;padding:24px 20px}.njilga-join__plan-name{font-size:24px}.njilga-join__plan-price{font-size:36px}.njilga-join__steps{gap:8px 12px;flex-wrap:nowrap}.njilga-join__steps li:not(.is-current){font-size:0;gap:0}.njilga-join__steps li span{font-size:12px}.njilga-join__colleague{grid-template-columns:1fr 40px}.njilga-join__colleague .njilga-join__field{grid-column:1}.njilga-join__remove{grid-row:1;grid-column:2}.njilga-join__nav .njilga-join__btn,.njilga-join__actions .njilga-join__btn{padding:12px 20px}}
 </style>';
     }
 

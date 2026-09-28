@@ -346,11 +346,23 @@ stylesheets. They deliberately do not load this admin stylesheet:
 matching the theme matters more there than matching the admin. If they
 are ever unified, the tokens in §2 are the place to start.
 
+All three share one look, `MyNJILGA_Front_Style`
+(`includes/class-front-style.php`), taken from the NJILGA site's own
+stylesheet: **Playfair Display** for headings, **Helvetica** for body
+text, **Inter** for eyebrows, labels and buttons. Its colour tokens —
+`--nj-navy`, `--nj-blue`, `--nj-gold`, `--nj-line`, `--nj-muted`, … — read
+the site's Automatic.css variables (`--secondary`, `--primary`,
+`--accent`, `--btn-radius`) with the site's values as fallbacks, and are
+scoped to each shortcode's root class (`.njilga-join`, `.njilga-status`,
+`.njilga-app`). Sizes are px, not rem: Automatic.css sets the root font
+size to 62.5%. Inter is loaded from Google Fonts only on pages with a form
+(`my_njilga_front_font_url` filter; `''` leaves it to the theme).
+
 `[njilga_join]` (`MyNJILGA_Join_View`) goes furthest: everything is under
-`.njilga-join`, its colours are custom properties a theme can override
-(`--nj-primary` navy, `--nj-accent` gold, `--nj-border`, `--nj-muted`, …),
-headings and body inherit the theme's fonts, and the layout follows the
-site's existing membership forms — white cards, grey labels over 48px
-inputs, a two-column grid for confirm-password/confirm-email that
-collapses on phones. It must work without JavaScript (one long form, one
-submit) and become a step-by-step wizard with it.
+`.njilga-join`; a navy plan banner, a numbered step row (compacted to
+the current step's label on phones), then white cards with an Inter
+eyebrow ("Step 2 of 4") over a Playfair title, Inter labels over 48px
+inputs, a two-column grid for password/confirm that collapses on phones,
+and Back/Continue separated from the card body by a hairline. It must
+work without JavaScript (one long form, one submit) and become a
+step-by-step wizard with it.

@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
- * Version:     3.4.0
+ * Version:     3.4.1
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -92,6 +92,7 @@ require_once NJILGA_REPORT_DIR . 'includes/class-firm-status-page.php';
 // Online joining — [njilga_join]: join and pay through Stripe Checkout,
 // with the firm upsell and colleague invitations. See includes/join/.
 require_once NJILGA_REPORT_DIR . 'includes/class-phone.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-front-style.php';
 require_once NJILGA_REPORT_DIR . 'includes/join/class-join-orders-table.php';
 require_once NJILGA_REPORT_DIR . 'includes/join/class-join-invites-table.php';
 require_once NJILGA_REPORT_DIR . 'includes/join/class-join-pricing.php';

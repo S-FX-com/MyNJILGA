@@ -251,6 +251,8 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 **Mailing address.** Without JavaScript every address field shows, labelled for US or overseas addresses, and the server checks them by the "outside the United States" box; with JavaScript only the fields that apply show and are sent. The postcode field is shared: a 5-digit ZIP for US addresses, optional free text for others, saved either way.
 
+**Look.** The public forms — the join wizard, the invite form, `[njilga_firm_dues_status]` and `[njilga_membership_application]` — follow the NJILGA site's stylesheet: **Playfair Display** headings, **Helvetica** body text, and **Inter** for eyebrows ("Step 2 of 4", "NJILGA Membership"), labels and buttons; colours come from the site's Automatic.css tokens (`--secondary` navy buttons, `--primary` blue, `--accent` gold, `--btn-radius`), each with the site's own value as the fallback on a site without Automatic.css. Sizes are in px because Automatic.css sets the root font size to 62.5%. Playfair Display comes from the theme; Inter isn't on the site, so the plugin loads it from Google Fonts on pages that show a form — return `''` from the `my_njilga_front_font_url` filter to leave font loading to the theme.
+
 **Shortcodes.** My NJILGA → **Shortcodes** lists a ready-to-paste `[njilga_join category="…"]` line for every category an applicant may pick (with its price), the `category`/`form` attributes, whether joining is open right now, and every page that carries each shortcode — with a warning when a category has no page.
 
 **Student documents** are stored outside the Media Library in `uploads/njilga-private/` (deny-all `.htaccess`, random 128-bit names; on nginx deny the path, or define `NJILGA_PRIVATE_DIR` outside the web root), shown to staff only, flagged "not yet checked" until staff mark them, and purged 30 days after a join that never became a membership. The size limit shown and enforced is 8 MB or the server's own upload limit, whichever is lower.
@@ -307,6 +309,8 @@ my-njilga/
 │   ├── class-page-applications.php       ← Enrollment review queue
 │   ├── class-page-setup.php              ← Environment, tag/product audit, Stripe health + API log
 │   ├── class-firm-status-page.php        ← [njilga_firm_dues_status]
+│   ├── class-phone.php                   ← PURE: phone numbers in FluentCRM's shape (+1 ###-###-####) — unit-tested
+│   ├── class-front-style.php             ← Shared look of the public forms: site fonts + Automatic.css colour tokens
 │   ├── join/                             ← [njilga_join] — online joining (Stripe Checkout)
 │   │   ├── class-join-form.php           ← Controller: POST handling, validation, email codes, account, checkout
 │   │   ├── class-join-view.php           ← Markup, scoped front-end CSS, wizard/type-ahead JS
