@@ -133,7 +133,7 @@ class MyNJILGA_Firm_Status_Page {
         printf(
             '<div class="njilga-status__head"><div><strong>%s</strong>%s<div class="njilga-status__meta">Billed to %s%s</div></div><div class="njilga-status__right"><div class="njilga-status__total">%s</div><div class="njilga-status__pill njilga-status__pill--%s">%s</div></div></div>',
             esc_html( MyNJILGA_Dues_Snapshot::company_name( $row ) ),
-            $kind === MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT ? ' <span class="njilga-status__tag">assessment</span>' : ( $kind === MyNJILGA_Dues_Snapshot::KIND_DUES ? ' <span class="njilga-status__tag">dues only</span>' : '' ),
+            $kind === MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT ? ' <span class="njilga-status__tag">assessment</span>' : ( $kind === MyNJILGA_Dues_Snapshot::KIND_DUES ? ' <span class="njilga-status__tag">dues only</span>' : ( $kind === MyNJILGA_Dues_Snapshot::KIND_JOIN ? ' <span class="njilga-status__tag">joined online</span>' : '' ) ),
             esc_html( $billTo['name'] !== '' ? $billTo['name'] : $billTo['email'] ),
             (int) $billTo['contact_id'] === $viewerContactId ? ' (you)' : '',
             esc_html( MyNJILGA_Invoicing::money( (int) $row->total_amount_cents ) ),

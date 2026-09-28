@@ -49,6 +49,14 @@ class MyNJILGA_Payment_Listener {
         if ( ! $invoiceRow ) {
             return; // Not a dues invoice — some other invoice.
         }
+        // An online join's row is written, ledgered and settled by
+        // MyNJILGA_Join_Fulfillment alone. Letting a webhook or reconcile
+        // of the same payment in here would book it a second time under a
+        // different object id (and a Checkout invoice's out-of-band flag
+        // as off-Stripe money).
+        if ( (string) ( $invoiceRow->invoice_kind ?? '' ) === MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
+            return;
+        }
 
         if ( ! empty( $payment ) ) {
             $ledgerData = $payment;
@@ -140,6 +148,98 @@ class MyNJILGA_Payment_Listener {
         );
 
         return [ 'members' => $touched, 'roles_granted' => $granted, 'roles_skipped' => $skipped ];
+    }
+
+    /**
+     * A member paid for before they had a website account — a colleague
+     * covered by an online join, someone on a firm invoice — gets their
+     * category's role the first time the account appears (registration,
+     * or their next login), rather than only at the next payment. Only
+     * ever grants; never removes. Hooked on user_register and wp_login.
+     *
+     * "Paid" means paid for THIS dues year or the next one (the batch goes
+     * out ahead of the year it covers), not just the evergreen paid tag:
+     * the downgrade sweep only strips that from people on an unpaid
+     * invoice, so a lapsed member who left their firm can still carry it.
+     * The join form creates its applicant's account BEFORE payment, and
+     * this fires on that registration — with the evergreen tag alone, a
+     * lapsed member could start a join, abandon the checkout, and keep
+     * the member role.
+     *
+     * @param int|\WP_User $user
+     */
+    public static function sync_role_for_user( $user ): void {
+        try {
+            $user = $user instanceof \WP_User ? $user : get_user_by( 'id', (int) $user );
+            if ( ! $user || ! MyNJILGA_Members_Data::fluentcrm_active() || ! class_exists( '\\FluentCrm\\App\\Models\\Subscriber' ) ) {
+                return;
+            }
+            $contact = self::contact_for_user( $user );
+            if ( ! $contact || ! MyNJILGA_Tags::has_slug( $contact, (string) MyNJILGA_Dues_Settings::general( 'paid_tag', 'dues-paid' ) ) || ! self::paid_for_current_year( $contact ) ) {
+                return;
+            }
+            // Never re-point a contact another account already owns.
+            if ( ! empty( $contact->user_id ) && (int) $contact->user_id !== (int) $user->ID ) {
+                return;
+            }
+            if ( empty( $contact->user_id ) ) {
+                $contact->user_id = (int) $user->ID;
+                $contact->save();
+            }
+            $role = '';
+            foreach ( MyNJILGA_Dues_Settings::categories() as $cat ) {
+                if ( (string) $cat['tag'] !== '' && MyNJILGA_Tags::has_slug( $contact, (string) $cat['tag'] ) ) {
+                    $role = (string) $cat['role'];
+                    break;
+                }
+            }
+            if ( $role === '' ) {
+                $default = MyNJILGA_Dues_Settings::category( (string) MyNJILGA_Dues_Settings::general( 'default_category', '' ) );
+                $role    = $default ? (string) $default['role'] : '';
+            }
+            self::grant_role( $contact, $role );
+        } catch ( \Throwable $e ) {
+            // Never let a CRM hiccup break a login.
+        }
+    }
+
+    /**
+     * The contact this account belongs to — linked by user_id, else
+     * matched on the account's email — looked up WITHOUT side effects.
+     * FluentCRM's getContactByUserRef() falls back to the email the same
+     * way, but then writes this user's id onto whatever contact it found
+     * and saves it before returning, so the "another account already owns
+     * it" guard in sync_role_for_user() could never fire: on a mere login,
+     * a contact linked to user 5 whose email matches user 9 was moved to
+     * user 9 (with its member role). Any linking is left to the caller,
+     * after that guard.
+     *
+     * @return object|null A FluentCRM Subscriber.
+     */
+    private static function contact_for_user( \WP_User $user ) {
+        $contact = \FluentCrm\App\Models\Subscriber::where( 'user_id', (int) $user->ID )->first();
+        if ( ! $contact && ! empty( $user->user_email ) ) {
+            $contact = \FluentCrm\App\Models\Subscriber::where( 'email', (string) $user->user_email )->first();
+        }
+        return $contact ?: null;
+    }
+
+    /**
+     * Whether the contact carries "Dues Paid {year}" for the current dues
+     * year or the next one — the batch for next year goes out (and is
+     * paid) before that year starts, and an online join after the cutover
+     * pays for next year.
+     *
+     * @param object $contact A FluentCRM Subscriber.
+     */
+    public static function paid_for_current_year( $contact ): bool {
+        $year = MyNJILGA_Invoicing::current_dues_year();
+        foreach ( [ $year, $year + 1 ] as $y ) {
+            if ( MyNJILGA_Tags::has_title( $contact, MyNJILGA_Dues_Settings::year_tag( 'year_paid_tag_pattern', $y ) ) ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

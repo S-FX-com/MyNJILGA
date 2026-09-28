@@ -89,9 +89,11 @@ class MyNJILGA_Stripe_Client {
         $result = $this->send_once( $url, $args );
 
         // Retry exactly once, after a 1s delay, on a 5xx or a transport
-        // failure (status 0). Never retry a 4xx. This client is only ever
-        // called from Action Scheduler background jobs, never a
-        // user-facing request thread, so a blocking sleep is acceptable.
+        // failure (status 0). Never retry a 4xx. Mostly called from Action
+        // Scheduler background jobs; the online join also calls it while
+        // an applicant waits (opening and checking their checkout), where
+        // one 1s pause on a Stripe 5xx is still a better answer than an
+        // error.
         if ( $result['status'] === 0 || $result['status'] >= 500 ) {
             sleep( 1 );
             $result = $this->send_once( $url, $args );

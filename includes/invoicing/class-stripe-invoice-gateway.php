@@ -22,10 +22,17 @@
  *     whole) before the invoice is finalized.
  *
  *   - Settlement (granting roles/tags on payment) is intentionally NOT
- *     performed anywhere in this class. The `invoice.paid` webhook is the
- *     ONLY code path allowed to call MyNJILGA_Payment_Listener::settle(),
- *     however an invoice came to be paid — online, or closed out with
- *     Stripe's own "Mark as paid".
+ *     performed anywhere in this class. For an invoice, the `invoice.paid`
+ *     webhook is the ONLY code path allowed to call
+ *     MyNJILGA_Payment_Listener::settle(), however it came to be paid —
+ *     online, or closed out with Stripe's own "Mark as paid". The one
+ *     other caller is an online join (MyNJILGA_Join_Fulfillment), and only
+ *     once it has re-read its Checkout Session from Stripe as paid.
+ *
+ *   - Checkout Sessions (MyNJILGA_Checkout_Gateway) are the online join's
+ *     way of taking a payment while the applicant waits — create, read,
+ *     expire, and adopting the Customer a join's checkout made for a
+ *     brand-new firm.
  *
  * Testability: create_order() is the one method exercised by
  * tests/StripeGatewayTest.php without WordPress loaded at all. Every
@@ -39,7 +46,7 @@
  * WordPress-dependent settings lookups; production callers (which never
  * populate those keys) get the live settings exactly as before.
  */
-class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
+class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway, MyNJILGA_Checkout_Gateway {
 
     /** @var MyNJILGA_Stripe_Client|null Injected transport for tests; null means "use the live connection". */
     private $client;
@@ -60,6 +67,18 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             return $this->client;
         }
         return MyNJILGA_Stripe_Connection::client_for_mode();
+    }
+
+    /**
+     * Same as client(), but for an explicit mode rather than whichever is
+     * active — the checkout methods below act on a join pinned to the mode
+     * it was started in.
+     */
+    private function client_for( string $mode ): ?MyNJILGA_Stripe_Client {
+        if ( $this->client !== null ) {
+            return $this->client;
+        }
+        return MyNJILGA_Stripe_Connection::client_for_mode( $mode );
     }
 
     // -------------------------------------------------------------------------
@@ -473,7 +492,7 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
             }
 
             $resp = $client->request( 'GET', '/invoices/' . rawurlencode( $invoiceId ), [], [
-                'expand' => [ 'payment_intent' ],
+                'expand' => [ 'payment_intent.latest_charge' ],
             ] );
             if ( ! $resp['ok'] ) {
                 return null;
@@ -544,6 +563,263 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
     }
 
     // -------------------------------------------------------------------------
+    // Checkout (MyNJILGA_Checkout_Gateway) — online joins
+    // -------------------------------------------------------------------------
+
+    /**
+     * Metadata `source` on everything a join creates in Stripe. Distinct
+     * from create_order()'s 'my-njilga' on purpose: the reconciler's
+     * orphan scan searches for 'my-njilga' invoices with no row here, and
+     * a join's invoice legitimately has no row until the payment clears
+     * (an ACH join can sit for days) — it must never read as an orphan.
+     */
+    const JOIN_SOURCE = 'my-njilga-join';
+
+    /**
+     * @param array<int,array<string,mixed>> $lineItems
+     * @param array<string,mixed>            $context
+     * @return array{ok:bool,session_id?:string,url?:string,expires_at?:int,ach_offered?:bool,error?:string}
+     */
+    public function create_checkout( array $lineItems, array $context ): array {
+        try {
+            $joinId = (int) ( $context['join_id'] ?? 0 );
+            if ( $joinId <= 0 ) {
+                return [ 'ok' => false, 'error' => 'A checkout needs the join it belongs to.' ];
+            }
+            if ( empty( $lineItems ) ) {
+                return [ 'ok' => false, 'error' => 'Nothing to charge.' ];
+            }
+            // Stripe's own cap for payment-mode Checkout.
+            if ( count( $lineItems ) > 100 ) {
+                return [ 'ok' => false, 'error' => sprintf( 'Too many people for one checkout (100 max) — %d given.', count( $lineItems ) ) ];
+            }
+
+            $mode   = isset( $context['mode'] ) ? (string) $context['mode'] : MyNJILGA_Stripe_Connection::active_mode();
+            $client = $this->client_for( $mode );
+            if ( $client === null ) {
+                return [ 'ok' => false, 'error' => 'Stripe is not connected.' ];
+            }
+
+            $currency = isset( $context['currency'] ) ? (string) $context['currency'] : (string) MyNJILGA_Stripe_Connection::setting( 'currency', 'usd' );
+            $footer   = isset( $context['footer'] ) ? (string) $context['footer'] : (string) MyNJILGA_Stripe_Connection::setting( 'footer', '' );
+            $attempt  = max( 1, (int) ( $context['attempt'] ?? 1 ) );
+            $duesYear = (int) ( $context['dues_year'] ?? 0 );
+            $company  = (string) ( $context['company_name'] ?? '' );
+            $desc     = (string) ( $context['description'] ?? sprintf( '%d NJILGA Membership', $duesYear ) );
+
+            $metadata = [
+                'njilga_join_id'   => $joinId,
+                'njilga_dues_year' => $duesYear,
+                'source'           => self::JOIN_SOURCE,
+            ];
+
+            $lines = [];
+            foreach ( $lineItems as $item ) {
+                $lines[] = [
+                    'price_data' => [
+                        'currency'     => $currency,
+                        // Checkout accepts $0 lines on this API version —
+                        // a free "Members 6+" colleague stays on the
+                        // receipt, same as on a dues invoice.
+                        'unit_amount'  => max( 0, (int) ( $item['unit_price_cents'] ?? 0 ) ),
+                        'product_data' => [ 'name' => mb_substr( (string) ( $item['title'] ?? 'NJILGA Membership' ), 0, 250 ) ],
+                    ],
+                    'quantity'   => max( 1, (int) ( $item['quantity'] ?? 1 ) ),
+                ];
+            }
+
+            $params = [
+                'mode'                => 'payment',
+                'line_items'          => $lines,
+                'customer_email'      => (string) ( $context['customer_email'] ?? '' ) !== '' ? (string) $context['customer_email'] : null,
+                // A Customer is needed for ACH and for the post-payment
+                // invoice either way; 'always' makes that explicit.
+                'customer_creation'   => 'always',
+                'client_reference_id' => 'njilga-join-' . $joinId,
+                'success_url'         => (string) ( $context['success_url'] ?? '' ),
+                'cancel_url'          => (string) ( $context['cancel_url'] ?? '' ),
+                'submit_type'         => 'pay',
+                'metadata'            => $metadata,
+                'payment_intent_data' => [
+                    'description' => mb_substr( $desc, 0, 1000 ),
+                    'metadata'    => $metadata,
+                ],
+            ];
+
+            if ( ! empty( $context['create_invoice'] ) ) {
+                $invoiceData = [
+                    'description' => mb_substr( $desc, 0, 1500 ),
+                    'metadata'    => $metadata,
+                    'footer'      => $footer !== '' ? mb_substr( $footer, 0, 5000 ) : null,
+                ];
+                if ( $company !== '' ) {
+                    $invoiceData['custom_fields'] = [ [ 'name' => 'Firm', 'value' => mb_substr( $company, 0, 140 ) ] ];
+                }
+                $params['invoice_creation'] = [ 'enabled' => true, 'invoice_data' => $invoiceData ];
+            }
+
+            // A per-site salt: a staging copy sharing this Stripe test
+            // account has the same join ids, and must never be handed this
+            // site's session back by Stripe's idempotency cache.
+            $salt = isset( $context['key_salt'] ) ? (string) $context['key_salt'] : self::key_salt();
+            $key  = sprintf( 'njilga-join-%s-%d-%d-%s', $salt, $joinId, $attempt, $mode );
+
+            $allowAch = ! empty( $context['allow_ach'] );
+            $params['payment_method_types'] = $allowAch ? [ 'card', 'us_bank_account' ] : [ 'card' ];
+            $resp = $client->request( 'POST', '/checkout/sessions', $params, [ 'idempotency_key' => $key . ( $allowAch ? '' : '-card' ) ] );
+
+            // An account without ACH activated rejects the whole session
+            // when us_bank_account is requested — take the card-only
+            // session rather than turn the applicant away. A different
+            // body needs a different idempotency key, or Stripe refuses it.
+            if ( ! $resp['ok'] && $allowAch && stripos( $resp['error'], 'us_bank_account' ) !== false ) {
+                $allowAch = false;
+                $params['payment_method_types'] = [ 'card' ];
+                $resp = $client->request( 'POST', '/checkout/sessions', $params, [ 'idempotency_key' => $key . '-card' ] );
+            }
+
+            if ( ! $resp['ok'] || empty( $resp['body']['id'] ) || empty( $resp['body']['url'] ) ) {
+                return [ 'ok' => false, 'error' => $resp['error'] !== '' ? $resp['error'] : 'Stripe did not return a checkout page.' ];
+            }
+
+            return [
+                'ok'          => true,
+                'session_id'  => (string) $resp['body']['id'],
+                'url'         => (string) $resp['body']['url'],
+                'expires_at'  => (int) ( $resp['body']['expires_at'] ?? 0 ),
+                'ach_offered' => $allowAch,
+            ];
+        } catch ( \Throwable $e ) {
+            return [ 'ok' => false, 'error' => $e->getMessage() ];
+        }
+    }
+
+    /**
+     * Random, per-site, generated once.
+     */
+    private static function key_salt(): string {
+        $salt = (string) get_option( 'njilga_join_key_salt', '' );
+        if ( $salt === '' ) {
+            $salt = bin2hex( random_bytes( 6 ) );
+            add_option( 'njilga_join_key_salt', $salt, '', false );
+            $salt = (string) get_option( 'njilga_join_key_salt', $salt );
+        }
+        return $salt;
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    public function fetch_checkout( string $sessionId, string $mode ): ?array {
+        try {
+            $client = $this->client_for( $mode );
+            if ( $client === null || $sessionId === '' ) {
+                return null;
+            }
+            $resp = $client->request( 'GET', '/checkout/sessions/' . rawurlencode( $sessionId ), [], [
+                'expand' => [ 'payment_intent.latest_charge', 'invoice' ],
+            ] );
+            if ( ! $resp['ok'] || empty( $resp['body']['id'] ) ) {
+                return null;
+            }
+            return self::normalize_checkout( $resp['body'] );
+        } catch ( \Throwable $e ) {
+            return null;
+        }
+    }
+
+    /**
+     * The normalized shape fetch_checkout() returns — pure, so the join
+     * fulfillment tests can feed it a raw session fixture.
+     *
+     * @param array<string,mixed> $s A raw Checkout Session object.
+     * @return array<string,mixed>
+     */
+    public static function normalize_checkout( array $s ): array {
+        $pi      = $s['payment_intent'] ?? null;
+        $invoice = $s['invoice'] ?? null;
+        $cust    = $s['customer'] ?? null;
+        return [
+            'id'                  => (string) ( $s['id'] ?? '' ),
+            'status'              => (string) ( $s['status'] ?? '' ),
+            'payment_status'      => (string) ( $s['payment_status'] ?? '' ),
+            'amount_total'        => (int) ( $s['amount_total'] ?? 0 ),
+            'currency'            => strtolower( (string) ( $s['currency'] ?? '' ) ),
+            'livemode'            => ! empty( $s['livemode'] ),
+            'customer'            => is_array( $cust ) ? (string) ( $cust['id'] ?? '' ) : (string) $cust,
+            'customer_email'      => (string) ( $s['customer_details']['email'] ?? ( $s['customer_email'] ?? '' ) ),
+            'metadata'            => is_array( $s['metadata'] ?? null ) ? $s['metadata'] : [],
+            'client_reference_id' => (string) ( $s['client_reference_id'] ?? '' ),
+            'url'                 => (string) ( $s['url'] ?? '' ),
+            'expires_at'          => (int) ( $s['expires_at'] ?? 0 ),
+            'payment_intent_id'   => is_array( $pi ) ? (string) ( $pi['id'] ?? '' ) : (string) $pi,
+            'payment_intent'      => is_array( $pi ) ? $pi : null,
+            'invoice_id'          => is_array( $invoice ) ? (string) ( $invoice['id'] ?? '' ) : (string) $invoice,
+            'invoice'             => is_array( $invoice ) ? $invoice : null,
+        ];
+    }
+
+    /**
+     * @return array{ok:bool,status?:string,error?:string}
+     */
+    public function expire_checkout( string $sessionId, string $mode ): array {
+        try {
+            $client = $this->client_for( $mode );
+            if ( $client === null || $sessionId === '' ) {
+                return [ 'ok' => false, 'error' => 'Stripe is not connected.' ];
+            }
+            $resp = $client->request( 'POST', '/checkout/sessions/' . rawurlencode( $sessionId ) . '/expire' );
+            if ( $resp['ok'] ) {
+                return [ 'ok' => true, 'status' => (string) ( $resp['body']['status'] ?? 'expired' ) ];
+            }
+            // Only an OPEN session can be expired. Whatever it is now, say
+            // so — 'complete' means it may already have been paid, and the
+            // caller must not start a second one on top of it.
+            $current = $this->fetch_checkout( $sessionId, $mode );
+            return [
+                'ok'     => false,
+                'status' => $current ? (string) $current['status'] : '',
+                'error'  => $resp['error'] !== '' ? $resp['error'] : 'Stripe could not expire the checkout.',
+            ];
+        } catch ( \Throwable $e ) {
+            return [ 'ok' => false, 'error' => $e->getMessage() ];
+        }
+    }
+
+    public function adopt_customer_for_company( string $customerId, int $companyId, string $companyName, int $ownerContactId, string $mode ): bool {
+        try {
+            if ( $customerId === '' || $companyId <= 0 ) {
+                return false;
+            }
+            // A firm keeps one Customer for life — never repoint one that
+            // already has it.
+            if ( MyNJILGA_Stripe_Customer_Map::get( $companyId, $mode ) !== null ) {
+                return false;
+            }
+            $client = $this->client_for( $mode );
+            if ( $client === null ) {
+                return false;
+            }
+            $resp = $client->request( 'POST', '/customers/' . rawurlencode( $customerId ), [
+                'name'        => $companyName !== '' ? $companyName : null,
+                'description' => 'NJILGA member firm',
+                'metadata'    => [
+                    'njilga_company_id'       => $companyId,
+                    'njilga_owner_contact_id' => $ownerContactId,
+                    'source'                  => 'my-njilga',
+                ],
+            ] );
+            if ( ! $resp['ok'] ) {
+                return false;
+            }
+            MyNJILGA_Stripe_Customer_Map::set( $companyId, $mode, $customerId );
+            return true;
+        } catch ( \Throwable $e ) {
+            return false;
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Reconciliation — a later phase's only consumer
     // -------------------------------------------------------------------------
 
@@ -557,14 +833,19 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway {
                 return null;
             }
 
-            // Only expand what we're confident about (payment_intent).
+            // payment_intent WITH its latest_charge: on this API version a
+            // PaymentIntent no longer carries `charges`, and latest_charge
+            // is a bare id unless expanded — without it the reconciler
+            // keys a missed payment by the PaymentIntent id while the
+            // webhook keys the same payment by its charge id, and the
+            // ledger's duplicate guard never sees them as one payment.
             // Off-Stripe payment totals are deliberately NOT read back
             // from Stripe: there is no dependable field for them on the
             // Invoice object, and the plugin already knows that number
             // exactly — it writes paid_off_stripe_cents itself when staff
             // record a check or wire.
             $resp = $client->request( 'GET', '/invoices/' . rawurlencode( $invoiceId ), [], [
-                'expand' => [ 'payment_intent' ],
+                'expand' => [ 'payment_intent.latest_charge' ],
             ] );
             if ( ! $resp['ok'] ) {
                 return null;

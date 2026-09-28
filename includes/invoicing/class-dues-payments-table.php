@@ -109,6 +109,19 @@ class MyNJILGA_Dues_Payments_Table {
         ) );
     }
 
+    /**
+     * The invoice row a Stripe object (a charge, usually) was recorded
+     * against, or 0.
+     */
+    public static function invoice_row_for_object( string $stripeObjectId ): int {
+        if ( $stripeObjectId === '' ) {
+            return 0;
+        }
+        global $wpdb;
+        $table = self::table_name();
+        return (int) $wpdb->get_var( $wpdb->prepare( "SELECT invoice_row_id FROM $table WHERE stripe_object_id = %s ORDER BY id ASC LIMIT 1", $stripeObjectId ) ); // phpcs:ignore
+    }
+
     // -------------------------------------------------------------------------
     // Writes
     // -------------------------------------------------------------------------

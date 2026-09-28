@@ -129,7 +129,9 @@ class ModeIsolationTest extends NJILGA_TestCase {
 
             $this->assertScopedToMode( $livemode, $sql );
             $this->assertSqlHas( 'dues_year = 2027', $sql );
-            $this->assertSqlHas( "invoice_kind <> 'assessment'", $sql );
+            // Assessment-only invoices never lapse a membership, and an
+            // online join's row is backed by money already confirmed.
+            $this->assertSqlHas( "invoice_kind NOT IN ('assessment', 'join')", $sql );
         }
     }
 

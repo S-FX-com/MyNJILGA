@@ -305,6 +305,9 @@ class MyNJILGA_Dues_Invoice_Table {
      * assessment-only invoices (an unpaid dinner assessment doesn't lapse
      * a membership). Used by the downgrade sweep.
      *
+     * Online-join rows (kind 'join') are excluded outright, whatever their
+     * status: the payment was confirmed before the row was written.
+     *
      * Also excludes STATUS_VOIDED and STATUS_UNCOLLECTIBLE (staff already
      * closed these out — sweeping them again is meaningless) and
      * STATUS_PROCESSING (an ACH payment in flight is not an unpaid firm;
@@ -321,7 +324,7 @@ class MyNJILGA_Dues_Invoice_Table {
         global $wpdb;
         $table = self::table_name();
         return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
-            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status NOT IN (%s, %s, %s, %s, %s, %s) AND invoice_kind <> %s ORDER BY id ASC",
+            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status NOT IN (%s, %s, %s, %s, %s, %s) AND invoice_kind NOT IN (%s, %s) ORDER BY id ASC",
             $duesYear,
             $livemode ? 1 : 0,
             self::STATUS_PAID,
@@ -330,8 +333,98 @@ class MyNJILGA_Dues_Invoice_Table {
             self::STATUS_VOIDED,
             self::STATUS_UNCOLLECTIBLE,
             self::STATUS_PROCESSING,
-            MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT
+            MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT,
+            // An online join's row is backed by money Stripe already
+            // confirmed before the row existed — never "unpaid".
+            MyNJILGA_Dues_Snapshot::KIND_JOIN
         ) );
+    }
+
+    /**
+     * Open, dues-settling invoices for the year whose frozen roster names
+     * this contact — so an online join never charges someone their firm's
+     * invoice already covers. "Open" includes draft and approved rows, not
+     * only created/sent/clearing ones: Create Invoice bills the snapshot
+     * exactly as it was frozen, without re-pricing, so a person on a draft
+     * is as good as billed.
+     *
+     * @return array<int,object>
+     */
+    public static function open_rows_listing_contact( int $contactId, int $duesYear, bool $livemode ): array {
+        global $wpdb;
+        if ( $contactId <= 0 ) {
+            return [];
+        }
+        $table = self::table_name();
+        // roster_snapshot is wp_json_encode() output: an integer id is
+        // written bare and followed by a comma, so this can't match 1234
+        // when looking for 123.
+        $like = '%' . $wpdb->esc_like( '"contact_id":' . $contactId . ',' ) . '%';
+        return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status IN (%s, %s, %s, %s, %s) AND invoice_kind NOT IN (%s, %s) AND roster_snapshot LIKE %s",
+            $duesYear,
+            $livemode ? 1 : 0,
+            self::STATUS_DRAFT,
+            self::STATUS_APPROVED,
+            self::STATUS_CREATED,
+            self::STATUS_SENT,
+            self::STATUS_PROCESSING,
+            MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT,
+            MyNJILGA_Dues_Snapshot::KIND_JOIN,
+            $like
+        ) );
+    }
+
+    /**
+     * Everyone whose dues for the year are already paid through an online
+     * join in this Stripe mode — contact id => the join row's id. Read
+     * straight off the paid kind 'join' rows' frozen rosters, the same
+     * rows MyNJILGA_Dues_Preview prices as "paid via online join".
+     *
+     * @return array<int,int>
+     */
+    public static function join_paid_contacts( int $duesYear, bool $livemode ): array {
+        global $wpdb;
+        $table = self::table_name();
+        $rows  = (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE dues_year = %d AND livemode = %d AND status = %s AND invoice_kind = %s ORDER BY id ASC",
+            $duesYear,
+            $livemode ? 1 : 0,
+            self::STATUS_PAID,
+            MyNJILGA_Dues_Snapshot::KIND_JOIN
+        ) );
+        $out = [];
+        foreach ( $rows as $row ) {
+            foreach ( MyNJILGA_Dues_Snapshot::members( $row ) as $m ) {
+                $cid = (int) ( $m['contact_id'] ?? 0 );
+                if ( $cid > 0 && ! isset( $out[ $cid ] ) ) {
+                    $out[ $cid ] = (int) $row->id;
+                }
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Several rows by id in one query — id => row. Unknown ids are simply
+     * absent from the result.
+     *
+     * @param array<int,int> $ids
+     * @return array<int,object>
+     */
+    public static function get_many( array $ids ): array {
+        global $wpdb;
+        $ids = array_values( array_unique( array_filter( array_map( 'intval', $ids ), static function ( $id ) { return $id > 0; } ) ) );
+        if ( empty( $ids ) ) {
+            return [];
+        }
+        $table        = self::table_name();
+        $placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+        $out          = [];
+        foreach ( (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $table WHERE id IN ($placeholders)", $ids ) ) as $row ) { // phpcs:ignore
+            $out[ (int) $row->id ] = $row;
+        }
+        return $out;
     }
 
     /**
@@ -546,6 +639,24 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
+     * Send an approved row that was never created back to draft, so the
+     * next Generate Preview / Refresh Firms re-prices it (upsert_draft()
+     * only ever refreshes draft rows). Conditional on the row still being
+     * approved, so a row another request has since created is never
+     * touched.
+     */
+    public static function return_to_draft( int $id ): bool {
+        global $wpdb;
+        $table = self::table_name();
+        return (bool) $wpdb->query( $wpdb->prepare( // phpcs:ignore
+            "UPDATE $table SET status = %s, approved_at = NULL, queued_at = NULL WHERE id = %d AND status = %s",
+            self::STATUS_DRAFT,
+            $id,
+            self::STATUS_APPROVED
+        ) );
+    }
+
+    /**
      * Stamp a row as created against the gateway. The base fields
      * (customer/invoice id+number, status, cleared error/queued_at) are
      * always written; $extra optionally carries whatever of these the
@@ -656,6 +767,29 @@ class MyNJILGA_Dues_Invoice_Table {
     public static function clear_error( int $id ): void {
         global $wpdb;
         $wpdb->update( self::table_name(), [ 'last_error' => null ], [ 'id' => $id ], [ '%s' ], [ '%d' ] );
+    }
+
+    /**
+     * Move an online join's invoice row, written as an individual
+     * membership while its payer waited for staff, onto the firm staff
+     * confirmed them at. Only a join's own row, and only from "no firm":
+     * annual rows are never re-filed. False when nothing moved, including
+     * a UNIQUE-key collision with a row already at that firm.
+     */
+    public static function refile_join_row( int $id, int $companyId, string $rosterSnapshot ): bool {
+        global $wpdb;
+        if ( $id <= 0 || $companyId <= 0 ) {
+            return false;
+        }
+        $table   = self::table_name();
+        $updated = $wpdb->query( $wpdb->prepare( // phpcs:ignore
+            "UPDATE $table SET fluentcrm_company_id = %d, roster_snapshot = %s WHERE id = %d AND invoice_kind = %s AND fluentcrm_company_id = 0",
+            $companyId,
+            $rosterSnapshot,
+            $id,
+            MyNJILGA_Dues_Snapshot::KIND_JOIN
+        ) );
+        return $updated === 1;
     }
 
     /**

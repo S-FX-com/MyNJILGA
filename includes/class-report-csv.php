@@ -29,9 +29,9 @@ class MyNJILGA_Report_Csv {
         $rows = MyNJILGA_Members_Data::get_active_members();
         $fh   = self::open( 'active-members' );
 
-        fputcsv( $fh, [ 'First Name', 'Last Name', 'Email', 'Firm Name', 'Trustee', 'Payment Method', 'CRM ID' ] );
+        self::put( $fh, [ 'First Name', 'Last Name', 'Email', 'Firm Name', 'Trustee', 'Payment Method', 'CRM ID' ] );
         foreach ( $rows as $r ) {
-            fputcsv( $fh, [
+            self::put( $fh, [
                 $r['first_name'],
                 $r['last_name'],
                 $r['email'],
@@ -49,9 +49,9 @@ class MyNJILGA_Report_Csv {
         $rows = MyNJILGA_Members_Data::get_trustees();
         $fh   = self::open( 'trustees' );
 
-        fputcsv( $fh, [ 'First Name', 'Last Name', 'Email', 'Firm Name', 'Trustee', 'Payment Method', 'CRM ID' ] );
+        self::put( $fh, [ 'First Name', 'Last Name', 'Email', 'Firm Name', 'Trustee', 'Payment Method', 'CRM ID' ] );
         foreach ( $rows as $r ) {
-            fputcsv( $fh, [
+            self::put( $fh, [
                 $r['first_name'],
                 $r['last_name'],
                 $r['email'],
@@ -74,18 +74,18 @@ class MyNJILGA_Report_Csv {
         $bucket_order = [ '1', '2-5', '6+', '0' ];
         $fh           = self::open( 'companies' );
 
-        fputcsv( $fh, [ 'Bucket', 'Company', 'Paid Members', 'Total Members', 'Member', 'Status' ] );
+        self::put( $fh, [ 'Bucket', 'Company', 'Paid Members', 'Total Members', 'Member', 'Status' ] );
 
         foreach ( $bucket_order as $key ) {
             $companies = $data['buckets'][ $key ] ?? [];
             $label     = $data['bucket_labels'][ $key ];
             foreach ( $companies as $c ) {
                 if ( empty( $c['members'] ) ) {
-                    fputcsv( $fh, [ $label, $c['name'], $c['paid_count'], $c['total_count'], '', '' ] );
+                    self::put( $fh, [ $label, $c['name'], $c['paid_count'], $c['total_count'], '', '' ] );
                     continue;
                 }
                 foreach ( $c['members'] as $m ) {
-                    fputcsv( $fh, [
+                    self::put( $fh, [
                         $label,
                         $c['name'],
                         $c['paid_count'],
@@ -132,10 +132,10 @@ class MyNJILGA_Report_Csv {
         $lines = MyNJILGA_Page_Payments::build_lines();
         $fh    = self::open( 'payments-by-invoice' );
 
-        fputcsv( $fh, [ 'Firm', 'Dues Year', 'Invoice #', 'Bill To', 'Status', 'Method', 'Amount', 'Paid', 'Balance', 'Paid On', 'Due Date' ] );
+        self::put( $fh, [ 'Firm', 'Dues Year', 'Invoice #', 'Bill To', 'Status', 'Method', 'Amount', 'Paid', 'Balance', 'Paid On', 'Due Date' ] );
         foreach ( $lines as $l ) {
             $invoiceNo = $l['invoiceNo'] !== '' ? $l['invoiceNo'] : ( $l['invoiceId'] !== '' ? '…' . substr( $l['invoiceId'], -8 ) : '' );
-            fputcsv( $fh, [
+            self::put( $fh, [
                 $l['firm'],
                 $l['year'],
                 $invoiceNo,
@@ -166,15 +166,15 @@ class MyNJILGA_Report_Csv {
 
         $verdictLabels = [ 'paid' => 'Paid', 'partial' => 'Partial', 'unpaid' => 'Unpaid', 'written_off' => 'Written Off' ];
 
-        fputcsv( $fh, [ 'Firm', 'Dues Year', 'Year Status', 'Firm Total Outstanding' ] );
+        self::put( $fh, [ 'Firm', 'Dues Year', 'Year Status', 'Firm Total Outstanding' ] );
         foreach ( $firms as $f ) {
             $outstanding = number_format( $f['outstandingCents'] / 100, 2, '.', '' );
             if ( empty( $f['years'] ) ) {
-                fputcsv( $fh, [ $f['name'], '', '', $outstanding ] );
+                self::put( $fh, [ $f['name'], '', '', $outstanding ] );
                 continue;
             }
             foreach ( $f['years'] as $year => $yr ) {
-                fputcsv( $fh, [ $f['name'], $year, $verdictLabels[ $yr['verdict'] ] ?? ucfirst( $yr['verdict'] ), $outstanding ] );
+                self::put( $fh, [ $f['name'], $year, $verdictLabels[ $yr['verdict'] ] ?? ucfirst( $yr['verdict'] ), $outstanding ] );
             }
         }
         fclose( $fh );
@@ -199,14 +199,14 @@ class MyNJILGA_Report_Csv {
         $members = MyNJILGA_Page_Payments::group_by_member( $lines );
         $fh      = self::open( 'payments-by-member' );
 
-        fputcsv( $fh, [ 'Member', 'Firm', 'Dues Year', 'Status' ] );
+        self::put( $fh, [ 'Member', 'Firm', 'Dues Year', 'Status' ] );
         foreach ( $members as $m ) {
             if ( empty( $m['years'] ) ) {
-                fputcsv( $fh, [ $m['name'], $m['firm'], '', '' ] );
+                self::put( $fh, [ $m['name'], $m['firm'], '', '' ] );
                 continue;
             }
             foreach ( $m['years'] as $year => $status ) {
-                fputcsv( $fh, [
+                self::put( $fh, [
                     $m['name'],
                     $m['firm'],
                     $year,
@@ -223,11 +223,11 @@ class MyNJILGA_Report_Csv {
         $aging = MyNJILGA_Page_Payments::aging_buckets( $lines );
         $fh    = self::open( 'payments-aging' );
 
-        fputcsv( $fh, [ 'Bucket', 'Firm', 'Invoice #', 'Status', 'Balance', 'Due Date' ] );
+        self::put( $fh, [ 'Bucket', 'Firm', 'Invoice #', 'Status', 'Balance', 'Due Date' ] );
         foreach ( $aging['buckets'] as $bucket ) {
             foreach ( $bucket['lines'] as $l ) {
                 $invoiceNo = $l['invoiceNo'] !== '' ? $l['invoiceNo'] : ( $l['invoiceId'] !== '' ? '…' . substr( $l['invoiceId'], -8 ) : '' );
-                fputcsv( $fh, [
+                self::put( $fh, [
                     $bucket['label'],
                     $l['firm'],
                     $invoiceNo,
@@ -255,5 +255,36 @@ class MyNJILGA_Report_Csv {
         $fh = fopen( 'php://output', 'w' );
         fwrite( $fh, "\xEF\xBB\xBF" );
         return $fh;
+    }
+
+    /**
+     * One CSV row, every cell passed through cell().
+     *
+     * @param resource          $fh
+     * @param array<int,mixed>  $cells
+     */
+    private static function put( $fh, array $cells ): void {
+        fputcsv( $fh, array_map( [ __CLASS__, 'cell' ], $cells ) );
+    }
+
+    /**
+     * A cell Excel and Sheets will show as text. Names and firm names can
+     * come from the public join form, and a value starting with = + - @
+     * (or a tab/CR) would otherwise run as a formula when staff open the
+     * export. Numbers pass through untouched, so amounts and ids stay
+     * numeric.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    public static function cell( $value ) {
+        if ( is_int( $value ) || is_float( $value ) || $value === null ) {
+            return $value;
+        }
+        $value = (string) $value;
+        if ( $value !== '' && is_numeric( $value ) ) {
+            return $value;
+        }
+        return preg_match( '/^[=+\-@\t\r]/', $value ) ? "'" . $value : $value;
     }
 }

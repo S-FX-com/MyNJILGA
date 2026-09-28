@@ -90,8 +90,6 @@ class MyNJILGA_Page_Invoicing {
         self::render_gateway_notices();
 
         $rows   = MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [], $liveMode );
-        $counts = MyNJILGA_Dues_Invoice_Table::counts_by_status( $duesYear, $liveMode );
-        $totals = MyNJILGA_Dues_Invoice_Table::totals_by_status( $duesYear, $liveMode );
 
         // Classify every row once — the summary, the tabs and the rows all
         // read the same verdict.
@@ -111,13 +109,16 @@ class MyNJILGA_Page_Invoicing {
         // the year has any rows yet.
         self::render_sync_form( $duesYear );
 
-        if ( empty( $rows ) ) {
-            self::render_empty_state( $duesYear );
+        // Online joins are paid before their row exists and are nobody's
+        // annual invoice: a year with only those (people joining for next
+        // year after the cutover) still hasn't had its batch generated.
+        if ( count( $views ) === $tally['joins'] ) {
+            self::render_empty_state( $duesYear, $tally['joins'] );
             echo '</div>';
             return;
         }
 
-        self::render_summary( $tally, $totals );
+        self::render_summary( $tally, self::annual_totals( $views ) );
 
         if ( MyNJILGA_Invoice_Creator::has_pending_jobs() ) {
             echo '<div class="njilga-callout njilga-callout-info"><p><strong>Invoices are being created in the background.</strong> Reload this page in a moment to see them move to Created. Any failures are recorded on the firm\'s row.</p></div>';
@@ -264,6 +265,9 @@ class MyNJILGA_Page_Invoicing {
         self::tab( 'ready',     'Ready',          $t['ready'] );
         self::tab( 'created',   'Created',        $t['created'] );
         self::tab( 'attention', 'Needs Attention', $t['attention'] );
+        if ( $t['joins'] > 0 ) {
+            self::tab( 'joins', 'Online joins', $t['joins'] );
+        }
         echo '</div>';
 
         // Toolbar: search + status filter + refresh.
@@ -659,6 +663,21 @@ class MyNJILGA_Page_Invoicing {
         $status   = (string) $row->status;
         $hasError = ! empty( $row->last_error );
 
+        // An online join (Applications → Online joins) was paid through
+        // Checkout before its row was written: not a firm invoice, nothing
+        // to create, send or void, so its own bucket, which the firm
+        // counts and the progress bar leave out.
+        if ( (string) ( $row->invoice_kind ?? '' ) === MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
+            $paid = $status === $T::STATUS_PAID;
+            return self::verdict(
+                'joins',
+                $paid ? 'paid' : 'join',
+                [ $paid ? 'Paid online' : ucfirst( $status ), $paid ? 'success' : 'muted' ],
+                $hasError ? [ (string) $row->last_error, false ] : [ 'Online join', true ],
+                false
+            );
+        }
+
         switch ( $status ) {
             case $T::STATUS_EXCLUDED:
                 $reason = (string) ( MyNJILGA_Dues_Snapshot::decode( $row )['exclusion_reason'] ?? MyNJILGA_Dues_Preview::EXCLUDED_NO_OWNER );
@@ -735,18 +754,26 @@ class MyNJILGA_Page_Invoicing {
     }
 
     /**
-     * Roll the classified rows up into the summary/tab numbers.
+     * Roll the classified rows up into the summary/tab numbers. Online
+     * joins are only counted as 'joins': each is one person's payment
+     * (every student join sits under company 0), so letting them in would
+     * count them as invoiced firms — 100% invoiced before any annual
+     * invoice exists.
      *
      * @param array<int,array{row:object,c:array<string,mixed>}> $views
      * @return array<string,int>
      */
     private static function tally( array $views ): array {
-        $t = [ 'firms' => 0, 'ready' => 0, 'created' => 0, 'attention' => 0, 'eligible' => 0, 'invoiced' => 0 ];
+        $t = [ 'firms' => 0, 'ready' => 0, 'created' => 0, 'attention' => 0, 'eligible' => 0, 'invoiced' => 0, 'joins' => 0 ];
 
         $firms         = [];
         $eligibleFirms = [];
         $invoicedFirms = [];
         foreach ( $views as $v ) {
+            if ( $v['c']['bucket'] === 'joins' ) {
+                $t['joins']++;
+                continue;
+            }
             $companyId = (int) $v['row']->fluentcrm_company_id;
             $firms[ $companyId ] = true;
 
@@ -769,11 +796,35 @@ class MyNJILGA_Page_Invoicing {
         return $t;
     }
 
+    /**
+     * The batch's totals by status, in cents — the annual invoices only,
+     * for the same reason tally() leaves online joins out: join money is
+     * no part of the batch, and would read as Collected before a single
+     * firm invoice had gone out.
+     *
+     * @param array<int,array{row:object,c:array<string,mixed>}> $views
+     * @return array<string,int> status => sum(total_amount_cents)
+     */
+    private static function annual_totals( array $views ): array {
+        $totals = [];
+        foreach ( $views as $v ) {
+            if ( $v['c']['bucket'] === 'joins' ) {
+                continue;
+            }
+            $status            = (string) $v['row']->status;
+            $totals[ $status ] = (int) ( $totals[ $status ] ?? 0 ) + (int) $v['row']->total_amount_cents;
+        }
+        return $totals;
+    }
+
     // -------------------------------------------------------------------------
     // Empty state
     // -------------------------------------------------------------------------
 
-    private static function render_empty_state( int $duesYear ): void {
+    /**
+     * @param int $joins Online joins already paid for the year — not part of the batch, but worth saying.
+     */
+    private static function render_empty_state( int $duesYear, int $joins = 0 ): void {
         echo '<div class="njilga-card njilga-empty">';
         echo '<div class="njilga-empty-icon">' . self::icon( 'file' ) . '</div>';
         printf( '<h2 class="njilga-empty-title">No invoices generated for %d yet</h2>', $duesYear );
@@ -781,6 +832,14 @@ class MyNJILGA_Page_Invoicing {
             '<p class="njilga-empty-text">Generate this year\'s roster and pricing from FluentCRM Companies using the current <a href="%s">Dues &amp; Billing settings</a>. Safe to re-run at any time — firms already invoiced are never recomputed.</p>',
             esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) )
         );
+        if ( $joins > 0 ) {
+            printf(
+                '<p class="njilga-empty-text">Online joins already paid for %d: %d (see <a href="%s">Online joins</a>). The preview lists the people they cover at $0, so nobody is billed twice.</p>',
+                $duesYear,
+                $joins,
+                esc_url( add_query_arg( 'tab', 'joins', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) ) )
+            );
+        }
         self::render_generate_form( $duesYear, sprintf( 'Generate Preview for %d', $duesYear ), 'primary' );
         echo '</div>';
     }
@@ -966,7 +1025,7 @@ class MyNJILGA_Page_Invoicing {
     private static function row_badges( object $row, array $snapshot ): string {
         $out  = self::kind_pill( $row );
         $mode = (string) ( $row->billing_mode ?? 'firm' );
-        if ( $mode !== MyNJILGA_Dues_Settings::MODE_FIRM ) {
+        if ( $mode !== MyNJILGA_Dues_Settings::MODE_FIRM && (string) ( $row->invoice_kind ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
             $out .= ' ' . self::pill( str_replace( '_', ' ', $mode ), 'outline' );
         }
         $noCat = 0;
@@ -988,6 +1047,10 @@ class MyNJILGA_Page_Invoicing {
                 return self::pill( 'dues only', 'outline' );
             case MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT:
                 return self::pill( 'assessment', 'outline' );
+            case MyNJILGA_Dues_Snapshot::KIND_JOIN:
+                // Paid through Stripe Checkout by the member themselves
+                // (Applications → Online joins) — nothing to create or send.
+                return self::pill( 'online join', 'info' );
             default:
                 return '';
         }

@@ -1,6 +1,6 @@
 # My NJILGA
 
-A WordPress plugin that gives NJILGA admins a one-stop dashboard for member status, trustees, and company rollups — plus the annual **dues invoicing** process (Stripe + FluentCRM), a **membership application gate**, and a **member-facing dues status page**. Everything is driven by FluentCRM tags on the local WordPress install; billing is driven by Stripe. No subscriptions anywhere — every dues cycle is its own one-time invoice.
+A WordPress plugin that gives NJILGA admins a one-stop dashboard for member status, trustees, and company rollups — plus the annual **dues invoicing** process (Stripe + FluentCRM), **online joining** with a firm upsell (Stripe Checkout), a **membership application gate**, and a **member-facing dues status page**. Everything is driven by FluentCRM tags on the local WordPress install; billing is driven by Stripe. No subscriptions anywhere — every dues cycle is its own one-time invoice.
 
 ---
 
@@ -27,7 +27,7 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for member stat
 | **Membership by Firm** | Every FluentCRM Company with ≥1 contact, listed with its contacts. Exports to formatted Excel. |
 | **Invoicing** | Annual dues invoicing — see [Dues Invoicing](#dues-invoicing) below. |
 | **Payments** | Cross-year Stripe payments ledger — see [The Payments ledger](#the-payments-ledger) below. |
-| **Applications** | Enrollment review queue — see [Enrollment gate](#enrollment-gate). |
+| **Applications** | Enrollment review queue — see [Enrollment gate](#enrollment-gate) — and the **Online joins** tab — see [Online joining](#online-joining). |
 | **Settings** | **Dues & Billing** — category mapping, assessment, per-firm billing mode, all switches. **Payments** tab — Stripe connection, mode, and payment settings. |
 | **Setup** | Environment checks, tag checklist, **tag-slug audit** and **product-mapping audit** for the settings, plus Stripe connection health and a recent-API-activity log. |
 
@@ -170,7 +170,7 @@ Created, sent, paid, downgraded, application approved/rejected — each leaves a
 
 `includes/invoicing/interface-invoice-gateway.php` is the only seam to the commerce system; `class-stripe-invoice-gateway.php` is the only implementation, and — together with `class-stripe-client.php` — the only pair of files allowed to construct a raw Stripe API call. Every invoice/customer id the interface passes around is a **string** (a Stripe object id such as `in_…`/`cus_…`), never assumed numeric. Swap the implementation with the `my_njilga_invoice_gateway` filter.
 
-**Stripe prerequisites:** a connected account (Settings → Payments — see [Connecting Stripe](#connecting-stripe) below) that can actually accept charges, and a key with at minimum the permissions the connect form lists (Customers/Invoices write, Webhook Endpoints write for auto-provisioning, Charges/PaymentIntents/Credit notes read). The Invoicing page and Setup page both surface Stripe's own connection-health errors up front rather than letting a create attempt fail opaquely.
+**Stripe prerequisites:** a connected account (Settings → Payments — see [Connecting Stripe](#connecting-stripe) below) that can actually accept charges, and a key with at minimum the permissions the connect form lists (Customers/Invoices write, Webhook Endpoints write for auto-provisioning, Charges/PaymentIntents/Credit notes read, and **Checkout Sessions write** for online joining). The Invoicing page and Setup page both surface Stripe's own connection-health errors up front rather than letting a create attempt fail opaquely.
 
 ### The Payments ledger
 
@@ -206,6 +206,50 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 ---
 
+## Online joining
+
+`[njilga_join category="…"]` goes on each Membership page — `professional`, `law_student`, `emerging_professional` (any Settings category an applicant may pick; its tag, e.g. `law-student`, works too). The applicant walks through a short wizard and pays on **Stripe Checkout** (card, or US bank account); **the payment is the membership** — no staff review — and the plugin applies it the moment Stripe confirms the money. **FluentCart is not involved anywhere**: Stripe and Stripe's webhooks are the whole payment path, for joins and for the annual invoices alike.
+
+| Page | The form asks |
+|---|---|
+| **Professional** | *Which firm do you represent?* — type-ahead over FluentCRM Companies, or **Add your firm** → account (username, password, email, each confirmed) → Municipality, primary phone, NJ Attorney ID, date of admission to the NJ Bar → mailing address → **Bring your firm along** (the upsell) → review & pay |
+| **Emerging Professional** | the same, without the upsell (a flat-priced category) |
+| **Law Student** | *Are you currently enrolled in law school?* (enrolled / undergraduate aspiring) → account, phone, school, mailing address, and — if enrolled — **student ID or transcript upload** → review & pay |
+
+**The upsell.** On a tier-eligible category (Professional) the payer can add colleagues — first name, last name, email each. They're priced on the category's own ladder with the **payer as the 1st member**: 1st $125, members 2–5 $75, beyond 5 free (Settings → categories drive the numbers and the copy). The payment covers everyone: each colleague gets the membership, the category tag and the firm, and an **invitation email** with a single-use link to create their own website account (their role is granted then, or on first login if they get an account another way). A join is priced on its own — the payer is the 1st member even at a firm that already has paid members this year — which is the existing mid-year rule.
+
+**Before anything is created.** The email is confirmed with a 6-digit code before a WordPress account exists for it. Nothing touches FluentCRM until payment is confirmed: an abandoned checkout leaves only the join record (Online joins lists it) and an account with no membership.
+
+**On payment** (`MyNJILGA_Join_Fulfillment`, triggered by `checkout.session.completed` / `async_payment_succeeded`, by `invoice.paid` on the join's own invoice, by the return from Checkout, by the daily sweep, and by staff — whichever arrives first; idempotent and concurrency-safe):
+
+1. The firm: the chosen Company; else an exact or normalised-name match ("Smith & Jones, LLP" = "Smith and Jones LLP"); else a new Company with the payer as Owner. A joiner is **never made Owner of a firm that already exists**.
+2. Contacts for the payer and every colleague, found by email or created. New colleague contacts are created **transactional/pending**, never subscribed — someone else typed their address. An existing unsubscribed contact is never resubscribed.
+3. **Who goes on the firm now.** For an existing firm, a joiner is attached automatically when their email domain is already at the firm (free-mail never counts — a long built-in list, including country and subdomain variants, adjustable with the `my_njilga_free_mail_domains` filter) — Settings can switch this to "always, review afterwards". Anyone else is **held**: still a paid member, but not attached until staff click **Add to firm** (or **Leave off firm**) on Online joins. Someone held only over the firm (domain, another firm, payer not yet confirmed) gets the category tag straight away; someone whose own record is the question (another category, inactive, unsubscribed) isn't re-categorised until staff confirm. A held **payer**'s invoice row is filed as an individual membership — out of the firm's sight on its status page — and moves onto the firm when staff confirm.
+4. An `njilga_dues_invoices` row of kind **`join`**, written straight in as **paid**, whose snapshot names everyone — so the Payments ledger, the firm status page, the downgrade sweep (which protects them) and the next Generate Preview (which prices them at $0 for that year, "paid via online join") all see it — then the ledger row and `settle()`: `Dues Paid {year}`, `dues-paid`, roles, Company Note.
+5. Invitations, a welcome email to the payer, and a staff email (Settings → Online joining → notify).
+
+**Late in the year.** Once next year's invoices exist (or from the date set in Settings), a join pays **next** year's dues and covers the rest of this one — so a late joiner is never missing from next year's already-frozen invoices.
+
+**Never paid for twice.** The form refuses anyone already current for the year, anyone on a firm invoice for it (draft, approved or sent), and anyone on another join whose money is already committed (a clearing ACH debit) — for a colleague it says only that they can't be added online, never which. Fulfillment re-checks and flags any overlap; Generate Preview prices everyone on a paid or clearing join at $0; and **Create** refuses to bill a firm row that still lists someone a join has already paid for, asking staff to refresh that firm's preview first. On the Invoicing page, join rows sit under their own **Online joins** tab and don't count toward the batch's firm totals.
+
+**Mode.** The public always joins in **Live** mode, whichever mode the admin toggle is on — flipping to Test to try an invoice never takes sign-ups offline. Staff rehearse with `?njilga_test=1` on a Membership page: test card, and every email the test join sends goes to the tester.
+
+**$0 joins** (a category priced at $0) have no payment to prove intent, so the form ends in **Submit for approval** rather than Stripe, and they wait on **Online joins** for Approve/Reject.
+
+**Abuse limits.** The code, submit, new-account, colleague-conflict and invite-acceptance steps are rate-limited per client address and per verified email. Sending a code answers the same whether or not an account exists (an existing account gets a "log in instead" email), and code guesses are counted atomically. Logged-out forms carry a per-visitor token, so another site can't post a join — or a login — on a visitor's behalf. Behind a proxy or load balancer that doesn't restore the client address, return the real one from the `my_njilga_client_ip` filter, or every visitor shares one limit.
+
+**Invitations** open with "You're creating the account for *email*" and a **This isn't me** button that clears the invitation, so a forwarded or planted link can't pass itself off as the visitor's own join.
+
+**Student documents** are stored outside the Media Library in `uploads/njilga-private/` (deny-all `.htaccess`, random 128-bit names; on nginx deny the path, or define `NJILGA_PRIVATE_DIR` outside the web root), shown to staff only, flagged "not yet checked" until staff mark them, and purged 30 days after a join that never became a membership. The size limit shown and enforced is 8 MB or the server's own upload limit, whichever is lower.
+
+**Online joins** (Applications → Online joins) lists every attempt with its status — Awaiting payment, Bank payment clearing, Member, Needs a decision, Checkout expired… — and the actions each needs: Approve/Reject, Check payment / Retry, Add to firm / Leave off firm, Resend invites, Mark reviewed, the receipt and the student document. **Needs attention** (and the menu bubble) collects what a person must act on.
+
+**Webhook events.** Joins need `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired` (and `charge.dispute.created` is now subscribed for every payment). An endpoint provisioned by an earlier version gets them added automatically on the next admin page load; one added by hand can't be read back, so Setup → Online joining lists the events to add to it. Without the webhook, the daily sweep still settles a join — including noticing a bank debit that failed.
+
+**Checkout availability** (whether the key may create Checkout Sessions) is checked from admin page loads and on connect, never on a public page view; Setup → Online joining shows the answer per mode with a **Re-check** button.
+
+---
+
 ## Enrollment gate
 
 `[njilga_membership_application]` renders the public application form — first/last name, email, phone, **firm with search-as-you-type against existing FluentCRM Companies and an "Add “…” as a new firm" fallback**, category (those flagged *applicant may pick* in Settings), message. Submitting creates/updates the FluentCRM contact, tags it **pending-approval**, records the application, and emails staff. The applicant is **not** attached to any Company and gets no role or paid tag, so they never enter the billing pool until approved.
@@ -230,7 +274,7 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 ## CSV / Excel exports
 
-Each list page has a **Download CSV** button; **Membership by Firm** and the **Payments** ledger export a formatted `.xls`; **Reports** offers the **Executive Summary** `.xls` combining every report. No third-party libraries.
+Each list page has a **Download CSV** button; **Membership by Firm** and the **Payments** ledger export a formatted `.xls`; **Reports** offers the **Executive Summary** `.xls` combining every report. No third-party libraries. Names and firm names can come from the public join form, so a CSV cell that would start a spreadsheet formula (`=`, `+`, `-`, `@`) is written as text; the `.xls` exports already mark data cells as text.
 
 ---
 
@@ -250,6 +294,15 @@ my-njilga/
 │   ├── class-page-applications.php       ← Enrollment review queue
 │   ├── class-page-setup.php              ← Environment, tag/product audit, Stripe health + API log
 │   ├── class-firm-status-page.php        ← [njilga_firm_dues_status]
+│   ├── join/                             ← [njilga_join] — online joining (Stripe Checkout)
+│   │   ├── class-join-form.php           ← Controller: POST handling, validation, email codes, account, checkout
+│   │   ├── class-join-view.php           ← Markup, scoped front-end CSS, wizard/type-ahead JS
+│   │   ├── class-join-pricing.php        ← PURE: what a join costs (payer + colleagues) — unit-tested
+│   │   ├── class-join-fulfillment.php    ← Paid → firm, contacts, tags, join invoice row, settle, invites
+│   │   ├── class-join-invites.php        ← Colleague invitations: issue, email, accept
+│   │   ├── class-join-documents.php      ← Private student ID / transcript storage
+│   │   ├── class-join-orders-table.php   ← njilga_join_orders
+│   │   └── class-join-invites-table.php  ← njilga_join_invites
 │   ├── class-report-*.php                ← CSV / XLS / Executive Summary
 │   ├── invoicing/
 │   │   ├── class-dues-settings.php       ← Settings storage + seed defaults
@@ -258,6 +311,7 @@ my-njilga/
 │   │   ├── class-dues-invoice-table.php  ← njilga_dues_invoices schema (1.2.0) + CRUD
 │   │   ├── class-dues-payments-table.php ← njilga_dues_payments schema + CRUD (payment/refund ledger)
 │   │   ├── interface-invoice-gateway.php ← Commerce seam
+│   │   ├── interface-checkout-gateway.php ← Checkout seam (online joins) — a separate interface, so swapped gateways don't break
 │   │   ├── class-stripe-client.php       ← Raw Stripe HTTP transport (the only other file naming a Stripe endpoint)
 │   │   ├── class-stripe-connection.php   ← Credential storage/encryption, connect flow, webhook auto-provisioning
 │   │   ├── class-stripe-invoice-gateway.php ← The only file implementing the gateway interface
