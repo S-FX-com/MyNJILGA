@@ -162,42 +162,67 @@ class MyNJILGA_Stripe_Events_Table {
     // Writes
     // -------------------------------------------------------------------------
 
+    // record() outcomes.
+    const RECORD_NEW       = 'new';
+    const RECORD_DUPLICATE = 'duplicate';
+    const RECORD_ERROR     = 'error';
+
     /**
      * Webhook idempotency gate: insert a `received` row for this Stripe
-     * event id. Returns true the first time an event id is seen (go ahead
-     * and process it); returns false — not an error, just "already seen" —
-     * on a duplicate delivery, which a later phase's receiver treats as
-     * "nothing to do, ack the webhook and stop."
+     * event id. True the first time an event id is seen (go ahead and
+     * process it); false for a duplicate delivery AND for a database
+     * failure. Kept for callers that only need yes/no — the receiver uses
+     * record() so it can tell the two apart.
      */
     public static function record_received( string $eventId, string $type, bool $livemode, ?string $objectId = null ): bool {
+        return self::record( $eventId, $type, $livemode, $objectId ) === self::RECORD_NEW;
+    }
+
+    /**
+     * The idempotency gate with its three outcomes. A duplicate is the
+     * expected, quiet case (Stripe re-delivers routinely) and must not
+     * log a database error; anything else that stops the row being
+     * written is RECORD_ERROR, which the receiver answers with a 5xx so
+     * Stripe retries — acknowledging it would lose the event for good,
+     * since an acknowledged delivery is never resent.
+     *
+     * The UNIQUE key on event_id stays the arbiter between two
+     * simultaneous deliveries: INSERT IGNORE lets exactly one of them
+     * write the row, and the other finds it on the re-read.
+     *
+     * @return string One of the RECORD_* constants.
+     */
+    public static function record( string $eventId, string $type, bool $livemode, ?string $objectId = null ): string {
         global $wpdb;
         $table = self::table_name();
 
         try {
-            $inserted = $wpdb->insert(
-                $table,
-                [
-                    'event_id'    => $eventId,
-                    'type'        => $type,
-                    'livemode'    => $livemode ? 1 : 0,
-                    'object_id'   => $objectId,
-                    'status'      => self::STATUS_RECEIVED,
-                    'received_at' => current_time( 'mysql' ),
-                ],
-                [ '%s', '%s', '%d', '%s', '%s', '%s' ]
-            );
-
-            if ( $inserted ) {
-                return true;
+            if ( self::get_by_event_id( $eventId ) ) {
+                return self::RECORD_DUPLICATE;
             }
 
-            // A duplicate-key violation (MySQL 1062) on `event` is the
-            // expected "already seen" case, not an error — anything else
-            // is a genuine DB failure, which is also not worth processing
-            // twice, so it's treated the same way (false = don't proceed).
-            return false;
+            $sql = $objectId === null
+                ? $wpdb->prepare(
+                    "INSERT IGNORE INTO $table (event_id, type, livemode, object_id, status, received_at) VALUES (%s, %s, %d, NULL, %s, %s)", // phpcs:ignore
+                    $eventId, $type, $livemode ? 1 : 0, self::STATUS_RECEIVED, current_time( 'mysql' )
+                )
+                : $wpdb->prepare(
+                    "INSERT IGNORE INTO $table (event_id, type, livemode, object_id, status, received_at) VALUES (%s, %s, %d, %s, %s, %s)", // phpcs:ignore
+                    $eventId, $type, $livemode ? 1 : 0, $objectId, self::STATUS_RECEIVED, current_time( 'mysql' )
+                );
+            $inserted = $wpdb->query( $sql ); // phpcs:ignore
+
+            if ( $inserted === false ) {
+                return self::RECORD_ERROR;
+            }
+            if ( (int) $inserted === 1 ) {
+                return self::RECORD_NEW;
+            }
+            // Nothing written and no error: another delivery of the same
+            // event won the UNIQUE key between the read and the insert.
+            return self::get_by_event_id( $eventId ) ? self::RECORD_DUPLICATE : self::RECORD_ERROR;
         } catch ( \Throwable $e ) {
-            return false;
+            return self::RECORD_ERROR;
         }
     }
 

@@ -733,6 +733,14 @@ class MyNJILGA_Stripe_Connection {
         $block     = self::get()[ $mode ];
         $webhookId = (string) $block['webhook_id'];
         if ( $webhookId === '' ) {
+            // An endpoint added by hand (the manual fallback on Settings →
+            // Payments) leaves only its signing secret on file — deliveries
+            // verify against it, so payments do update. There is no id to
+            // check it by, so this is never a blocker: whether it has gone
+            // quiet, or lacks events, is health_warnings()' to say.
+            if ( (string) ( $block['webhook_secret'] ?? '' ) !== '' ) {
+                return [];
+            }
             return [ 'No webhook endpoint on file — payments will not update automatically until one is configured.' ];
         }
 
@@ -789,6 +797,13 @@ class MyNJILGA_Stripe_Connection {
         $silence = self::event_silence_warning( $mode );
         if ( $silence !== '' ) {
             $warnings[] = $silence;
+        }
+
+        // A hand-made endpoint that Stripe says is missing events this
+        // plugin relies on (online joins' Checkout events, disputes).
+        $events = self::webhook_events_state( $mode );
+        if ( $events['endpoint'] === 'manual' && $events['recorded'] && $events['missing'] ) {
+            $warnings[] = 'The webhook endpoint was added by hand and is not subscribed to: ' . implode( ', ', $events['missing'] ) . '. Add them to the endpoint under Developers → Webhooks in the Stripe Dashboard. Invoices can still be created.';
         }
 
         if ( self::cached_ach_check( $mode, $secretKey )['state'] === 'off' ) {
