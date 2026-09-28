@@ -245,28 +245,42 @@ class MyNJILGA_Firm_Status_Page {
     }
 
     private static function styles(): void {
-        echo '<style>
-            .njilga-status{max-width:860px}
-            .njilga-status__me{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;background:#f6f7f7;border-radius:6px;margin-bottom:18px}
-            .njilga-status__year{margin:22px 0 8px;font-size:1.1em}
-            .njilga-status__card{border:1px solid #dcdcde;border-radius:6px;padding:14px 16px;margin-bottom:14px;background:#fff}
-            .njilga-status__head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start}
+        // The same type and colours as the join form (MyNJILGA_Front_Style).
+        MyNJILGA_Front_Style::enqueue_fonts();
+        echo '<style>' . MyNJILGA_Front_Style::tokens( '.njilga-status' ) . '
+            .njilga-status{max-width:880px;-webkit-font-smoothing:antialiased}
+            .njilga-status *{box-sizing:border-box}
+            .njilga-status p{margin:0 0 16px}
+            .njilga-status a{color:var(--nj-blue)}
+            .njilga-status__me{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px 24px;padding:20px 24px;background:var(--nj-soft);border:1px solid var(--nj-line);border-radius:var(--nj-radius);margin:0 0 28px}
+            .njilga-status__year{font-family:var(--nj-font-head);font-size:26px;font-weight:700;line-height:1.25;color:var(--nj-ink);margin:36px 0 16px;letter-spacing:0;text-transform:none}
+            .njilga-status__card{border:1px solid var(--nj-line);border-radius:var(--nj-radius);padding:28px 32px;margin:0 0 20px;background:#fff;box-shadow:0 1px 2px rgba(16,24,40,.04),0 4px 16px rgba(16,24,40,.04)}
+            .njilga-status__card>:last-child{margin-bottom:0}
+            .njilga-status__me .njilga-status__pill{margin-top:0}
+            .njilga-status__head{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:flex-start}
+            .njilga-status__head strong{font-family:var(--nj-font-head);font-size:20px;color:var(--nj-ink)}
             .njilga-status__right{text-align:right}
-            .njilga-status__total{font-size:1.4em;font-weight:700}
-            .njilga-status__meta{color:#646970;font-size:.9em;margin:4px 0 0}
-            .njilga-status__muted{color:#8c8f94}
-            .njilga-status__tag{display:inline-block;padding:0 7px;border-radius:10px;font-size:.75em;font-weight:600;color:#fff;background:#2271b1;vertical-align:middle}
-            .njilga-status__pill{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.8em;font-weight:600;margin-top:4px}
-            .njilga-status__pill--paid{background:#edfaef;color:#1d6f42}
-            .njilga-status__pill--unpaid{background:#fcf0f1;color:#d63638}
-            .njilga-status__pill--processing{background:#fcf9e8;color:#996800}
-            .njilga-status__pill--none{background:#f0f0f1;color:#646970}
-            .njilga-status__table{width:100%;border-collapse:collapse;margin-top:12px;font-size:.95em}
-            .njilga-status__table th,.njilga-status__table td{text-align:left;padding:6px 8px;border-bottom:1px solid #f0f0f1}
-            .njilga-status__table tr.is-you td{background:#f0f6fc}
-            .njilga-status__actions{margin:14px 0 0}
-            .njilga-status__pay{display:inline-block;padding:10px 18px;border-radius:4px;background:#1d6f42;color:#fff!important;text-decoration:none;font-weight:600;margin-right:10px}
-            .njilga-status__pdf{display:inline-block;padding:10px 18px;border-radius:4px;border:1px solid #dcdcde;color:#1d2327!important;text-decoration:none;font-weight:600;margin-right:10px}
+            .njilga-status__total{font-family:var(--nj-font-head);font-size:28px;font-weight:700;line-height:1.1;color:var(--nj-ink)}
+            .njilga-status__meta{color:var(--nj-muted);font-size:14px;margin:8px 0 0}
+            .njilga-status__table+.njilga-status__meta{margin-top:16px}
+            .njilga-status__muted{color:var(--nj-muted);font-size:14px}
+            .njilga-status__tag{display:inline-block;padding:2px 8px;border-radius:999px;font-family:var(--nj-font-ui);font-size:11px;font-weight:600;letter-spacing:.04em;color:#fff;background:var(--nj-blue);vertical-align:middle}
+            .njilga-status__pill{display:inline-block;padding:4px 12px;border-radius:999px;font-family:var(--nj-font-ui);font-size:12px;font-weight:600;letter-spacing:.02em;margin-top:6px}
+            .njilga-status__pill--paid{background:var(--nj-success-bg);color:var(--nj-success)}
+            .njilga-status__pill--unpaid{background:var(--nj-danger-bg);color:var(--nj-danger)}
+            .njilga-status__pill--processing{background:var(--nj-warn-bg);color:var(--nj-warn)}
+            .njilga-status__pill--none{background:var(--nj-soft);color:var(--nj-muted)}
+            .njilga-status__table{width:100%;border-collapse:collapse;margin:20px 0 0;font-size:15px}
+            .njilga-status__table th{font-family:var(--nj-font-ui);font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--nj-muted)}
+            .njilga-status__table th,.njilga-status__table td{text-align:left;padding:12px 10px;border-bottom:1px solid var(--nj-line)}
+            .njilga-status__table tr.is-you td{background:var(--nj-blue-soft)}
+            .njilga-status__actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;margin:24px 0 0}
+            .njilga-status__pay,.njilga-status__pdf{display:inline-flex;align-items:center;min-height:44px;padding:10px 22px;border-radius:var(--nj-radius-sm);font-family:var(--nj-font-ui);font-size:15px;font-weight:600;text-decoration:none!important}
+            .njilga-status__pay{background:var(--nj-navy);border:1px solid var(--nj-navy);color:#fff!important}
+            .njilga-status__pay:hover{background:var(--nj-blue);border-color:var(--nj-blue)}
+            .njilga-status__pdf{border:1px solid var(--nj-field);background:#fff;color:var(--nj-navy)!important}
+            .njilga-status__pdf:hover{border-color:var(--nj-navy)}
+            @media (max-width:640px){.njilga-status__card{padding:20px}.njilga-status__right{text-align:left}.njilga-status__table{font-size:14px}.njilga-status__table th,.njilga-status__table td{padding:10px 6px}}
         </style>';
     }
 

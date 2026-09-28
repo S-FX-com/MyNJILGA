@@ -992,9 +992,12 @@ class MyNJILGA_Join_Fulfillment {
     private static function applicant_fields( array $a ): array {
         return [
             'email'          => (string) ( $a['email'] ?? '' ),
+            'prefix'         => (string) ( $a['prefix'] ?? '' ), // FluentCRM's own Prefix field
             'first_name'     => (string) ( $a['first_name'] ?? '' ),
             'last_name'      => (string) ( $a['last_name'] ?? '' ),
-            'phone'          => (string) ( $a['phone'] ?? '' ),
+            // +1 ###-###-####, the shape FluentCRM records here use — also
+            // for joins recorded before the form normalised numbers.
+            'phone'          => MyNJILGA_Phone::for_crm( (string) ( $a['phone'] ?? '' ) ),
             'address_line_1' => (string) ( $a['address_1'] ?? '' ),
             'address_line_2' => (string) ( $a['address_2'] ?? '' ),
             'city'           => (string) ( $a['city'] ?? '' ),
@@ -1019,9 +1022,11 @@ class MyNJILGA_Join_Fulfillment {
                 'attorney_id'        => (string) ( $a['attorney_id'] ?? '' ),
                 'bar_admission_date' => (string) ( $a['bar_admission_date'] ?? '' ),
                 'municipality'       => (string) ( $a['municipality'] ?? '' ),
+                'nj_county'          => (string) ( $a['nj_county'] ?? '' ),
             ];
-        if ( (string) ( $a['mailing_phone'] ?? '' ) !== '' && (string) ( $a['mailing_phone'] ?? '' ) !== (string) ( $a['phone'] ?? '' ) ) {
-            $values['mailing_phone'] = (string) $a['mailing_phone'];
+        $mailing = (string) ( $a['mailing_phone'] ?? '' );
+        if ( $mailing !== '' && ! MyNJILGA_Phone::same( $mailing, (string) ( $a['phone'] ?? '' ) ) ) {
+            $values['mailing_phone'] = MyNJILGA_Phone::for_crm( $mailing );
         }
         $out = [];
         foreach ( $values as $key => $value ) {
@@ -1768,6 +1773,14 @@ class MyNJILGA_Join_Fulfillment {
         } else {
             $lines[] = 'NJ Attorney ID: ' . (string) ( $applicant['attorney_id'] ?? '' );
             $lines[] = 'Admitted to the NJ Bar: ' . (string) ( $applicant['bar_admission_date'] ?? '' );
+            foreach ( [ 'nj_county' => 'NJ County', 'municipality' => 'Municipality' ] as $k => $label ) {
+                if ( (string) ( $applicant[ $k ] ?? '' ) !== '' ) {
+                    $lines[] = $label . ': ' . (string) $applicant[ $k ];
+                }
+            }
+        }
+        if ( (string) ( $applicant['phone'] ?? '' ) !== '' ) {
+            $lines[] = 'Phone: ' . MyNJILGA_Phone::for_crm( (string) $applicant['phone'] );
         }
         if ( $colleagues ) {
             $lines[] = '';

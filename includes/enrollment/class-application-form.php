@@ -60,21 +60,26 @@ class MyNJILGA_Application_Form {
 
         ob_start();
         ?>
+        <?php MyNJILGA_Front_Style::enqueue_fonts(); ?>
         <style>
-            .njilga-app{max-width:640px}
-            .njilga-app label{display:block;font-weight:600;margin:14px 0 4px}
-            .njilga-app input[type=text],.njilga-app input[type=email],.njilga-app input[type=tel],.njilga-app select,.njilga-app textarea{width:100%;padding:8px 10px;border:1px solid #c3c4c7;border-radius:4px;box-sizing:border-box;font:inherit}
-            .njilga-app .njilga-app__row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+            <?php echo MyNJILGA_Front_Style::tokens( '.njilga-app' ); // phpcs:ignore -- fixed CSS ?>
+            .njilga-app{max-width:680px;-webkit-font-smoothing:antialiased}
+            .njilga-app *{box-sizing:border-box}
+            .njilga-app label{display:block;font-family:var(--nj-font-ui);font-size:14px;font-weight:500;line-height:1.4;color:var(--nj-ink);margin:20px 0 8px}
+            .njilga-app input[type=text],.njilga-app input[type=email],.njilga-app input[type=tel],.njilga-app select,.njilga-app textarea{display:block;width:100%;min-height:48px;padding:11px 14px;border:1px solid var(--nj-field);border-radius:var(--nj-radius-sm);background:#fff;color:var(--nj-ink);font-family:var(--nj-font-body);font-size:16px;line-height:1.4;margin:0;transition:border-color .15s,box-shadow .15s}
+            .njilga-app input:focus,.njilga-app select:focus,.njilga-app textarea:focus{outline:none;border-color:var(--nj-blue);box-shadow:0 0 0 3px rgba(31,84,147,.18)}
+            .njilga-app .njilga-app__row{display:grid;grid-template-columns:1fr 1fr;gap:0 20px}
             .njilga-app .njilga-app__firm{position:relative}
-            .njilga-app .njilga-app__suggest{position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1px solid #c3c4c7;border-top:0;border-radius:0 0 4px 4px;list-style:none;margin:0;padding:0;max-height:240px;overflow:auto;display:none}
-            .njilga-app .njilga-app__suggest li{padding:8px 10px;cursor:pointer}
-            .njilga-app .njilga-app__suggest li:hover,.njilga-app .njilga-app__suggest li[aria-selected=true]{background:#f0f6fc}
-            .njilga-app .njilga-app__suggest li.is-new{font-style:italic;color:#2271b1;border-top:1px solid #eee}
-            .njilga-app .njilga-app__hint{font-size:12px;color:#646970;margin:4px 0 0}
-            .njilga-app .njilga-app__error{padding:10px 12px;background:#fcf0f1;border:1px solid #d63638;border-radius:4px;margin-bottom:12px}
-            .njilga-app--success{padding:14px 16px;background:#edfaef;border:1px solid #1d6f42;border-radius:4px}
+            .njilga-app .njilga-app__suggest{position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1px solid var(--nj-field);border-radius:var(--nj-radius-sm);list-style:none;margin:4px 0 0;padding:6px 0;max-height:260px;overflow:auto;box-shadow:0 12px 32px rgba(16,24,40,.14);display:none}
+            .njilga-app .njilga-app__suggest li{padding:11px 16px;cursor:pointer;margin:0;color:var(--nj-ink)}
+            .njilga-app .njilga-app__suggest li:hover,.njilga-app .njilga-app__suggest li[aria-selected=true]{background:var(--nj-soft)}
+            .njilga-app .njilga-app__suggest li.is-new{color:var(--nj-blue);font-weight:600;border-top:1px solid var(--nj-line)}
+            .njilga-app .njilga-app__hint{font-size:14px;line-height:1.5;color:var(--nj-muted);margin:8px 0 0}
+            .njilga-app .njilga-app__error{padding:16px 20px;background:var(--nj-danger-bg);border:1px solid #fecdca;border-left:4px solid var(--nj-danger);border-radius:var(--nj-radius-sm);color:var(--nj-danger);margin:0 0 20px}
+            .njilga-app--success{padding:20px 24px;background:var(--nj-success-bg);border:1px solid #abefc6;border-left:4px solid var(--nj-success);border-radius:var(--nj-radius-sm);color:var(--nj-success)}
             .njilga-app .njilga-app__hp{position:absolute;left:-9999px;opacity:0;height:0;overflow:hidden}
-            .njilga-app button{margin-top:18px;padding:10px 18px;font:inherit;font-weight:600;border-radius:4px;border:1px solid #2271b1;background:#2271b1;color:#fff;cursor:pointer}
+            .njilga-app button{margin-top:28px;min-height:48px;padding:12px 28px;font-family:var(--nj-font-ui);font-size:15px;font-weight:600;border-radius:var(--nj-radius-sm);border:1px solid var(--nj-navy);background:var(--nj-navy);color:#fff;cursor:pointer;transition:background-color .15s,border-color .15s}
+            .njilga-app button:hover{background:var(--nj-blue);border-color:var(--nj-blue)}
             @media (max-width:560px){.njilga-app .njilga-app__row{grid-template-columns:1fr}}
         </style>
         <form class="njilga-app" id="<?php echo esc_attr( $uid ); ?>" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">

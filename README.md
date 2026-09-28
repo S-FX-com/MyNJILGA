@@ -213,9 +213,13 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 | Page | The form asks |
 |---|---|
-| **Professional** | *Which firm do you represent?* — type-ahead over FluentCRM Companies, or **Add your firm** → account (username, password, email, each confirmed) → Municipality, primary phone, NJ Attorney ID, date of admission to the NJ Bar → mailing address → **Bring your firm along** (the upsell) → review & pay |
+| **Professional** | *Which firm do you represent?* — type-ahead over FluentCRM Companies, or **Add your firm** → **Personal Details** (Prefix, first and last name, phone, email + its code, username, set/confirm password) · **Contact Details** (address 1–2, city, State — New Jersey only — and an NJ ZIP) · **Professional Details** (NJ Attorney ID, date of admission to the NJ Bar, NJ County, Municipality) → **Bring your firm along** (the upsell) → review & pay |
 | **Emerging Professional** | the same, without the upsell (a flat-priced category) |
-| **Law Student** | *Are you currently enrolled in law school?* (enrolled / undergraduate aspiring) → account, phone, school, mailing address, and — if enrolled — **student ID or transcript upload** → review & pay |
+| **Law Student** | *Are you currently enrolled in law school?* (enrolled / undergraduate aspiring) → **Personal Details** (as above) · **Contact Details** (any US state, or an address abroad) · **Student Details** (school, and — if enrolled — the **student ID or transcript upload**) → review & pay |
+
+**Account fields.** Prefix offers FluentCRM's own list (Mr, Mrs, Ms, plus anything the site adds with FluentCRM's `fluent_crm/contact_name_prefixes` filter) and is written to the contact's Prefix. The username defaults to first initial + last name, letters and digits only (Ann O'Neil → `aoneil`), until the person types their own; left blank without JavaScript, the server gives it the same default. The username and email are checked against existing accounts as they're entered: a taken username is swapped for (or offered) the next free one — `aoneil2` — and an email that already has an account is refused with a log-in link, again on submit. One email field (the emailed code proves it) and one phone.
+
+**New Jersey addresses.** Professional and Emerging Professional joins — and the colleagues they pay for, on the invite form — take New Jersey addresses only: State is New Jersey and the ZIP must start 07 or 08. Law students may live anywhere.
 
 **The upsell.** On a tier-eligible category (Professional) the payer can add colleagues — first name, last name, email each. They're priced on the category's own ladder with the **payer as the 1st member**: 1st $125, members 2–5 $75, beyond 5 free (Settings → categories drive the numbers and the copy). The payment covers everyone: each colleague gets the membership, the category tag and the firm, and an **invitation email** with a single-use link to create their own website account (their role is granted then, or on first login if they get an account another way). A join is priced on its own — the payer is the 1st member even at a firm that already has paid members this year — which is the existing mid-year rule.
 
@@ -241,7 +245,13 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 **Invitations** open with "You're creating the account for *email*" and a **This isn't me** button that clears the invitation, so a forwarded or planted link can't pass itself off as the visitor's own join. A link that is used, superseded, expired or unknown clears itself, with a one-time note above the normal join page, and a signed-in visitor never sees an invitation.
 
+**Phone numbers** are stored the way FluentCRM records here keep them: a US number typed any way — "(201) 555 0100", "2015550100", "+1.201.555.0100" — is shown as `201-555-0100` and written to FluentCRM as `+1 201-555-0100` (the contact's phone and the mailing-phone custom field alike). An impossible US number is refused with an example; a number with another country code (starting with `+`) is kept, tidied, as typed.
+
+**NJ County and Municipality** are selects whose choices are the options of the FluentCRM custom fields they're written to (Settings → Online joining: `nj_county` and `municipality` by default), so the form offers exactly what staff filter on. NJ County is left out when its field has no options; Municipality then falls back to the one-per-line list in Settings, else free text. Settings shows how many options each field gives the form.
+
 **Mailing address.** Without JavaScript every address field shows, labelled for US or overseas addresses, and the server checks them by the "outside the United States" box; with JavaScript only the fields that apply show and are sent. The postcode field is shared: a 5-digit ZIP for US addresses, optional free text for others, saved either way.
+
+**Look.** The public forms — the join wizard, the invite form, `[njilga_firm_dues_status]` and `[njilga_membership_application]` — follow the NJILGA site's stylesheet: **Playfair Display** headings, **Helvetica** body text, and **Inter** for eyebrows ("Step 2 of 4", "NJILGA Membership"), labels and buttons; colours come from the site's Automatic.css tokens (`--secondary` navy buttons, `--primary` blue, `--accent` gold, `--btn-radius`), each with the site's own value as the fallback on a site without Automatic.css. Sizes are in px because Automatic.css sets the root font size to 62.5%. Playfair Display comes from the theme; Inter isn't on the site, so the plugin loads it from Google Fonts on pages that show a form — return `''` from the `my_njilga_front_font_url` filter to leave font loading to the theme.
 
 **Shortcodes.** My NJILGA → **Shortcodes** lists a ready-to-paste `[njilga_join category="…"]` line for every category an applicant may pick (with its price), the `category`/`form` attributes, whether joining is open right now, and every page that carries each shortcode — with a warning when a category has no page.
 
@@ -299,6 +309,8 @@ my-njilga/
 │   ├── class-page-applications.php       ← Enrollment review queue
 │   ├── class-page-setup.php              ← Environment, tag/product audit, Stripe health + API log
 │   ├── class-firm-status-page.php        ← [njilga_firm_dues_status]
+│   ├── class-phone.php                   ← PURE: phone numbers in FluentCRM's shape (+1 ###-###-####) — unit-tested
+│   ├── class-front-style.php             ← Shared look of the public forms: site fonts + Automatic.css colour tokens
 │   ├── join/                             ← [njilga_join] — online joining (Stripe Checkout)
 │   │   ├── class-join-form.php           ← Controller: POST handling, validation, email codes, account, checkout
 │   │   ├── class-join-view.php           ← Markup, scoped front-end CSS, wizard/type-ahead JS

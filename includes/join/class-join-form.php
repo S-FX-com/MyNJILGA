@@ -55,6 +55,7 @@ class MyNJILGA_Join_Form {
 
     const AJAX_SEND_CODE  = 'njilga_join_send_code';
     const AJAX_CHECK_CODE = 'njilga_join_check_code';
+    const AJAX_CHECK_ACCOUNT = 'njilga_join_check_account';
     const CODE_TTL        = 900;  // 15 minutes
     const CODE_MAX_TRIES  = 5;
 
@@ -94,7 +95,7 @@ class MyNJILGA_Join_Form {
         add_shortcode( self::SHORTCODE, [ __CLASS__, 'render' ] );
         add_action( 'template_redirect', [ __CLASS__, 'handle_request' ] );
         add_filter( 'nonce_user_logged_out', [ __CLASS__, 'visitor_nonce_uid' ], 10, 2 );
-        foreach ( [ self::AJAX_SEND_CODE => 'ajax_send_code', self::AJAX_CHECK_CODE => 'ajax_check_code' ] as $action => $method ) {
+        foreach ( [ self::AJAX_SEND_CODE => 'ajax_send_code', self::AJAX_CHECK_CODE => 'ajax_check_code', self::AJAX_CHECK_ACCOUNT => 'ajax_check_account' ] as $action => $method ) {
             add_action( 'wp_ajax_nopriv_' . $action, [ __CLASS__, $method ] );
             add_action( 'wp_ajax_' . $action, [ __CLASS__, $method ] );
         }
@@ -1272,7 +1273,9 @@ class MyNJILGA_Join_Form {
         self::validate_account( $old, $errors, (string) $found['invite']->email, false );
         self::require_fields( $old, [ 'first_name' => 'First name', 'last_name' => 'Last name', 'phone' => 'Phone', 'address_1' => 'Address', 'city' => 'City' ], $errors );
         self::validate_phone( $old, 'phone', $errors );
-        self::validate_address( $old, $errors );
+        // Colleagues join on the Professional ladder: NJ addresses only.
+        self::validate_address( $old, $errors, true );
+        self::validate_prefix( $old, $errors );
         foreach ( [ 'first_name' => 'First name', 'last_name' => 'Last name' ] as $k => $label ) {
             $bad = self::plain_text_problem( (string) ( $old[ $k ] ?? '' ), 80 );
             if ( $bad !== '' && ! isset( $errors[ $k ] ) ) {
@@ -1287,22 +1290,23 @@ class MyNJILGA_Join_Form {
             return;
         }
 
-        $outside = ! empty( $old['outside_us'] );
         $in = [
             'username'           => (string) $old['username'],
             'password'           => (string) wp_unslash( $_POST['password'] ?? '' ),
+            'prefix'             => (string) ( $old['prefix'] ?? '' ),
             'first_name'         => (string) $old['first_name'],
             'last_name'          => (string) $old['last_name'],
-            'phone'              => (string) ( $old['phone'] ?? '' ),
+            'phone'              => MyNJILGA_Phone::display( (string) ( $old['phone'] ?? '' ) ),
             'attorney_id'        => (string) ( $old['attorney_id'] ?? '' ),
             'bar_admission_date' => (string) ( $old['bar_admission_date'] ?? '' ),
             'municipality'       => (string) ( $old['municipality'] ?? '' ),
+            'nj_county'          => (string) ( $old['nj_county'] ?? '' ),
             'address_line_1'     => (string) ( $old['address_1'] ?? '' ),
             'address_line_2'     => (string) ( $old['address_2'] ?? '' ),
             'city'               => (string) ( $old['city'] ?? '' ),
-            'state'              => $outside ? (string) ( $old['region'] ?? '' ) : (string) ( $old['state'] ?? '' ),
+            'state'              => 'NJ',
             'postal_code'        => (string) ( $old['postal_code'] ?? '' ),
-            'country'            => $outside ? (string) ( $old['country'] ?? '' ) : 'US',
+            'country'            => 'US',
         ];
         $r = MyNJILGA_Join_Invites::accept( $found['invite'], $token, $in );
         if ( ! $r['ok'] ) {
@@ -1341,14 +1345,19 @@ class MyNJILGA_Join_Form {
             return isset( $_POST[ $k ] ) ? trim( sanitize_text_field( wp_unslash( (string) $_POST[ $k ] ) ) ) : '';
         };
         $old = [];
-        foreach ( [ 'category', 'username', 'first_name', 'last_name', 'phone', 'mailing_phone', 'firm_name', 'municipality', 'attorney_id', 'bar_admission_date', 'address_1', 'address_2', 'city', 'state', 'region', 'postal_code', 'country', 'student_status', 'school', 'add_colleagues' ] as $k ) {
+        foreach ( [ 'category', 'username', 'prefix', 'first_name', 'last_name', 'phone', 'mailing_phone', 'firm_name', 'municipality', 'nj_county', 'attorney_id', 'bar_admission_date', 'address_1', 'address_2', 'city', 'state', 'region', 'postal_code', 'country', 'student_status', 'school', 'add_colleagues' ] as $k ) {
             $old[ $k ] = $text( $k );
         }
         $old['email']         = strtolower( sanitize_email( wp_unslash( (string) ( $_POST['email'] ?? '' ) ) ) );
-        $old['email_confirm'] = strtolower( sanitize_email( wp_unslash( (string) ( $_POST['email_confirm'] ?? '' ) ) ) );
         $old['company_id']    = (int) ( $_POST['company_id'] ?? 0 );
         $old['email_code']    = substr( (string) preg_replace( '/\D+/', '', (string) wp_unslash( $_POST['email_code'] ?? '' ) ), 0, 6 );
         $old['outside_us']    = ! empty( $_POST['outside_us'] ) ? '1' : '';
+        // A username left blank (no JavaScript to suggest one) gets the
+        // same default the form offers: first initial + last name, the
+        // first free variant of it.
+        if ( $old['username'] === '' && isset( $_POST['username'] ) && ( $old['first_name'] !== '' || $old['last_name'] !== '' ) ) {
+            $old['username'] = self::available_username( self::username_base( $old['first_name'], $old['last_name'] ) );
+        }
 
         $old['colleagues'] = [];
         $firsts = isset( $_POST['colleague_first'] ) ? (array) wp_unslash( $_POST['colleague_first'] ) : [];
@@ -1389,7 +1398,8 @@ class MyNJILGA_Join_Form {
             }
         }
 
-        self::validate_address( $old, $errors );
+        self::validate_address( $old, $errors, self::nj_only( $form ) );
+        self::validate_prefix( $old, $errors );
 
         if ( $form === MyNJILGA_Join_Orders_Table::FORM_STUDENT ) {
             if ( ! in_array( $old['student_status'] ?? '', [ 'enrolled', 'undergrad' ], true ) ) {
@@ -1405,8 +1415,6 @@ class MyNJILGA_Join_Form {
                 $errors['firm_name'] = 'Please shorten the firm name.';
             }
             self::validate_professional_details( $old, $errors, true );
-            self::require_fields( $old, [ 'mailing_phone' => 'Phone' ], $errors );
-            self::validate_phone( $old, 'mailing_phone', $errors );
         }
         return $errors;
     }
@@ -1415,7 +1423,19 @@ class MyNJILGA_Join_Form {
      * @param array<string,mixed>  $old
      * @param array<string,string> $errors
      */
-    private static function validate_address( array $old, array &$errors ): void {
+    private static function validate_address( array $old, array &$errors, bool $njOnly = false ): void {
+        if ( $njOnly ) {
+            // Professional and Emerging Professional members (and the
+            // colleagues they pay for) join online with a New Jersey
+            // address; the form offers no other state.
+            if ( (string) ( $old['state'] ?? '' ) !== 'NJ' ) {
+                $errors['state'] = 'Online membership is for New Jersey addresses — please contact NJILGA to join from elsewhere.';
+            }
+            if ( ! self::is_nj_zip( (string) ( $old['postal_code'] ?? '' ) ) ) {
+                $errors['postal_code'] = 'Please enter a New Jersey ZIP code (5 digits, starting 07 or 08).';
+            }
+            return;
+        }
         if ( ! empty( $old['outside_us'] ) ) {
             // Outside the US the State list and the ZIP pattern don't
             // apply. Without JavaScript the State select still arrives
@@ -1449,8 +1469,8 @@ class MyNJILGA_Join_Form {
             $errors['username'] = 'Please choose a username.';
         } elseif ( sanitize_user( $raw, true ) !== $raw || ! validate_username( $raw ) || mb_strlen( $raw ) < 3 || mb_strlen( $raw ) > 60 ) {
             $errors['username'] = 'Usernames can use letters, numbers, spaces and . - _ @ (3–60 characters).';
-        } elseif ( username_exists( $raw ) || in_array( strtolower( $raw ), array_map( 'strtolower', (array) apply_filters( 'illegal_user_logins', [] ) ), true ) ) {
-            $errors['username'] = 'That username is taken — please choose another.';
+        } elseif ( self::username_taken( $raw ) ) {
+            $errors['username'] = self::username_taken_message( $raw );
         }
 
         $password = (string) wp_unslash( $_POST['password'] ?? '' );
@@ -1461,15 +1481,16 @@ class MyNJILGA_Join_Form {
         }
 
         if ( $withEmail ) {
-            // Whether the address already has an account is NOT answered
-            // here: this runs before the address is proved, so it would
-            // tell anyone who has an account on the site. send_code()
-            // emails that owner how to log in instead of a code.
+            // NJILGA asked for an address that already has an account to
+            // be turned away here, before anything else — WordPress's own
+            // log-in and lost-password screens already say as much, and
+            // the check is rate-limited (ajax_check_account()). One email
+            // field: the emailed code proves it, so no "confirm email".
             $email = (string) ( $old['email'] ?? '' );
             if ( ! is_email( $email ) ) {
                 $errors['email'] = 'Please enter a valid email address.';
-            } elseif ( $email !== (string) ( $old['email_confirm'] ?? '' ) ) {
-                $errors['email_confirm'] = 'The email addresses don\'t match.';
+            } elseif ( email_exists( $email ) ) {
+                $errors['email'] = self::email_exists_message();
             }
         } elseif ( $fixedEmail !== '' && email_exists( $fixedEmail ) ) {
             $errors['username'] = 'An account with your email already exists — please log in instead.';
@@ -1506,6 +1527,13 @@ class MyNJILGA_Join_Form {
         $muni    = (string) ( $old['municipality'] ?? '' );
         if ( $muni !== '' && $options && ! in_array( $muni, $options, true ) ) {
             $errors['municipality'] = 'Please choose a municipality from the list.';
+        }
+
+        // Only FluentCRM's own choices, so the contact filters by county
+        // the way staff's existing records do.
+        $county = (string) ( $old['nj_county'] ?? '' );
+        if ( $county !== '' && ! in_array( $county, MyNJILGA_Dues_Settings::county_options(), true ) ) {
+            $errors['nj_county'] = 'Please choose a county from the list.';
         }
     }
 
@@ -1623,9 +1651,153 @@ class MyNJILGA_Join_Form {
      */
     private static function validate_phone( array $old, string $key, array &$errors ): void {
         $v = (string) ( $old[ $key ] ?? '' );
-        if ( $v !== '' && ! isset( $errors[ $key ] ) && strlen( (string) preg_replace( '/\D+/', '', $v ) ) < 7 ) {
-            $errors[ $key ] = 'Please enter a phone number we can reach you on.';
+        if ( $v !== '' && ! isset( $errors[ $key ] ) && ! MyNJILGA_Phone::valid( $v ) ) {
+            $errors[ $key ] = 'Please enter a 10-digit US phone number, such as ' . MyNJILGA_Phone::US_PLACEHOLDER . ' — or, outside the US, the number with its country code (starting with +).';
         }
+    }
+
+    /**
+     * @param array<string,mixed>  $old
+     * @param array<string,string> $errors
+     */
+    private static function validate_prefix( array $old, array &$errors ): void {
+        $p = (string) ( $old['prefix'] ?? '' );
+        if ( $p !== '' && ! in_array( $p, self::prefix_options(), true ) ) {
+            $errors['prefix'] = 'Please choose a prefix from the list.';
+        }
+    }
+
+    /**
+     * The name prefixes FluentCRM offers for a contact (Mr, Mrs, Ms, plus
+     * whatever the site adds with its fluent_crm/contact_name_prefixes
+     * filter), so the form and FluentCRM agree.
+     *
+     * @return array<int,string>
+     */
+    public static function prefix_options(): array {
+        $list = class_exists( '\\FluentCrm\\App\\Services\\Helper' ) && method_exists( '\\FluentCrm\\App\\Services\\Helper', 'getContactPrefixes' )
+            ? (array) \FluentCrm\App\Services\Helper::getContactPrefixes()
+            : [ 'Mr', 'Mrs', 'Ms' ];
+        return array_values( array_filter( array_map( static function ( $p ) { return trim( (string) $p ); }, $list ), 'strlen' ) );
+    }
+
+    /**
+     * Professional and Emerging Professional joins (the professional form)
+     * take New Jersey addresses only; students may live anywhere.
+     */
+    public static function nj_only( string $form ): bool {
+        return $form === MyNJILGA_Join_Orders_Table::FORM_PROFESSIONAL;
+    }
+
+    /** A New Jersey ZIP: 07xxx or 08xxx, optionally ZIP+4. */
+    public static function is_nj_zip( string $zip ): bool {
+        return (bool) preg_match( '/^0[78]\d{3}(-\d{4})?$/', trim( $zip ) );
+    }
+
+    /**
+     * The username a new account is offered: first initial + last name,
+     * lowercased, letters and digits only — "Ann O'Neil-Zulu" becomes
+     * "aoneilzulu". Accents are folded first where WordPress can
+     * (remove_accents()). Never shorter than WordPress's 3 characters.
+     */
+    public static function username_base( string $first, string $last ): string {
+        $clean = static function ( string $s ): string {
+            if ( function_exists( 'remove_accents' ) ) {
+                $s = remove_accents( $s );
+            }
+            return strtolower( (string) preg_replace( '/[^A-Za-z0-9]+/', '', $s ) );
+        };
+        $f    = $clean( $first );
+        $l    = $clean( $last );
+        $base = substr( $f, 0, 1 ) . $l;
+        if ( strlen( $base ) < 3 ) {
+            $base = $f . $l;
+        }
+        if ( strlen( $base ) < 3 ) {
+            $base .= 'member';
+        }
+        return substr( $base, 0, 50 );
+    }
+
+    /**
+     * $base if nobody has it, else base2, base3, … — the first that
+     * $taken says is free. Pure over $taken, so it is unit-tested.
+     *
+     * @param callable $taken fn( string $username ): bool
+     */
+    public static function next_free_username( string $base, callable $taken ): string {
+        if ( ! $taken( $base ) ) {
+            return $base;
+        }
+        for ( $i = 2; $i < 500; $i++ ) {
+            if ( ! $taken( $base . $i ) ) {
+                return $base . $i;
+            }
+        }
+        return $base . wp_rand( 500, 99999 );
+    }
+
+    public static function available_username( string $base ): string {
+        return self::next_free_username( $base, [ __CLASS__, 'username_taken' ] );
+    }
+
+    public static function username_taken( string $username ): bool {
+        return (bool) username_exists( $username )
+            || in_array( strtolower( $username ), array_map( 'strtolower', (array) apply_filters( 'illegal_user_logins', [] ) ), true );
+    }
+
+    private static function username_taken_message( string $username ): string {
+        $clean = strtolower( (string) preg_replace( '/[^A-Za-z0-9]+/', '', $username ) );
+        return 'That username is taken' . ( strlen( $clean ) >= 3 ? ' — try ' . self::available_username( $clean ) . '.' : ' — please choose another.' );
+    }
+
+    private static function email_exists_message(): string {
+        return 'An account with this email already exists — please log in instead.';
+    }
+
+    /**
+     * The form's live check of a username and email against existing
+     * accounts, before anything is sent: whether the username is free
+     * (and the next free one when not, or a default from the names when
+     * none was typed), and whether the email already has an account.
+     * Rate-limited per connection.
+     */
+    public static function ajax_check_account(): void {
+        check_ajax_referer( self::NONCE_ACTION . '_code', '_nonce' );
+        if ( ! self::rate_ok( 'account_check', self::client_ip(), 120, 600 ) ) {
+            wp_send_json_error( 'Too many checks from your connection — please wait a few minutes.' );
+        }
+        $text  = static function ( string $k ): string {
+            return isset( $_POST[ $k ] ) ? trim( sanitize_text_field( wp_unslash( (string) $_POST[ $k ] ) ) ) : '';
+        };
+        $out = [];
+        if ( isset( $_POST['username'] ) ) {
+            $raw = $text( 'username' );
+            if ( $raw === '' ) {
+                $base            = self::username_base( $text( 'first_name' ), $text( 'last_name' ) );
+                $out['username'] = [ 'status' => 'empty', 'suggestion' => $base !== 'member' ? self::available_username( $base ) : '', 'message' => '' ];
+            } elseif ( sanitize_user( $raw, true ) !== $raw || ! validate_username( $raw ) || mb_strlen( $raw ) < 3 || mb_strlen( $raw ) > 60 ) {
+                $out['username'] = [ 'status' => 'invalid', 'suggestion' => '', 'message' => 'Usernames can use letters, numbers, spaces and . - _ @ (3–60 characters).' ];
+            } elseif ( self::username_taken( $raw ) ) {
+                $clean           = strtolower( (string) preg_replace( '/[^A-Za-z0-9]+/', '', $raw ) );
+                $out['username'] = [ 'status' => 'taken', 'suggestion' => strlen( $clean ) >= 3 ? self::available_username( $clean ) : '', 'message' => self::username_taken_message( $raw ) ];
+            } else {
+                $out['username'] = [ 'status' => 'ok', 'suggestion' => '', 'message' => '' ];
+            }
+        }
+        if ( isset( $_POST['email'] ) ) {
+            $email = strtolower( sanitize_email( wp_unslash( (string) $_POST['email'] ) ) );
+            if ( $email === '' ) {
+                $out['email'] = [ 'status' => 'empty', 'message' => '' ];
+            } elseif ( ! is_email( $email ) ) {
+                $out['email'] = [ 'status' => 'invalid', 'message' => 'Please enter a valid email address.' ];
+            } elseif ( email_exists( $email ) ) {
+                $out['email'] = [ 'status' => 'exists', 'message' => self::email_exists_message(), 'login_url' => wp_login_url( (string) wp_get_referer() ) ];
+            } else {
+                $out['email'] = [ 'status' => 'ok', 'message' => '' ];
+            }
+        }
+        wp_send_json_success( $out );
     }
 
     /**
@@ -1636,16 +1808,18 @@ class MyNJILGA_Join_Form {
      * @return array<string,string>
      */
     private static function applicant_answers( array $old, string $form, WP_User $user ): array {
-        $outside = ! empty( $old['outside_us'] );
+        $nj      = self::nj_only( $form );
+        $outside = ! $nj && ! empty( $old['outside_us'] );
         $a = [
             'email'       => strtolower( (string) $user->user_email ),
+            'prefix'      => (string) ( $old['prefix'] ?? '' ),
             'first_name'  => (string) $old['first_name'],
             'last_name'   => (string) $old['last_name'],
-            'phone'       => (string) $old['phone'],
+            'phone'       => MyNJILGA_Phone::display( (string) $old['phone'] ),
             'address_1'   => (string) $old['address_1'],
             'address_2'   => (string) $old['address_2'],
             'city'        => (string) $old['city'],
-            'state'       => $outside ? (string) $old['region'] : (string) $old['state'],
+            'state'       => $nj ? 'NJ' : ( $outside ? (string) $old['region'] : (string) $old['state'] ),
             'postal_code' => (string) $old['postal_code'],
             'country'     => $outside ? (string) $old['country'] : 'US',
         ];
@@ -1653,10 +1827,10 @@ class MyNJILGA_Join_Form {
             $a['student_status'] = (string) $old['student_status'];
             $a['school']         = (string) $old['school'];
         } else {
-            $a['mailing_phone']      = (string) $old['mailing_phone'];
             $a['attorney_id']        = (string) $old['attorney_id'];
             $a['bar_admission_date'] = (string) $old['bar_admission_date'];
             $a['municipality']       = (string) $old['municipality'];
+            $a['nj_county']          = (string) ( $old['nj_county'] ?? '' );
         }
         return $a;
     }
