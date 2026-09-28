@@ -509,13 +509,14 @@ class MyNJILGA_Page_Settings {
 
         echo '<tr><th scope="row"><label for="g-join-muni">Municipality choices</label></th><td>';
         printf( '<textarea id="g-join-muni" name="general[join_municipalities]" rows="5" class="large-text" placeholder="One per line">%s</textarea>', esc_textarea( (string) $g['join_municipalities'] ) );
-        echo '<p class="njilga-help">One per line, for the professional form\'s Municipality select. Blank = a free-text field.</p></td></tr>';
+        echo '<p class="njilga-help">The Municipality select offers the options of the FluentCRM field mapped below. This list is only used when that field has none (one per line); blank as well = a free-text field.</p></td></tr>';
 
         // FluentCRM custom fields.
         $known = MyNJILGA_Members_Data::fluentcrm_active() ? MyNJILGA_Join_Fulfillment::fluentcrm_custom_field_slugs() : [];
         foreach ( [
             'cf_attorney_id'        => 'NJ Attorney ID',
             'cf_bar_admission_date' => 'Date of admission to the NJ Bar',
+            'cf_nj_county'          => 'NJ County',
             'cf_municipality'       => 'Municipality',
             'cf_mailing_phone'      => 'Mailing-address phone (when different)',
             'cf_school'             => 'Student\'s school',
@@ -524,6 +525,15 @@ class MyNJILGA_Page_Settings {
             $slug = (string) ( $g[ $key ] ?? '' );
             $id   = 'f-' . $key;
             $note = $slug === '' ? '' : ( in_array( $slug, $known, true ) ? '<div class="njilga-note-ok">&#10003; custom field exists</div>' : '<div class="njilga-note-warn">No FluentCRM custom field with this slug — answers are kept on the join record only. Add it under FluentCRM → Settings → Custom Fields.</div>' );
+            // The two selects take their choices from these fields.
+            if ( $slug !== '' && in_array( $key, [ 'cf_nj_county', 'cf_municipality' ], true ) && in_array( $slug, $known, true ) ) {
+                $choices = count( MyNJILGA_Dues_Settings::crm_field_options( $slug ) );
+                $note   .= $choices > 0
+                    ? sprintf( '<div class="njilga-note-ok">&#10003; the form offers its %d options</div>', $choices )
+                    : ( $key === 'cf_nj_county'
+                        ? '<div class="njilga-note-warn">This field has no options, so the form leaves NJ County out. Make it a select field with the counties as options.</div>'
+                        : '<div class="njilga-note-warn">This field has no options, so the form uses the Municipality choices above, or free text.</div>' );
+            }
             printf(
                 '<tr><th scope="row"><label for="%1$s">%2$s</label></th><td><input type="text" id="%1$s" name="general[%3$s]" value="%4$s" class="regular-text">%5$s<p class="njilga-help">FluentCRM contact custom field slug. Blank = don\'t store it on the contact.</p></td></tr>',
                 esc_attr( $id ),
@@ -768,7 +778,7 @@ class MyNJILGA_Page_Settings {
         $gen['join_prelaw_tag']         = sanitize_title( (string) ( $g['join_prelaw_tag'] ?? '' ) );
         $gen['join_success_text']       = sanitize_textarea_field( (string) ( $g['join_success_text'] ?? $defaults['general']['join_success_text'] ) );
         $gen['join_municipalities']     = implode( "\n", array_filter( array_map( 'sanitize_text_field', (array) preg_split( '/\r\n|\r|\n/', (string) ( $g['join_municipalities'] ?? '' ) ) ), 'strlen' ) );
-        foreach ( [ 'cf_attorney_id', 'cf_bar_admission_date', 'cf_municipality', 'cf_school', 'cf_student_status', 'cf_mailing_phone' ] as $k ) {
+        foreach ( [ 'cf_attorney_id', 'cf_bar_admission_date', 'cf_municipality', 'cf_nj_county', 'cf_school', 'cf_student_status', 'cf_mailing_phone' ] as $k ) {
             $gen[ $k ] = sanitize_key( (string) ( $g[ $k ] ?? '' ) );
         }
         foreach ( [ 'year_paid_tag_pattern', 'year_unpaid_tag_pattern', 'assessment_paid_pattern' ] as $k ) {

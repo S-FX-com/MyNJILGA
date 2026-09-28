@@ -241,6 +241,10 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 **Invitations** open with "You're creating the account for *email*" and a **This isn't me** button that clears the invitation, so a forwarded or planted link can't pass itself off as the visitor's own join. A link that is used, superseded, expired or unknown clears itself, with a one-time note above the normal join page, and a signed-in visitor never sees an invitation.
 
+**Phone numbers** are stored the way FluentCRM records here keep them: a US number typed any way — "(201) 555 0100", "2015550100", "+1.201.555.0100" — is shown as `201-555-0100` and written to FluentCRM as `+1 201-555-0100` (the contact's phone and the mailing-phone custom field alike). An impossible US number is refused with an example; a number with another country code (starting with `+`) is kept, tidied, as typed.
+
+**NJ County and Municipality** are selects whose choices are the options of the FluentCRM custom fields they're written to (Settings → Online joining: `nj_county` and `municipality` by default), so the form offers exactly what staff filter on. NJ County is left out when its field has no options; Municipality then falls back to the one-per-line list in Settings, else free text. Settings shows how many options each field gives the form.
+
 **Mailing address.** Without JavaScript every address field shows, labelled for US or overseas addresses, and the server checks them by the "outside the United States" box; with JavaScript only the fields that apply show and are sent. The postcode field is shared: a 5-digit ZIP for US addresses, optional free text for others, saved either way.
 
 **Shortcodes.** My NJILGA → **Shortcodes** lists a ready-to-paste `[njilga_join category="…"]` line for every category an applicant may pick (with its price), the `category`/`form` attributes, whether joining is open right now, and every page that carries each shortcode — with a warning when a category has no page.

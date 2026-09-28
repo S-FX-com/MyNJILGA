@@ -179,8 +179,9 @@ class MyNJILGA_Join_View {
                 </div>
                 <div class="njilga-join__card">
                     <h3 class="njilga-join__title">More information</h3>
+                    <?php self::county_field( $uid, $v( 'nj_county' ), $errors ); ?>
                     <?php self::municipality_field( $uid, $v( 'municipality' ), $errors ); ?>
-                    <?php self::text_field( $uid, 'phone', 'Primary contact phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel' ] ); ?>
+                    <?php self::text_field( $uid, 'phone', 'Primary contact phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel', 'inputmode' => 'tel', 'placeholder' => MyNJILGA_Phone::US_PLACEHOLDER, 'maxlength' => 30 ] ); ?>
                     <?php self::text_field( $uid, 'attorney_id', 'NJ Attorney ID number', $v( 'attorney_id' ), $errors, [ 'required' => true, 'maxlength' => 20 ] ); ?>
                     <?php self::text_field( $uid, 'bar_admission_date', 'Date of admission to the New Jersey Bar', $v( 'bar_admission_date' ), $errors, [ 'required' => true, 'type' => 'date', 'max' => gmdate( 'Y-m-d' ) ] ); ?>
                 </div>
@@ -193,6 +194,7 @@ class MyNJILGA_Join_View {
         </div>
         <?php
         self::password_script( $uid );
+        self::phone_script( $uid );
         self::address_script( $uid );
         return (string) ob_get_clean();
     }
@@ -328,7 +330,7 @@ class MyNJILGA_Join_View {
                                 <?php self::text_field( $uid, 'first_name', 'First name', $v( 'first_name', $user ? (string) $user->first_name : '' ), $errors, [ 'required' => true, 'autocomplete' => 'given-name' ] ); ?>
                                 <?php self::text_field( $uid, 'last_name', 'Last name', $v( 'last_name', $user ? (string) $user->last_name : '' ), $errors, [ 'required' => true, 'autocomplete' => 'family-name' ] ); ?>
                             </div>
-                            <?php self::text_field( $uid, 'phone', 'Phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel' ] ); ?>
+                            <?php self::text_field( $uid, 'phone', 'Phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel', 'inputmode' => 'tel', 'placeholder' => MyNJILGA_Phone::US_PLACEHOLDER, 'maxlength' => 30 ] ); ?>
                             <div class="njilga-join__field">
                                 <label class="njilga-join__label" for="<?php echo esc_attr( $uid ); ?>-school"><span data-school-label>School</span> <span class="njilga-join__req">*</span></label>
                                 <input type="text" id="<?php echo esc_attr( $uid ); ?>-school" name="school" required maxlength="190" value="<?php echo $v( 'school' ); // phpcs:ignore ?>"<?php self::invalid( $errors, 'school', $uid ); ?>>
@@ -349,8 +351,9 @@ class MyNJILGA_Join_View {
                     <?php else : ?>
                         <div class="njilga-join__card">
                             <h3 class="njilga-join__title">More information</h3>
+                            <?php self::county_field( $uid, $v( 'nj_county' ), $errors ); ?>
                             <?php self::municipality_field( $uid, $v( 'municipality' ), $errors ); ?>
-                            <?php self::text_field( $uid, 'phone', 'Primary contact phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel' ] ); ?>
+                            <?php self::text_field( $uid, 'phone', 'Primary contact phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel', 'inputmode' => 'tel', 'placeholder' => MyNJILGA_Phone::US_PLACEHOLDER, 'maxlength' => 30 ] ); ?>
                             <?php self::text_field( $uid, 'attorney_id', 'NJ Attorney ID number', $v( 'attorney_id' ), $errors, [ 'required' => true, 'maxlength' => 20 ] ); ?>
                             <?php self::text_field( $uid, 'bar_admission_date', 'Date of admission to the New Jersey Bar', $v( 'bar_admission_date' ), $errors, [ 'required' => true, 'type' => 'date', 'max' => gmdate( 'Y-m-d' ) ] ); ?>
                         </div>
@@ -361,7 +364,7 @@ class MyNJILGA_Join_View {
                                 <?php self::text_field( $uid, 'last_name', 'Last name', $v( 'last_name', $user ? (string) $user->last_name : '' ), $errors, [ 'required' => true, 'autocomplete' => 'family-name' ] ); ?>
                             </div>
                             <?php self::address_fields( $uid, $v, $errors, $old ); ?>
-                            <?php self::text_field( $uid, 'mailing_phone', 'Phone', $v( 'mailing_phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel' ] ); ?>
+                            <?php self::text_field( $uid, 'mailing_phone', 'Phone', $v( 'mailing_phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel', 'inputmode' => 'tel', 'placeholder' => MyNJILGA_Phone::US_PLACEHOLDER, 'maxlength' => 30 ] ); ?>
                         </div>
                     <?php endif; ?>
                 </div>
@@ -476,7 +479,7 @@ class MyNJILGA_Join_View {
     private static function text_field( string $uid, string $name, string $label, string $escapedValue, array $errors, array $o = [] ): void {
         $id    = $uid . '-' . $name;
         $attrs = '';
-        foreach ( [ 'autocomplete', 'maxlength', 'max', 'pattern', 'inputmode' ] as $k ) {
+        foreach ( [ 'autocomplete', 'maxlength', 'max', 'pattern', 'inputmode', 'placeholder' ] as $k ) {
             if ( isset( $o[ $k ] ) ) {
                 $attrs .= sprintf( ' %s="%s"', $k, esc_attr( (string) $o[ $k ] ) );
             }
@@ -519,6 +522,10 @@ class MyNJILGA_Join_View {
     }
 
     /**
+     * Municipality: FluentCRM's own choices for the field it's written to
+     * (MyNJILGA_Dues_Settings::municipality_options()), or free text when
+     * there are none.
+     *
      * @param array<string,string> $errors
      */
     private static function municipality_field( string $uid, string $escapedValue, array $errors ): void {
@@ -527,15 +534,37 @@ class MyNJILGA_Join_View {
             self::text_field( $uid, 'municipality', 'Municipality', $escapedValue, $errors, [ 'maxlength' => 190 ] );
             return;
         }
-        $id = $uid . '-municipality';
-        printf( '<div class="njilga-join__field"><label class="njilga-join__label" for="%1$s">Municipality</label><select id="%1$s" name="municipality"', esc_attr( $id ) );
-        self::invalid( $errors, 'municipality', $uid );
+        self::choice_field( $uid, 'municipality', 'Municipality', $options, $escapedValue, $errors );
+    }
+
+    /**
+     * NJ County: FluentCRM's own choices for the field it's written to
+     * ("nj_county"). Left out when that field has none — a typed county
+     * wouldn't match what FluentCRM filters on.
+     *
+     * @param array<string,string> $errors
+     */
+    private static function county_field( string $uid, string $escapedValue, array $errors ): void {
+        $options = MyNJILGA_Dues_Settings::county_options();
+        if ( $options ) {
+            self::choice_field( $uid, 'nj_county', 'NJ County', $options, $escapedValue, $errors );
+        }
+    }
+
+    /**
+     * @param array<int,string>    $options
+     * @param array<string,string> $errors
+     */
+    private static function choice_field( string $uid, string $name, string $label, array $options, string $escapedValue, array $errors ): void {
+        $id = $uid . '-' . $name;
+        printf( '<div class="njilga-join__field"><label class="njilga-join__label" for="%1$s">%2$s</label><select id="%1$s" name="%3$s"', esc_attr( $id ), esc_html( $label ), esc_attr( $name ) );
+        self::invalid( $errors, $name, $uid );
         echo '><option value="">- Select -</option>';
         foreach ( $options as $opt ) {
             printf( '<option value="%s"%s>%s</option>', esc_attr( $opt ), selected( $escapedValue, esc_attr( $opt ), false ), esc_html( $opt ) );
         }
         echo '</select>';
-        self::error( $errors, 'municipality', $uid );
+        self::error( $errors, $name, $uid );
         echo '</div>';
     }
 
@@ -857,6 +886,34 @@ class MyNJILGA_Join_View {
     }
 
     /**
+     * Phone numbers as FluentCRM keeps them: a US number, however it was
+     * typed, is rewritten to ###-###-#### when the field is left (the
+     * server does the same, and adds +1 on the way to FluentCRM). A
+     * number that isn't a complete US one, or an international number
+     * starting with +, gets a message instead of a silent failure.
+     * Registered before the wizard's own listeners, so the mailing phone
+     * copies the tidied number.
+     */
+    private static function phone_script( string $uid ): void {
+        ob_start();
+        ?>
+        (function(){var f=document.getElementById(<?php echo wp_json_encode( $uid ); ?>);if(!f)return;
+            var msg=<?php echo wp_json_encode( 'Please enter a 10-digit US phone number, such as ' . MyNJILGA_Phone::US_PLACEHOLDER . ' — or, outside the US, the number with its country code (starting with +).' ); ?>;
+            function us(v){var t=v.trim();if(/^(\+|00)\s*\(?\s*[02-9]/.test(t))return '';var d=t.replace(/\D+/g,'');if(d.length===13&&d.indexOf('001')===0)d=d.slice(3);if(d.length===11&&d.charAt(0)==='1')d=d.slice(1);return /^[2-9]\d{2}[2-9]\d{6}$/.test(d)?d:'';}
+            function intl(v){var t=v.trim();if(!/^(\+|00)\s*\(?\s*[02-9]/.test(t))return false;var n=t.replace(/^\s*00/,'').replace(/\D+/g,'').length;return n>=8&&n<=15;}
+            function tidy(i){var v=i.value;if(v.trim()===''){i.setCustomValidity('');return;}var d=us(v);
+                if(d){i.value=d.slice(0,3)+'-'+d.slice(3,6)+'-'+d.slice(6);i.setCustomValidity('');}
+                else i.setCustomValidity(intl(v)?'':msg);}
+            f.querySelectorAll('input[type=tel]').forEach(function(i){
+                i.addEventListener('change',function(){tidy(i);});i.addEventListener('blur',function(){tidy(i);});
+                i.addEventListener('input',function(){if(i.validationMessage===msg&&(us(i.value)||intl(i.value)))i.setCustomValidity('');});
+                if(i.value)tidy(i);});
+        })();
+        <?php
+        self::add_script( (string) ob_get_clean() );
+    }
+
+    /**
      * "My mailing address is outside the United States": show State, or
      * region and Country, to match (address_fields() serves them all),
      * and move `required` and the ZIP pattern with them so the browser
@@ -909,6 +966,7 @@ class MyNJILGA_Join_View {
             'checkCode'     => MyNJILGA_Join_Form::AJAX_CHECK_CODE,
         ];
         self::password_script( $uid );
+        self::phone_script( $uid );
         self::address_script( $uid );
         ob_start();
         ?>

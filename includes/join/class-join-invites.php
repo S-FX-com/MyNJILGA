@@ -201,13 +201,16 @@ class MyNJILGA_Join_Invites {
                         $fields[ $k ] = (string) $in[ $k ];
                     }
                 }
+                if ( isset( $fields['phone'] ) ) {
+                    $fields['phone'] = MyNJILGA_Phone::for_crm( $fields['phone'] ); // +1 ###-###-####
+                }
                 $custom = [];
                 $map    = MyNJILGA_Dues_Settings::join_custom_fields();
                 $known  = MyNJILGA_Join_Fulfillment::fluentcrm_custom_field_slugs();
-                foreach ( [ 'attorney_id', 'bar_admission_date', 'municipality', 'mailing_phone' ] as $k ) {
+                foreach ( [ 'attorney_id', 'bar_admission_date', 'municipality', 'nj_county', 'mailing_phone' ] as $k ) {
                     $slug = (string) ( $map[ $k ] ?? '' );
                     if ( $slug !== '' && in_array( $slug, $known, true ) && (string) ( $in[ $k ] ?? '' ) !== '' ) {
-                        $custom[ $slug ] = (string) $in[ $k ];
+                        $custom[ $slug ] = $k === 'mailing_phone' ? MyNJILGA_Phone::for_crm( (string) $in[ $k ] ) : (string) $in[ $k ];
                     }
                 }
                 if ( $custom ) {

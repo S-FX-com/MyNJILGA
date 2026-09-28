@@ -102,7 +102,7 @@ class MyNJILGA_Dues_Settings {
                 'join_stripe_invoice'      => true, // Stripe's post-payment invoice PDF for each join
                 'join_invite_expiry_days'  => 30,
                 'join_prelaw_tag'          => 'pre-law', // added for "undergrad aspiring to law school" students
-                'join_municipalities'      => '', // one per line; '' = free-text field
+                'join_municipalities'      => '', // one per line; only used when FluentCRM's Municipality field has no options
                 'join_success_text'        => 'Welcome to NJILGA — your membership is active.',
                 // FluentCRM custom field slugs the join form writes to. A slug
                 // with no matching custom field is skipped (the Setup page
@@ -111,6 +111,7 @@ class MyNJILGA_Dues_Settings {
                 'cf_attorney_id'           => 'nj_attorney_id',
                 'cf_bar_admission_date'    => 'nj_bar_admission_date',
                 'cf_municipality'          => 'municipality',
+                'cf_nj_county'             => 'nj_county',
                 'cf_school'                => 'school',
                 'cf_student_status'        => 'student_status',
                 'cf_mailing_phone'         => 'mailing_phone',
@@ -332,6 +333,7 @@ class MyNJILGA_Dues_Settings {
             'attorney_id'         => sanitize_key( (string) ( $g['cf_attorney_id'] ?? '' ) ),
             'bar_admission_date'  => sanitize_key( (string) ( $g['cf_bar_admission_date'] ?? '' ) ),
             'municipality'        => sanitize_key( (string) ( $g['cf_municipality'] ?? '' ) ),
+            'nj_county'           => sanitize_key( (string) ( $g['cf_nj_county'] ?? '' ) ),
             'school'              => sanitize_key( (string) ( $g['cf_school'] ?? '' ) ),
             'student_status'      => sanitize_key( (string) ( $g['cf_student_status'] ?? '' ) ),
             'mailing_phone'       => sanitize_key( (string) ( $g['cf_mailing_phone'] ?? '' ) ),
@@ -339,14 +341,79 @@ class MyNJILGA_Dues_Settings {
     }
 
     /**
-     * Municipality choices for the join form, one per line in Settings.
-     * Empty = the form shows a free-text field instead of a select.
+     * Municipality choices for the join form: the options of the FluentCRM
+     * custom field the answer is written to (Settings → Online joining →
+     * Municipality, "municipality" by default), so the form offers exactly
+     * what staff already use in FluentCRM. Falls back to the one-per-line
+     * list in Settings when that field has no options; empty = the form
+     * shows a free-text field.
      *
      * @return array<int,string>
      */
     public static function municipality_options(): array {
+        $crm = self::crm_field_options( self::join_custom_fields()['municipality'] );
+        if ( $crm ) {
+            return $crm;
+        }
         $lines = preg_split( '/\r\n|\r|\n/', (string) self::general( 'join_municipalities', '' ) );
         return array_values( array_unique( array_filter( array_map( 'trim', (array) $lines ), 'strlen' ) ) );
+    }
+
+    /**
+     * NJ County choices for the Professional forms: the options of the
+     * FluentCRM custom field the answer is written to ("nj_county" by
+     * default). Empty when that field is missing or has no options — the
+     * form then leaves the question out, since a free-text county would
+     * only drift from the values FluentCRM filters on.
+     *
+     * @return array<int,string>
+     */
+    public static function county_options(): array {
+        return self::crm_field_options( self::join_custom_fields()['nj_county'] );
+    }
+
+    /**
+     * The choices of a FluentCRM contact custom field, in FluentCRM's own
+     * order: only for fields that offer choices (select, radio, checkbox),
+     * and [] for an unknown slug or FluentCRM not being active.
+     *
+     * @return array<int,string>
+     */
+    public static function crm_field_options( string $slug ): array {
+        if ( $slug === '' || ! function_exists( 'fluentcrm_get_option' ) ) {
+            return [];
+        }
+        return self::options_from_fields( (array) fluentcrm_get_option( 'contact_custom_fields', [] ), $slug );
+    }
+
+    /**
+     * The pure half of crm_field_options(). FluentCRM stores each field
+     * as an array with slug, type and — for choice fields — `options`, a
+     * list of strings (older installs and imports can hold
+     * {label, value} pairs; the value is what gets saved).
+     *
+     * @param array<int,mixed> $fields
+     * @return array<int,string>
+     */
+    public static function options_from_fields( array $fields, string $slug ): array {
+        foreach ( $fields as $f ) {
+            if ( ! is_array( $f ) || (string) ( $f['slug'] ?? '' ) !== $slug ) {
+                continue;
+            }
+            if ( ! in_array( (string) ( $f['type'] ?? '' ), [ 'select-one', 'select-multi', 'radio', 'checkbox' ], true ) ) {
+                return [];
+            }
+            $out = [];
+            foreach ( (array) ( $f['options'] ?? [] ) as $opt ) {
+                $value = is_array( $opt ) ? (string) ( $opt['value'] ?? $opt['label'] ?? '' ) : (string) $opt;
+                $value = trim( $value );
+                if ( $value !== '' && ! in_array( $value, $out, true ) ) {
+                    $out[] = $value;
+                }
+            }
+            return $out;
+        }
+        return [];
     }
 
     public static function year_tag( string $patternKey, int $year ): string {

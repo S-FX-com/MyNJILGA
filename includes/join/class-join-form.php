@@ -1293,10 +1293,11 @@ class MyNJILGA_Join_Form {
             'password'           => (string) wp_unslash( $_POST['password'] ?? '' ),
             'first_name'         => (string) $old['first_name'],
             'last_name'          => (string) $old['last_name'],
-            'phone'              => (string) ( $old['phone'] ?? '' ),
+            'phone'              => MyNJILGA_Phone::display( (string) ( $old['phone'] ?? '' ) ),
             'attorney_id'        => (string) ( $old['attorney_id'] ?? '' ),
             'bar_admission_date' => (string) ( $old['bar_admission_date'] ?? '' ),
             'municipality'       => (string) ( $old['municipality'] ?? '' ),
+            'nj_county'          => (string) ( $old['nj_county'] ?? '' ),
             'address_line_1'     => (string) ( $old['address_1'] ?? '' ),
             'address_line_2'     => (string) ( $old['address_2'] ?? '' ),
             'city'               => (string) ( $old['city'] ?? '' ),
@@ -1341,7 +1342,7 @@ class MyNJILGA_Join_Form {
             return isset( $_POST[ $k ] ) ? trim( sanitize_text_field( wp_unslash( (string) $_POST[ $k ] ) ) ) : '';
         };
         $old = [];
-        foreach ( [ 'category', 'username', 'first_name', 'last_name', 'phone', 'mailing_phone', 'firm_name', 'municipality', 'attorney_id', 'bar_admission_date', 'address_1', 'address_2', 'city', 'state', 'region', 'postal_code', 'country', 'student_status', 'school', 'add_colleagues' ] as $k ) {
+        foreach ( [ 'category', 'username', 'first_name', 'last_name', 'phone', 'mailing_phone', 'firm_name', 'municipality', 'nj_county', 'attorney_id', 'bar_admission_date', 'address_1', 'address_2', 'city', 'state', 'region', 'postal_code', 'country', 'student_status', 'school', 'add_colleagues' ] as $k ) {
             $old[ $k ] = $text( $k );
         }
         $old['email']         = strtolower( sanitize_email( wp_unslash( (string) ( $_POST['email'] ?? '' ) ) ) );
@@ -1507,6 +1508,13 @@ class MyNJILGA_Join_Form {
         if ( $muni !== '' && $options && ! in_array( $muni, $options, true ) ) {
             $errors['municipality'] = 'Please choose a municipality from the list.';
         }
+
+        // Only FluentCRM's own choices, so the contact filters by county
+        // the way staff's existing records do.
+        $county = (string) ( $old['nj_county'] ?? '' );
+        if ( $county !== '' && ! in_array( $county, MyNJILGA_Dues_Settings::county_options(), true ) ) {
+            $errors['nj_county'] = 'Please choose a county from the list.';
+        }
     }
 
     /**
@@ -1623,8 +1631,8 @@ class MyNJILGA_Join_Form {
      */
     private static function validate_phone( array $old, string $key, array &$errors ): void {
         $v = (string) ( $old[ $key ] ?? '' );
-        if ( $v !== '' && ! isset( $errors[ $key ] ) && strlen( (string) preg_replace( '/\D+/', '', $v ) ) < 7 ) {
-            $errors[ $key ] = 'Please enter a phone number we can reach you on.';
+        if ( $v !== '' && ! isset( $errors[ $key ] ) && ! MyNJILGA_Phone::valid( $v ) ) {
+            $errors[ $key ] = 'Please enter a 10-digit US phone number, such as ' . MyNJILGA_Phone::US_PLACEHOLDER . ' — or, outside the US, the number with its country code (starting with +).';
         }
     }
 
@@ -1641,7 +1649,7 @@ class MyNJILGA_Join_Form {
             'email'       => strtolower( (string) $user->user_email ),
             'first_name'  => (string) $old['first_name'],
             'last_name'   => (string) $old['last_name'],
-            'phone'       => (string) $old['phone'],
+            'phone'       => MyNJILGA_Phone::display( (string) $old['phone'] ),
             'address_1'   => (string) $old['address_1'],
             'address_2'   => (string) $old['address_2'],
             'city'        => (string) $old['city'],
@@ -1653,10 +1661,11 @@ class MyNJILGA_Join_Form {
             $a['student_status'] = (string) $old['student_status'];
             $a['school']         = (string) $old['school'];
         } else {
-            $a['mailing_phone']      = (string) $old['mailing_phone'];
+            $a['mailing_phone']      = MyNJILGA_Phone::display( (string) $old['mailing_phone'] );
             $a['attorney_id']        = (string) $old['attorney_id'];
             $a['bar_admission_date'] = (string) $old['bar_admission_date'];
             $a['municipality']       = (string) $old['municipality'];
+            $a['nj_county']          = (string) ( $old['nj_county'] ?? '' );
         }
         return $a;
     }
