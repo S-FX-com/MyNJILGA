@@ -196,7 +196,7 @@ class MyNJILGA_Join_Invites {
                     'first_name' => $in['first_name'],
                     'last_name'  => $in['last_name'],
                 ];
-                foreach ( [ 'phone', 'address_line_1', 'address_line_2', 'city', 'state', 'postal_code', 'country' ] as $k ) {
+                foreach ( [ 'prefix', 'phone', 'address_line_1', 'address_line_2', 'city', 'state', 'postal_code', 'country' ] as $k ) {
                     if ( (string) ( $in[ $k ] ?? '' ) !== '' ) {
                         $fields[ $k ] = (string) $in[ $k ];
                     }

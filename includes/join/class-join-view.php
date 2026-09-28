@@ -166,35 +166,20 @@ class MyNJILGA_Join_View {
                     <h3 class="njilga-join__title">Create your NJILGA account</h3>
                     <p><?php echo esc_html( sprintf( '%s %s has covered your %d NJILGA membership%s — it\'s already active. Choose a username and password to sign in to the website.', $join->first_name, $join->last_name, (int) $join->dues_year, $firm !== '' ? ' with ' . $firm : '' ) ); ?></p>
                     <?php self::general_error( $state ); ?>
-                    <div class="njilga-join__grid">
-                        <?php self::text_field( $uid, 'first_name', 'First name', $v( 'first_name', (string) $invite->first_name ), $errors, [ 'required' => true, 'autocomplete' => 'given-name' ] ); ?>
-                        <?php self::text_field( $uid, 'last_name', 'Last name', $v( 'last_name', (string) $invite->last_name ), $errors, [ 'required' => true, 'autocomplete' => 'family-name' ] ); ?>
-                    </div>
-                    <div class="njilga-join__field"><span class="njilga-join__label">Email</span><div class="njilga-join__static"><?php echo esc_html( (string) $invite->email ); ?></div></div>
-                    <?php self::text_field( $uid, 'username', 'Username', $v( 'username' ), $errors, [ 'required' => true, 'autocomplete' => 'username', 'maxlength' => 60 ] ); ?>
-                    <div class="njilga-join__grid">
-                        <?php self::password_field( $uid, 'password', 'Password', $errors, true ); ?>
-                        <?php self::password_field( $uid, 'password_confirm', 'Confirm password', $errors, false ); ?>
-                    </div>
                 </div>
+                <?php self::personal_card( $uid, $v, $errors, [ 'action_url' => MyNJILGA_Join_Form::page_url() ], null, $invite ); ?>
                 <div class="njilga-join__card">
-                    <h3 class="njilga-join__title">More information</h3>
-                    <?php self::county_field( $uid, $v( 'nj_county' ), $errors ); ?>
-                    <?php self::municipality_field( $uid, $v( 'municipality' ), $errors ); ?>
-                    <?php self::text_field( $uid, 'phone', 'Primary contact phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel', 'inputmode' => 'tel', 'placeholder' => MyNJILGA_Phone::US_PLACEHOLDER, 'maxlength' => 30 ] ); ?>
-                    <?php self::text_field( $uid, 'attorney_id', 'NJ Attorney ID number', $v( 'attorney_id' ), $errors, [ 'required' => true, 'maxlength' => 20 ] ); ?>
-                    <?php self::text_field( $uid, 'bar_admission_date', 'Date of admission to the New Jersey Bar', $v( 'bar_admission_date' ), $errors, [ 'required' => true, 'type' => 'date', 'max' => gmdate( 'Y-m-d' ) ] ); ?>
+                    <h3 class="njilga-join__title">Contact Details</h3>
+                    <?php self::nj_address_fields( $uid, $v, $errors ); ?>
                 </div>
-                <div class="njilga-join__card">
-                    <h3 class="njilga-join__title">Mailing address</h3>
-                    <?php self::address_fields( $uid, $v, $errors, $old ); ?>
-                </div>
+                <?php self::professional_card( $uid, $v, $errors ); ?>
                 <div class="njilga-join__actions"><button type="submit" class="njilga-join__btn njilga-join__btn--primary">Create my account</button></div>
             </form>
         </div>
         <?php
         self::password_script( $uid );
         self::phone_script( $uid );
+        self::account_script( $uid );
         self::address_script( $uid );
         return (string) ob_get_clean();
     }
@@ -295,42 +280,20 @@ class MyNJILGA_Join_View {
                 <?php endif; ?>
 
                 <div class="njilga-join__step" data-step="details">
-                    <?php if ( $user ) : ?>
-                        <div class="njilga-join__card">
-                            <h3 class="njilga-join__title">Account</h3>
-                            <p><?php echo esc_html( sprintf( 'Signed in as %s (%s).', $user->user_login, $user->user_email ) ); ?> <a href="<?php echo esc_url( wp_logout_url( (string) $a['action_url'] ) ); ?>">Not you?</a></p>
-                        </div>
-                    <?php else : ?>
-                        <div class="njilga-join__card">
-                            <h3 class="njilga-join__title">Account information</h3>
-                            <?php self::text_field( $uid, 'username', 'Username', $v( 'username' ), $errors, [ 'required' => true, 'autocomplete' => 'username', 'maxlength' => 60 ] ); ?>
-                            <div class="njilga-join__grid">
-                                <?php self::password_field( $uid, 'password', 'Password', $errors, true ); ?>
-                                <?php self::password_field( $uid, 'password_confirm', 'Confirm password', $errors, false ); ?>
-                            </div>
-                            <div class="njilga-join__grid">
-                                <?php self::text_field( $uid, 'email', 'Email address', $v( 'email' ), $errors, [ 'required' => true, 'type' => 'email', 'autocomplete' => 'email' ] ); ?>
-                                <?php self::text_field( $uid, 'email_confirm', 'Confirm email address', $v( 'email_confirm' ), $errors, [ 'required' => true, 'type' => 'email', 'autocomplete' => 'email' ] ); ?>
-                            </div>
-                            <div class="njilga-join__field njilga-join__code" data-code-field<?php echo empty( $a['needs_code'] ) ? ' data-code-later' : ''; ?>>
-                                <label class="njilga-join__label" for="<?php echo esc_attr( $uid ); ?>-email_code">Email verification code</label>
-                                <input type="text" id="<?php echo esc_attr( $uid ); ?>-email_code" name="email_code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}" value="<?php echo ! empty( $a['needs_code'] ) ? $v( 'email_code' ) : ''; // phpcs:ignore ?>"<?php self::invalid( $errors, 'email_code', $uid ); ?>>
-                                <p class="njilga-join__hint" data-code-hint><?php echo empty( $a['needs_code'] ) ? 'We\'ll email you a 6-digit code to confirm your address. If you\'re filling this in without JavaScript, leave this empty the first time you submit.' : 'Enter the 6-digit code from the email we just sent you.'; ?></p>
-                                <?php self::error( $errors, 'email_code', $uid ); ?>
-                                <button type="button" class="njilga-join__toggle" data-resend-code hidden>Send a new code</button>
-                            </div>
-                            <div class="njilga-join__foot">Already have an account? <a href="<?php echo esc_url( wp_login_url( (string) $a['action_url'] ) ); ?>">Log in here</a></div>
-                        </div>
-                    <?php endif; ?>
-
+                    <?php self::personal_card( $uid, $v, $errors, $a, $user, null ); ?>
+                    <div class="njilga-join__card">
+                        <h3 class="njilga-join__title">Contact Details</h3>
+                        <?php
+                        if ( $isStudent ) {
+                            self::address_fields( $uid, $v, $errors, $old );
+                        } else {
+                            self::nj_address_fields( $uid, $v, $errors );
+                        }
+                        ?>
+                    </div>
                     <?php if ( $isStudent ) : ?>
                         <div class="njilga-join__card">
-                            <h3 class="njilga-join__title">About you</h3>
-                            <div class="njilga-join__grid">
-                                <?php self::text_field( $uid, 'first_name', 'First name', $v( 'first_name', $user ? (string) $user->first_name : '' ), $errors, [ 'required' => true, 'autocomplete' => 'given-name' ] ); ?>
-                                <?php self::text_field( $uid, 'last_name', 'Last name', $v( 'last_name', $user ? (string) $user->last_name : '' ), $errors, [ 'required' => true, 'autocomplete' => 'family-name' ] ); ?>
-                            </div>
-                            <?php self::text_field( $uid, 'phone', 'Phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel', 'inputmode' => 'tel', 'placeholder' => MyNJILGA_Phone::US_PLACEHOLDER, 'maxlength' => 30 ] ); ?>
+                            <h3 class="njilga-join__title">Student Details</h3>
                             <div class="njilga-join__field">
                                 <label class="njilga-join__label" for="<?php echo esc_attr( $uid ); ?>-school"><span data-school-label>School</span> <span class="njilga-join__req">*</span></label>
                                 <input type="text" id="<?php echo esc_attr( $uid ); ?>-school" name="school" required maxlength="190" value="<?php echo $v( 'school' ); // phpcs:ignore ?>"<?php self::invalid( $errors, 'school', $uid ); ?>>
@@ -344,28 +307,8 @@ class MyNJILGA_Join_View {
                                 <?php self::error( $errors, 'student_document', $uid ); ?>
                             </div>
                         </div>
-                        <div class="njilga-join__card">
-                            <h3 class="njilga-join__title">Mailing address</h3>
-                            <?php self::address_fields( $uid, $v, $errors, $old ); ?>
-                        </div>
                     <?php else : ?>
-                        <div class="njilga-join__card">
-                            <h3 class="njilga-join__title">More information</h3>
-                            <?php self::county_field( $uid, $v( 'nj_county' ), $errors ); ?>
-                            <?php self::municipality_field( $uid, $v( 'municipality' ), $errors ); ?>
-                            <?php self::text_field( $uid, 'phone', 'Primary contact phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel', 'inputmode' => 'tel', 'placeholder' => MyNJILGA_Phone::US_PLACEHOLDER, 'maxlength' => 30 ] ); ?>
-                            <?php self::text_field( $uid, 'attorney_id', 'NJ Attorney ID number', $v( 'attorney_id' ), $errors, [ 'required' => true, 'maxlength' => 20 ] ); ?>
-                            <?php self::text_field( $uid, 'bar_admission_date', 'Date of admission to the New Jersey Bar', $v( 'bar_admission_date' ), $errors, [ 'required' => true, 'type' => 'date', 'max' => gmdate( 'Y-m-d' ) ] ); ?>
-                        </div>
-                        <div class="njilga-join__card">
-                            <h3 class="njilga-join__title">Mailing address</h3>
-                            <div class="njilga-join__grid">
-                                <?php self::text_field( $uid, 'first_name', 'First name', $v( 'first_name', $user ? (string) $user->first_name : '' ), $errors, [ 'required' => true, 'autocomplete' => 'given-name' ] ); ?>
-                                <?php self::text_field( $uid, 'last_name', 'Last name', $v( 'last_name', $user ? (string) $user->last_name : '' ), $errors, [ 'required' => true, 'autocomplete' => 'family-name' ] ); ?>
-                            </div>
-                            <?php self::address_fields( $uid, $v, $errors, $old ); ?>
-                            <?php self::text_field( $uid, 'mailing_phone', 'Phone', $v( 'mailing_phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel', 'inputmode' => 'tel', 'placeholder' => MyNJILGA_Phone::US_PLACEHOLDER, 'maxlength' => 30 ] ); ?>
-                        </div>
+                        <?php self::professional_card( $uid, $v, $errors ); ?>
                     <?php endif; ?>
                 </div>
 
@@ -499,6 +442,9 @@ class MyNJILGA_Join_View {
         );
         self::invalid( $errors, $name, $uid );
         echo '>';
+        if ( isset( $o['hint'] ) || isset( $o['hint_attr'] ) ) {
+            printf( '<p class="njilga-join__hint"%s aria-live="polite">%s</p>', isset( $o['hint_attr'] ) ? ' ' . esc_attr( (string) $o['hint_attr'] ) : '', esc_html( (string) ( $o['hint'] ?? '' ) ) );
+        }
         self::error( $errors, $name, $uid );
         echo '</div>';
     }
@@ -518,6 +464,112 @@ class MyNJILGA_Join_View {
         self::invalid( $errors, $name, $uid );
         echo '>';
         self::error( $errors, $name, $uid );
+        echo '</div>';
+    }
+
+    /**
+     * Personal Details: Prefix, first and last name, phone, then — for a
+     * new account — email (with its verification code), username and
+     * password. A signed-in joiner already has the account, so only
+     * their name and phone are asked; an invited colleague's email is
+     * fixed by the invitation.
+     *
+     * @param array<string,mixed>  $a       join_form()'s args (needs action_url, needs_code).
+     * @param WP_User|null         $user
+     * @param object|null          $invite
+     * @param array<string,string> $errors
+     */
+    private static function personal_card( string $uid, callable $v, array $errors, array $a, $user, $invite ): void {
+        $firstDefault = $invite ? (string) $invite->first_name : ( $user ? (string) $user->first_name : '' );
+        $lastDefault  = $invite ? (string) $invite->last_name : ( $user ? (string) $user->last_name : '' );
+        $newAccount   = ! $user;
+        ?>
+        <div class="njilga-join__card">
+            <h3 class="njilga-join__title">Personal Details</h3>
+            <?php if ( $user ) : ?>
+                <p class="njilga-join__muted"><?php echo esc_html( sprintf( 'Signed in as %s (%s).', $user->user_login, $user->user_email ) ); ?> <a href="<?php echo esc_url( wp_logout_url( (string) $a['action_url'] ) ); ?>">Not you?</a></p>
+            <?php endif; ?>
+            <div class="njilga-join__grid njilga-join__grid--name">
+                <?php self::prefix_field( $uid, $v( 'prefix' ), $errors ); ?>
+                <?php self::text_field( $uid, 'first_name', 'First name', $v( 'first_name', $firstDefault ), $errors, [ 'required' => true, 'autocomplete' => 'given-name' ] ); ?>
+                <?php self::text_field( $uid, 'last_name', 'Last name', $v( 'last_name', $lastDefault ), $errors, [ 'required' => true, 'autocomplete' => 'family-name' ] ); ?>
+            </div>
+            <?php self::text_field( $uid, 'phone', 'Phone', $v( 'phone' ), $errors, [ 'required' => true, 'type' => 'tel', 'autocomplete' => 'tel', 'inputmode' => 'tel', 'placeholder' => MyNJILGA_Phone::US_PLACEHOLDER, 'maxlength' => 30 ] ); ?>
+            <?php if ( $invite ) : ?>
+                <div class="njilga-join__field"><span class="njilga-join__label">Email</span><div class="njilga-join__static"><?php echo esc_html( (string) $invite->email ); ?></div></div>
+            <?php elseif ( $newAccount ) : ?>
+                <?php self::text_field( $uid, 'email', 'Email address', $v( 'email' ), $errors, [ 'required' => true, 'type' => 'email', 'autocomplete' => 'email', 'hint_attr' => 'data-email-hint' ] ); ?>
+                <div class="njilga-join__field njilga-join__code" data-code-field<?php echo empty( $a['needs_code'] ) ? ' data-code-later' : ''; ?>>
+                    <label class="njilga-join__label" for="<?php echo esc_attr( $uid ); ?>-email_code">Email verification code</label>
+                    <input type="text" id="<?php echo esc_attr( $uid ); ?>-email_code" name="email_code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}" value="<?php echo ! empty( $a['needs_code'] ) ? $v( 'email_code' ) : ''; // phpcs:ignore ?>"<?php self::invalid( $errors, 'email_code', $uid ); ?>>
+                    <p class="njilga-join__hint" data-code-hint><?php echo empty( $a['needs_code'] ) ? 'We\'ll email you a 6-digit code to confirm your address. If you\'re filling this in without JavaScript, leave this empty the first time you submit.' : 'Enter the 6-digit code from the email we just sent you.'; ?></p>
+                    <?php self::error( $errors, 'email_code', $uid ); ?>
+                    <button type="button" class="njilga-join__toggle" data-resend-code hidden>Send a new code</button>
+                </div>
+            <?php endif; ?>
+            <?php if ( $newAccount ) : ?>
+                <?php
+                // Not natively required: left blank (no JavaScript to fill
+                // it), the server gives it the same default.
+                self::text_field( $uid, 'username', 'Username', $v( 'username' ), $errors, [ 'autocomplete' => 'username', 'maxlength' => 60, 'hint' => 'Your first initial and last name, unless you choose another. Letters and numbers only.', 'hint_attr' => 'data-username-hint' ] );
+                ?>
+                <div class="njilga-join__grid">
+                    <?php self::password_field( $uid, 'password', 'Set password', $errors, true ); ?>
+                    <?php self::password_field( $uid, 'password_confirm', 'Confirm password', $errors, false ); ?>
+                </div>
+                <?php if ( ! $invite ) : ?>
+                    <div class="njilga-join__foot">Already have an account? <a href="<?php echo esc_url( wp_login_url( (string) $a['action_url'] ) ); ?>">Log in here</a></div>
+                <?php endif; ?>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+
+    /**
+     * @param array<string,string> $errors
+     */
+    private static function professional_card( string $uid, callable $v, array $errors ): void {
+        ?>
+        <div class="njilga-join__card">
+            <h3 class="njilga-join__title">Professional Details</h3>
+            <?php self::text_field( $uid, 'attorney_id', 'NJ Attorney ID number', $v( 'attorney_id' ), $errors, [ 'required' => true, 'maxlength' => 20 ] ); ?>
+            <?php self::text_field( $uid, 'bar_admission_date', 'Date of admission to the New Jersey Bar', $v( 'bar_admission_date' ), $errors, [ 'required' => true, 'type' => 'date', 'max' => gmdate( 'Y-m-d' ) ] ); ?>
+            <?php self::county_field( $uid, $v( 'nj_county' ), $errors ); ?>
+            <?php self::municipality_field( $uid, $v( 'municipality' ), $errors ); ?>
+        </div>
+        <?php
+    }
+
+    /**
+     * Prefix: FluentCRM's own list (MyNJILGA_Join_Form::prefix_options()).
+     *
+     * @param array<string,string> $errors
+     */
+    private static function prefix_field( string $uid, string $escapedValue, array $errors ): void {
+        self::choice_field( $uid, 'prefix', 'Prefix', MyNJILGA_Join_Form::prefix_options(), $escapedValue, $errors, '—' );
+    }
+
+    /**
+     * Contact Details for the Professional forms and invited colleagues:
+     * a New Jersey address only, so State is New Jersey and the ZIP must
+     * be one (07xxx/08xxx). The student form keeps address_fields(), which
+     * takes any US state or an address abroad.
+     *
+     * @param array<string,string> $errors
+     */
+    private static function nj_address_fields( string $uid, callable $v, array $errors ): void {
+        self::text_field( $uid, 'address_1', 'Address 1', $v( 'address_1' ), $errors, [ 'required' => true, 'autocomplete' => 'address-line1' ] );
+        self::text_field( $uid, 'address_2', 'Address 2', $v( 'address_2' ), $errors, [ 'autocomplete' => 'address-line2' ] );
+        self::text_field( $uid, 'city', 'City', $v( 'city' ), $errors, [ 'required' => true, 'autocomplete' => 'address-level2' ] );
+        echo '<div class="njilga-join__grid">';
+        $id = $uid . '-state';
+        printf( '<div class="njilga-join__field"><label class="njilga-join__label" for="%1$s">State <span class="njilga-join__req">*</span></label><select id="%1$s" name="state" required autocomplete="address-level1"', esc_attr( $id ) );
+        self::invalid( $errors, 'state', $uid );
+        echo '><option value="NJ" selected>New Jersey</option></select>';
+        echo '<p class="njilga-join__hint">Online membership is for New Jersey addresses.</p>';
+        self::error( $errors, 'state', $uid );
+        echo '</div>';
+        self::text_field( $uid, 'postal_code', 'ZIP code', $v( 'postal_code' ), $errors, [ 'required' => true, 'autocomplete' => 'postal-code', 'inputmode' => 'numeric', 'maxlength' => 10, 'pattern' => '0[78]\d{3}(-\d{4})?' ] );
         echo '</div>';
     }
 
@@ -555,11 +607,11 @@ class MyNJILGA_Join_View {
      * @param array<int,string>    $options
      * @param array<string,string> $errors
      */
-    private static function choice_field( string $uid, string $name, string $label, array $options, string $escapedValue, array $errors ): void {
+    private static function choice_field( string $uid, string $name, string $label, array $options, string $escapedValue, array $errors, string $emptyLabel = '- Select -' ): void {
         $id = $uid . '-' . $name;
         printf( '<div class="njilga-join__field"><label class="njilga-join__label" for="%1$s">%2$s</label><select id="%1$s" name="%3$s"', esc_attr( $id ), esc_html( $label ), esc_attr( $name ) );
         self::invalid( $errors, $name, $uid );
-        echo '><option value="">- Select -</option>';
+        printf( '><option value="">%s</option>', esc_html( $emptyLabel ) );
         foreach ( $options as $opt ) {
             printf( '<option value="%s"%s>%s</option>', esc_attr( $opt ), selected( $escapedValue, esc_attr( $opt ), false ), esc_html( $opt ) );
         }
@@ -808,6 +860,8 @@ class MyNJILGA_Join_View {
 .njilga-join input:focus,.njilga-join select:focus{outline:2px solid var(--nj-accent);outline-offset:1px;border-color:var(--nj-primary)}
 .njilga-join [aria-invalid=true],.njilga-join .is-invalid input{border-color:var(--nj-danger)}
 .njilga-join__grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
+.njilga-join__grid--name{grid-template-columns:minmax(96px,120px) 1fr 1fr}
+.njilga-join__hint.is-bad{color:#b42318}
 .njilga-join__static{min-height:48px;padding:12px 14px;border-radius:6px;background:var(--nj-soft)}
 .njilga-join__foot{margin:8px -36px -28px;padding:16px 36px;background:var(--nj-soft);border-top:1px solid #e5e7eb;border-radius:0 0 var(--nj-radius) var(--nj-radius)}
 .njilga-join__hint,.njilga-join__muted{color:var(--nj-muted);font-size:.9em;margin:6px 0 0}
@@ -914,6 +968,56 @@ class MyNJILGA_Join_View {
     }
 
     /**
+     * Username and email, checked against existing accounts before the
+     * form goes on (ajax_check_account(); the server checks again on
+     * submit). Until the person types a username of their own, it follows
+     * the names — first initial + last name, letters and digits only —
+     * and a taken one is swapped for the next free variant (azulu2). An
+     * email that already has an account blocks Continue with a log-in
+     * link.
+     */
+    private static function account_script( string $uid ): void {
+        $config = [
+            'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+            'action'  => MyNJILGA_Join_Form::AJAX_CHECK_ACCOUNT,
+            'nonce'   => wp_create_nonce( MyNJILGA_Join_Form::NONCE_ACTION . '_code' ),
+        ];
+        ob_start();
+        ?>
+        (function(){var f=document.getElementById(<?php echo wp_json_encode( $uid ); ?>);if(!f)return;var cfg=<?php echo wp_json_encode( $config ); ?>;
+            var u=f.querySelector('input[name=username]');if(!u)return;
+            var fn=f.querySelector('input[name=first_name]'),ln=f.querySelector('input[name=last_name]'),em=f.querySelector('input[name=email]');
+            var uh=f.querySelector('[data-username-hint]'),eh=f.querySelector('[data-email-hint]'),uDefault=uh?uh.textContent:'';
+            var auto=u.value==='',timer=null,seq=0,eseq=0;
+            function clean(x){x=(x||'');if(x.normalize)x=x.normalize('NFD').replace(/[\u0300-\u036f]/g,'');return x.replace(/[^A-Za-z0-9]+/g,'').toLowerCase();}
+            function base(){var a=clean(fn&&fn.value),b=clean(ln&&ln.value),r=a.charAt(0)+b;if(r.length<3)r=a+b;if(r.length<3)r=r?r+'member':'';return r.slice(0,50);}
+            function post(data){data.action=cfg.action;data._nonce=cfg.nonce;return fetch(cfg.ajaxUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data).toString()}).then(function(r){return r.json();});}
+            function say(t,bad){if(uh){uh.textContent=t;uh.classList.toggle('is-bad',!!bad);}}
+            function check(){var v=u.value.trim(),mine=++seq;if(!v){u.setCustomValidity('');say(uDefault);return;}
+                post({username:v,first_name:fn?fn.value:'',last_name:ln?ln.value:''}).then(function(res){if(mine!==seq||!res||!res.success||!res.data.username)return;var r=res.data.username;
+                    if(r.status==='ok'){u.setCustomValidity('');say('✓ '+v+' is available.');}
+                    else if(r.status==='taken'&&auto&&r.suggestion){u.value=r.suggestion;u.setCustomValidity('');say('✓ '+r.suggestion+' is available ('+v+' is taken).');}
+                    else{u.setCustomValidity(r.message||'Please choose another username.');say(r.message,true);}
+                }).catch(function(){});}
+            function schedule(){clearTimeout(timer);timer=setTimeout(check,400);}
+            function follow(){if(!auto)return;u.value=base();schedule();}
+            if(fn)fn.addEventListener('input',follow);if(ln)ln.addEventListener('input',follow);
+            u.addEventListener('input',function(){auto=u.value==='';u.setCustomValidity('');schedule();});
+            u.addEventListener('blur',check);
+            if(auto&&((fn&&fn.value)||(ln&&ln.value)))follow();else if(u.value)check();
+            if(em&&eh){var eDefault=eh.textContent;
+                em.addEventListener('input',function(){if(em.validationMessage&&em.getAttribute('data-exists')){em.setCustomValidity('');em.removeAttribute('data-exists');eh.textContent=eDefault;eh.classList.remove('is-bad');}});
+                em.addEventListener('blur',function(){var v=em.value.trim(),mine=++eseq;if(!v)return;
+                    post({email:v}).then(function(res){if(mine!==eseq||!res||!res.success||!res.data.email)return;var r=res.data.email;
+                        if(r.status==='exists'){em.setCustomValidity(r.message);em.setAttribute('data-exists','1');eh.classList.add('is-bad');eh.textContent='';eh.appendChild(document.createTextNode(r.message+' '));var a=document.createElement('a');a.href=r.login_url;a.textContent='Log in';eh.appendChild(a);}
+                        else if(em.getAttribute('data-exists')){em.setCustomValidity('');em.removeAttribute('data-exists');eh.textContent=eDefault;eh.classList.remove('is-bad');}
+                    }).catch(function(){});});}
+        })();
+        <?php
+        self::add_script( (string) ob_get_clean() );
+    }
+
+    /**
      * "My mailing address is outside the United States": show State, or
      * region and Country, to match (address_fields() serves them all),
      * and move `required` and the ZIP pattern with them so the browser
@@ -967,6 +1071,7 @@ class MyNJILGA_Join_View {
         ];
         self::password_script( $uid );
         self::phone_script( $uid );
+        self::account_script( $uid );
         self::address_script( $uid );
         ob_start();
         ?>

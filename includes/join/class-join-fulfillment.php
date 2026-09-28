@@ -992,6 +992,7 @@ class MyNJILGA_Join_Fulfillment {
     private static function applicant_fields( array $a ): array {
         return [
             'email'          => (string) ( $a['email'] ?? '' ),
+            'prefix'         => (string) ( $a['prefix'] ?? '' ), // FluentCRM's own Prefix field
             'first_name'     => (string) ( $a['first_name'] ?? '' ),
             'last_name'      => (string) ( $a['last_name'] ?? '' ),
             // +1 ###-###-####, the shape FluentCRM records here use — also
