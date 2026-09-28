@@ -252,8 +252,8 @@ class MyNJILGA_Admin_UI {
 .njilga-ui *{box-sizing:border-box}
 .njilga-ui [hidden]{display:none!important}
 .njilga-ui tr[hidden]{display:none}
-.njilga-ui a{color:var(--info-fg);text-decoration:none}
-.njilga-ui a:hover{text-decoration:underline}
+.njilga-ui a:not(.njilga-btn){color:var(--info-fg);text-decoration:none}
+.njilga-ui a:not(.njilga-btn):hover{text-decoration:underline}
 .njilga-ui code{background:var(--muted);padding:1px 5px;border-radius:4px;font-size:12px;
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .njilga-ui p{font-size:14px}

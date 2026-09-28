@@ -313,7 +313,7 @@ class MyNJILGA_Join_View {
                             <div class="njilga-join__field njilga-join__code" data-code-field<?php echo empty( $a['needs_code'] ) ? ' data-code-later' : ''; ?>>
                                 <label class="njilga-join__label" for="<?php echo esc_attr( $uid ); ?>-email_code">Email verification code</label>
                                 <input type="text" id="<?php echo esc_attr( $uid ); ?>-email_code" name="email_code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}" value="<?php echo ! empty( $a['needs_code'] ) ? $v( 'email_code' ) : ''; // phpcs:ignore ?>"<?php self::invalid( $errors, 'email_code', $uid ); ?>>
-                                <p class="njilga-join__hint" data-code-hint><?php echo empty( $a['needs_code'] ) ? 'We\'ll email you a 6-digit code to confirm your address. If you\'re filling this in without JavaScript, leave this empty the first time you submit.' : 'Enter the 6-digit code we just emailed you.'; ?></p>
+                                <p class="njilga-join__hint" data-code-hint><?php echo empty( $a['needs_code'] ) ? 'We\'ll email you a 6-digit code to confirm your address. If you\'re filling this in without JavaScript, leave this empty the first time you submit.' : 'Enter the 6-digit code from the email we just sent you.'; ?></p>
                                 <?php self::error( $errors, 'email_code', $uid ); ?>
                                 <button type="button" class="njilga-join__toggle" data-resend-code hidden>Send a new code</button>
                             </div>
@@ -423,7 +423,10 @@ class MyNJILGA_Join_View {
 
     private static function hidden( string $action ): void {
         printf( '<input type="hidden" name="%s" value="%s">', esc_attr( MyNJILGA_Join_Form::ACTION_FIELD ), esc_attr( $action ) );
-        wp_nonce_field( MyNJILGA_Join_Form::NONCE_ACTION . '_' . $action, MyNJILGA_Join_Form::NONCE_FIELD, false );
+        // Not wp_nonce_field(): it gives every nonce input the same id, and
+        // one page can carry several of these forms (invite + clear-invite,
+        // resume + start over).
+        printf( '<input type="hidden" name="%s" value="%s">', esc_attr( MyNJILGA_Join_Form::NONCE_FIELD ), esc_attr( wp_create_nonce( MyNJILGA_Join_Form::NONCE_ACTION . '_' . $action ) ) );
     }
 
     /**
@@ -548,9 +551,21 @@ class MyNJILGA_Join_View {
         printf( '<label class="njilga-join__check"><input type="checkbox" name="outside_us" value="1" data-outside-us%s> <span>My mailing address is outside the United States</span></label>', checked( $outside, true, false ) );
         self::text_field( $uid, 'city', 'City', $v( 'city' ), $errors, [ 'required' => true, 'autocomplete' => 'address-level2' ] );
 
-        echo '<div class="njilga-join__grid" data-us-only' . ( $outside ? ' hidden' : '' ) . '>';
+        // State for a US address, region and Country for any other, and
+        // one postcode field for both. As served, no field here is hidden
+        // and the browser is told none of them is required: which set
+        // applies turns on the checkbox, and without JavaScript only the
+        // server reads that (validate_address()). A natively required
+        // State or ZIP pattern made an overseas applicant invent a US
+        // address, and a hidden Country left them no way to give theirs —
+        // so each label says which addresses it's for instead. With
+        // JavaScript, address_script() shows one set, requires what that
+        // set needs, and DISABLES the other set's controls: a disabled
+        // control is neither validated nor posted, so nothing hidden can
+        // block the submit or be saved.
+        echo '<div class="njilga-join__grid">';
         $id = $uid . '-state';
-        printf( '<div class="njilga-join__field"><label class="njilga-join__label" for="%1$s">State <span class="njilga-join__req">*</span></label><select id="%1$s" name="state" autocomplete="address-level1"%2$s', esc_attr( $id ), $outside ? '' : ' required' );
+        printf( '<div class="njilga-join__field" data-us-only><label class="njilga-join__label" for="%1$s">State%2$s</label><select id="%1$s" name="state" autocomplete="address-level1"', esc_attr( $id ), self::address_label_tail( 'US addresses', 'us' ) ); // phpcs:ignore
         self::invalid( $errors, 'state', $uid );
         echo '><option value="">Select state</option>';
         foreach ( self::us_states() as $code => $name ) {
@@ -559,12 +574,55 @@ class MyNJILGA_Join_View {
         echo '</select>';
         self::error( $errors, 'state', $uid );
         echo '</div>';
-        self::text_field( $uid, 'postal_code', 'ZIP code', $v( 'postal_code' ), $errors, $outside ? [ 'autocomplete' => 'postal-code' ] : [ 'required' => true, 'autocomplete' => 'postal-code', 'inputmode' => 'numeric', 'pattern' => '\d{5}(-\d{4})?' ] );
+        self::address_input( $uid, 'region', 'State / province / region' . self::address_label_tail( 'outside the US', '' ), $v( 'region' ), $errors, 'data-intl-only', [ 'maxlength' => '80', 'autocomplete' => 'address-level1' ] );
+        // The ZIP pattern waits in data-us-pattern: the script applies it
+        // only while the address is in the US.
+        self::address_input( $uid, 'postal_code', '<span data-postal-label>ZIP / postal code</span>' . self::address_label_tail( '', 'us' ), $v( 'postal_code' ), $errors, '', [ 'maxlength' => '20', 'autocomplete' => 'postal-code', 'data-us-pattern' => '\d{5}(-\d{4})?' ] );
+        self::address_input( $uid, 'country', 'Country' . self::address_label_tail( 'outside the US', 'intl' ), $v( 'country' ), $errors, 'data-intl-only', [ 'maxlength' => '80', 'autocomplete' => 'country-name' ] );
         echo '</div>';
+    }
 
-        echo '<div class="njilga-join__grid" data-intl-only' . ( $outside ? '' : ' hidden' ) . '>';
-        self::text_field( $uid, 'region', 'State / province / region', $v( 'region' ), $errors, [ 'autocomplete' => 'address-level1' ] );
-        self::text_field( $uid, 'country', 'Country', $v( 'country' ), $errors, $outside ? [ 'required' => true, 'autocomplete' => 'country-name' ] : [ 'autocomplete' => 'country-name' ] );
+    /**
+     * The end of an address label: which addresses the field is for —
+     * shown only without JavaScript, when every field is on screen — and
+     * the asterisk the script shows while the field is required.
+     *
+     * @param string $for  e.g. "US addresses"; '' for none.
+     * @param string $when 'us' or 'intl': when the field is required; '' never.
+     */
+    private static function address_label_tail( string $for, string $when ): string {
+        $html = $for !== '' ? sprintf( '<span data-address-note> (%s)</span>', esc_html( $for ) ) : '';
+        if ( $when !== '' ) {
+            $html .= sprintf( ' <span class="njilga-join__req" data-required-when="%s" hidden>*</span>', esc_attr( $when ) );
+        }
+        return $html;
+    }
+
+    /**
+     * One text input of address_fields(). $labelHtml is trusted (built
+     * there from fixed words); attribute values are escaped here.
+     *
+     * @param array<string,string> $errors
+     * @param array<string,string> $attrs
+     */
+    private static function address_input( string $uid, string $name, string $labelHtml, string $escapedValue, array $errors, string $group, array $attrs ): void {
+        $id    = $uid . '-' . $name;
+        $extra = '';
+        foreach ( $attrs as $k => $val ) {
+            $extra .= sprintf( ' %s="%s"', esc_attr( $k ), esc_attr( $val ) );
+        }
+        printf(
+            '<div class="njilga-join__field"%1$s><label class="njilga-join__label" for="%2$s">%3$s</label><input type="text" id="%2$s" name="%4$s" value="%5$s"%6$s',
+            $group !== '' ? ' ' . esc_attr( $group ) : '',
+            esc_attr( $id ),
+            $labelHtml, // phpcs:ignore -- trusted, see above.
+            esc_attr( $name ),
+            $escapedValue, // Already esc_attr()'d by the caller.
+            $extra // phpcs:ignore
+        );
+        self::invalid( $errors, $name, $uid );
+        echo '>';
+        self::error( $errors, $name, $uid );
         echo '</div>';
     }
 
@@ -799,18 +857,30 @@ class MyNJILGA_Join_View {
     }
 
     /**
-     * "My mailing address is outside the United States": swap State/ZIP
-     * for Country, and move `required` with them so the browser doesn't
-     * insist on a US state for an overseas address. Its own script
-     * because the invite form has no wizard to carry it.
+     * "My mailing address is outside the United States": show State, or
+     * region and Country, to match (address_fields() serves them all),
+     * and move `required` and the ZIP pattern with them so the browser
+     * doesn't insist on a US state or ZIP for an overseas address. The
+     * set not showing is DISABLED as well as hidden — a hidden control
+     * that is still enabled is still validated, and on the invite form
+     * (native validation) a hidden ZIP holding "SW1A 2AA" silently
+     * blocked the submit. Disabled, it is skipped and not posted either.
+     * Its own script because the invite form has no wizard to carry it.
      */
     private static function address_script( string $uid ): void {
         ob_start();
         ?>
         (function(){var f=document.getElementById(<?php echo wp_json_encode( $uid ); ?>);if(!f)return;var o=f.querySelector('[data-outside-us]');if(!o)return;
+            var st=f.querySelector('select[name=state]'),country=f.querySelector('input[name=country]'),zip=f.querySelector('input[name=postal_code]'),zipLabel=f.querySelector('[data-postal-label]');
+            // Only one set shows from here on, so the "(US addresses)" notes go.
+            f.querySelectorAll('[data-address-note]').forEach(function(e){e.hidden=true;});
             function sync(){var out=o.checked;
-                f.querySelectorAll('[data-us-only]').forEach(function(e){e.hidden=out;e.querySelectorAll('input,select').forEach(function(i){i.required=!out&&(i.name==='state'||i.name==='postal_code');});});
-                f.querySelectorAll('[data-intl-only]').forEach(function(e){e.hidden=!out;var c=e.querySelector('input[name=country]');if(c)c.required=out;});}
+                f.querySelectorAll('[data-us-only],[data-intl-only]').forEach(function(g){var off=g.hasAttribute('data-us-only')?out:!out;g.hidden=off;g.querySelectorAll('input,select').forEach(function(i){i.disabled=off;});});
+                f.querySelectorAll('[data-required-when]').forEach(function(s){s.hidden=(s.getAttribute('data-required-when')==='intl')!==out;});
+                if(st)st.required=!out;if(country)country.required=out;
+                if(zip){var zp=zip.getAttribute('data-us-pattern');zip.required=!out;
+                    if(out||!zp){zip.removeAttribute('pattern');zip.removeAttribute('inputmode');}else{zip.setAttribute('pattern',zp);zip.setAttribute('inputmode','numeric');}}
+                if(zipLabel)zipLabel.textContent=out?'Postal code':'ZIP code';}
             o.addEventListener('change',sync);sync();
         })();
         <?php
@@ -961,16 +1031,27 @@ class MyNJILGA_Join_View {
             // A 6-digit code proves the address before any account exists.
             // sentTo is the address a code really went to: only that one is
             // asked for its code, and any other address gets one sent first.
-            var codeBox=$('[data-code-field]'),codeIn=$('input[name=email_code]'),codeHint=$('[data-code-hint]'),resend=$('[data-resend-code]'),verified='',sentTo='',sending=false,checking=false;
+            // sentMsg is what the server said about that send. An address
+            // that already has an account is sent a "log in instead" note,
+            // not a code, and the server's answer is worded to cover both
+            // (it can't say which, or the reply would tell anyone who has an
+            // account here) — so that answer is what the applicant is shown,
+            // never a promise of a code that may not be coming.
+            var codeBox=$('[data-code-field]'),codeIn=$('input[name=email_code]'),codeHint=$('[data-code-hint]'),resend=$('[data-resend-code]'),verified='',sentTo='',sentMsg='',sending=false,checking=false;
             if(codeBox&&!cfg.needsCode)codeBox.hidden=true;
             function post(action,data){data.action=action;data._nonce=cfg.codeNonce;return fetch(cfg.ajaxUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data).toString()}).then(function(r){return r.json();});}
             function curEmail(){return em?em.value.trim().toLowerCase():'';}
             if(cfg.needsCode)sentTo=curEmail(); // The server just sent (or kept) one for the posted address.
+            function enterCode(to){return sentMsg||'Enter the 6-digit code from the email we sent to '+to+'.';}
             // "Send a new code" shows after every attempt, failed ones too.
+            // A send that goes through starts over: whatever was confirmed or
+            // typed belonged to the code before, which a new one replaces on
+            // the server (and within a minute of the last send, when nothing
+            // new goes out, the code in that email is still the one to use).
             function sendCode(){
-                if(sending||!codeBox)return;var to=curEmail();sending=true;codeBox.hidden=false;codeHint.textContent='Sending a code to '+to+'…';
+                if(sending||!codeBox)return;var to=curEmail();sending=true;codeBox.hidden=false;codeHint.textContent='Sending an email to '+to+'…';
                 post(cfg.sendCode,{email:to}).then(function(res){
-                    if(res&&res.success){if(sentTo!==to)codeIn.value='';sentTo=to;codeHint.textContent='We’ve emailed a 6-digit code to '+to+'. Enter it to continue.';codeIn.focus();}
+                    if(res&&res.success){verified='';codeIn.value='';sentTo=to;sentMsg=(res.data&&res.data.message)||'';codeHint.textContent=enterCode(to);codeIn.focus();}
                     else codeHint.textContent=(res&&res.data)||'We couldn’t send a code just now — please try again.';
                 },function(){codeHint.textContent='We couldn’t send a code just now — please try again.';}).then(function(){sending=false;if(resend)resend.hidden=false;});
             }
@@ -983,14 +1064,14 @@ class MyNJILGA_Join_View {
                 if(sending||checking){if(fail)fail();return;}
                 if(sentTo!==curEmail()){if(fail)fail();sendCode();return;}
                 var c=(codeIn.value||'').replace(/\D+/g,''),to=sentTo;
-                if(c.length!==6){no('Enter the 6-digit code we emailed to '+to+'.');return;}
+                if(c.length!==6){no(enterCode(to));return;}
                 checking=true;
                 post(cfg.checkCode,{email:to,code:c}).then(function(res){checking=false;if(res&&res.success){verified=to;codeHint.textContent='Email confirmed.';done();}else no((res&&res.data)||'That code isn’t right.');},function(){checking=false;no('We couldn’t check the code just now — please try again.');});
             }
             // A code belongs to the address it went to: after an edit the next
             // Continue sends one to the new address, and the hint says so.
             if(em)em.addEventListener('input',function(){if(verified&&verified!==curEmail())verified='';
-                if(codeBox&&!codeBox.hidden&&!sending)codeHint.textContent=sentTo&&sentTo===curEmail()?'Enter the 6-digit code we emailed to '+sentTo+'.':'We’ll email a code to this address when you continue.';});
+                if(codeBox&&!codeBox.hidden&&!sending)codeHint.textContent=sentTo&&sentTo===curEmail()?enterCode(sentTo):'We’ll email a code to this address when you continue.';});
             if(resend)resend.addEventListener('click',function(){sendCode();});
             if(cfg.needsCode&&resend)resend.hidden=false;
 

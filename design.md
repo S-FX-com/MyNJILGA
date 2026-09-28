@@ -339,7 +339,8 @@ aren't just filtered slices of the same columns.
 ## 6. Not covered
 
 The public shortcodes — `[njilga_membership_application]`,
-`[njilga_firm_dues_status]` and `[njilga_join]` — render on the **front
+`[njilga_firm_dues_status]` and `[njilga_join]`, listed for staff on
+My NJILGA → Shortcodes — render on the **front
 end**, inside the site's own theme, and keep their own small scoped
 stylesheets. They deliberately do not load this admin stylesheet:
 matching the theme matters more there than matching the admin. If they

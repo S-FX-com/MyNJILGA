@@ -164,19 +164,45 @@ class MyNJILGA_Invoice_Creator {
             return [ 'ok' => false, 'error' => 'Every roster member owes $0 — nothing to invoice.' ];
         }
 
-        // The snapshot was frozen when the preview ran. Anyone who has
-        // since paid this year's dues through an online join would be
-        // billed a second time by it, so the row goes back to draft —
-        // Refresh Firms only re-prices drafts, and prices them at $0 as
-        // "paid via online join" — rather than out to Stripe.
+        // The snapshot was frozen when the preview ran, so it is checked
+        // against what online joins have actually paid for NOW — settled
+        // money only (MyNJILGA_Dues_Preview::join_coverage()). Either way
+        // round, the row goes back to draft — Refresh Firms only re-prices
+        // drafts — rather than out to Stripe.
         if ( $kind !== MyNJILGA_Dues_Snapshot::KIND_JOIN && MyNJILGA_Dues_Snapshot::settles_dues( $invoiceRow ) ) {
-            $paid = self::members_paid_by_join( $members, MyNJILGA_Dues_Invoice_Table::join_paid_contacts( $duesYear, ! empty( $invoiceRow->livemode ) ) );
+            $coverage = MyNJILGA_Dues_Preview::join_coverage( $duesYear, ! empty( $invoiceRow->livemode ) );
+            // A join whose money is in but not yet applied has no row: 0.
+            $paidNow  = $coverage['join_rows'] + array_fill_keys( array_keys( $coverage['covered'] ), 0 );
+
+            // Anyone who has since paid this year's dues through an online
+            // join would be billed a second time by it; re-priced, they
+            // are listed at $0 as "paid via online join".
+            $paid = self::members_paid_by_join( $members, $paidNow );
             if ( $paid ) {
                 MyNJILGA_Dues_Invoice_Table::return_to_draft( (int) $invoiceRow->id );
                 return [ 'ok' => false, 'error' => sprintf(
                     '%s already paid %d dues through an online join since this invoice was previewed. Click Refresh Firms to re-price %s (they will be listed at $0), then create it. Nothing was sent to %s.',
                     implode( ', ', array_column( $paid, 'name' ) ),
                     $duesYear,
+                    MyNJILGA_Dues_Snapshot::company_name( $invoiceRow ),
+                    $gateway->name()
+                ) ];
+            }
+
+            // And the other way round: someone frozen at $0 because a join
+            // paid for them is free only while that payment stands. 3.1.3
+            // also counted a join whose ACH debit was still clearing (or
+            // whose payment was held for review) as paid — a debit the bank
+            // has since refused paid for nobody, and this invoice, once
+            // paid, would make them members for free.
+            $lapsed = self::members_no_longer_covered( $members, $paidNow );
+            if ( $lapsed ) {
+                MyNJILGA_Dues_Invoice_Table::return_to_draft( (int) $invoiceRow->id );
+                return [ 'ok' => false, 'error' => sprintf(
+                    '%s %s listed at $0 as paid through an online join, but no settled online-join payment covers %s now — it may still be clearing, be held for review, or have failed. Click Refresh Firms to re-price %s (they will be billed unless their join has settled by then), then create it. Nothing was sent to %s.',
+                    implode( ', ', array_column( $lapsed, 'name' ) ),
+                    count( $lapsed ) === 1 ? 'is' : 'are',
+                    count( $lapsed ) === 1 ? 'them' : 'any of them',
                     MyNJILGA_Dues_Snapshot::company_name( $invoiceRow ),
                     $gateway->name()
                 ) ];
@@ -281,7 +307,8 @@ class MyNJILGA_Invoice_Creator {
      * leave on, and an assessment line is not dues.
      *
      * @param array<int,array<string,mixed>> $members  A snapshot's members.
-     * @param array<int,int>                 $joinPaid contact id => join row id (MyNJILGA_Dues_Invoice_Table::join_paid_contacts()).
+     * @param array<int,int>                 $joinPaid contact id => join row id (MyNJILGA_Dues_Invoice_Table::join_paid_contacts();
+     *                                                 0 = a settled join not yet applied, so without a row).
      * @return array<int,array{contact_id:int,name:string,join_row_id:int}>
      */
     public static function members_paid_by_join( array $members, array $joinPaid ): array {
@@ -291,14 +318,44 @@ class MyNJILGA_Invoice_Creator {
             if ( $cid <= 0 || ! isset( $joinPaid[ $cid ] ) || (int) ( $m['dues_cents'] ?? 0 ) <= 0 ) {
                 continue;
             }
-            $name  = (string) ( $m['name'] ?? '' );
             $out[] = [
                 'contact_id'  => $cid,
-                'name'        => $name !== '' ? $name : 'Contact #' . $cid,
+                'name'        => self::member_name( $m ),
                 'join_row_id' => (int) $joinPaid[ $cid ],
             ];
         }
         return $out;
+    }
+
+    /**
+     * The members a dues invoice lists at $0 because an online join paid
+     * for them (MyNJILGA_Dues_Preview::priced_as_join_covered()) whom no
+     * settled online-join payment covers any more — or ever did: 3.1.3
+     * priced joins still clearing, and joins held for review, as paid.
+     * Nobody else at $0 counts (a 6th-or-later member, exempt, inactive).
+     *
+     * @param array<int,array<string,mixed>> $members A snapshot's members.
+     * @param array<int,int>                 $paidNow Everyone settled online-join money covers now, as members_paid_by_join() takes it.
+     * @return array<int,array{contact_id:int,name:string}>
+     */
+    public static function members_no_longer_covered( array $members, array $paidNow ): array {
+        $out = [];
+        foreach ( $members as $m ) {
+            $cid = (int) ( $m['contact_id'] ?? 0 );
+            if ( ! MyNJILGA_Dues_Preview::priced_as_join_covered( $m ) || ( $cid > 0 && isset( $paidNow[ $cid ] ) ) ) {
+                continue;
+            }
+            $out[] = [ 'contact_id' => $cid, 'name' => self::member_name( $m ) ];
+        }
+        return $out;
+    }
+
+    /**
+     * @param array<string,mixed> $member
+     */
+    private static function member_name( array $member ): string {
+        $name = (string) ( $member['name'] ?? '' );
+        return $name !== '' ? $name : 'Contact #' . (int) ( $member['contact_id'] ?? 0 );
     }
 
     /**

@@ -218,7 +218,9 @@ class MyNJILGA_Join_Orders_Table {
      * Joins for the year and mode whose money is committed — an ACH debit
      * clearing, or paid and not yet (or only partly) applied. Their people
      * carry no "Dues Paid" tag and no invoice row yet, so the preview asks
-     * for these to keep from billing them a second time.
+     * for these: the ones whose money has settled (payment_settled())
+     * keep their people from being billed a second time; the rest are
+     * only called out, since they may yet pay for nobody.
      *
      * @return array<int,object>
      */
@@ -233,6 +235,35 @@ class MyNJILGA_Join_Orders_Table {
             self::STATUS_PAID,
             self::STATUS_FULFILLING
         ) );
+    }
+
+    /**
+     * Whether a committed join's money counts as paid — settled, and
+     * checked against this join — so the people it names are covered for
+     * its year (MyNJILGA_Dues_Preview prices them at $0 on their firm's
+     * invoice). Pure over the row — tested directly.
+     *
+     * Only settled money covers anyone. An ACH debit still clearing can
+     * yet be refused by the bank, and a 'paid' join whose checkout didn't
+     * verify (another amount, mode or session) is held for staff, who may
+     * well refund it: pricing their people at $0 on a firm's invoice would
+     * make them members for nothing once the firm pays. sync() records
+     * 'payment_confirmed' in `progress` when it claims a verified payment,
+     * so a paid join whose run failed part-way still counts; one that got
+     * as far as its payer's contact was claimed before that marker
+     * existed. A claimed ('fulfilling') join was only ever claimed after
+     * that check, or on staff approval of a $0 join.
+     */
+    public static function payment_settled( object $join ): bool {
+        $status = (string) ( $join->status ?? '' );
+        if ( in_array( $status, [ self::STATUS_FULFILLING, self::STATUS_FULFILLED ], true ) ) {
+            return true;
+        }
+        if ( $status !== self::STATUS_PAID ) {
+            return false;
+        }
+        $p = self::json( $join, 'progress' );
+        return ! empty( $p['payment_confirmed'] ) || ! empty( $p['contact_id'] );
     }
 
     /**

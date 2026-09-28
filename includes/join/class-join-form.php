@@ -38,11 +38,20 @@ class MyNJILGA_Join_Form {
     const RATE_ACCOUNTS_IP = 10;
 
     /**
-     * "Colleague N can't be added" answers per IP and per payer per hour.
-     * Each one says something about other people's records, so repeating
-     * them is limited much harder than an ordinary submit.
+     * Colleague rows checked for cover ("Colleague N can't be added"), per
+     * payer — their verified mailbox and their account — and, looser (an
+     * office or a proxy can put several payers behind one address), per
+     * IP, per day. Each answer says something about another person's
+     * records, so every row a submit carries is counted BEFORE any is
+     * looked up, and once the allowance is used up nothing is looked up
+     * at all: the refusal then can't depend on who is covered. A genuine
+     * payer sends their list a few times at most (fix a row, come back
+     * from Checkout); colleague_check_limit() leaves room for three full
+     * lists at whatever maximum Settings allows.
      */
-    const RATE_CONFLICTS = 5;
+    const RATE_COLLEAGUE_ROWS    = 30;
+    const RATE_COLLEAGUE_ROWS_IP = 60;
+    const RATE_COLLEAGUE_WINDOW  = 86400;
 
     const AJAX_SEND_CODE  = 'njilga_join_send_code';
     const AJAX_CHECK_CODE = 'njilga_join_check_code';
@@ -62,8 +71,10 @@ class MyNJILGA_Join_Form {
     /**
      * The logged-out visitor's own secret: a random value in a SameSite
      * cookie, which the nonce of every logged-out join form is minted for
-     * (visitor_nonce_uid()). The nonce in the form is then a double-submit
-     * token — the cookie's value, signed — so no extra field is needed.
+     * once the browser has sent it back (visitor_nonce_uid()). The nonce
+     * in the form is then a double-submit token — the cookie's value,
+     * signed — so no extra field is needed. Over HTTPS the cookie is named
+     * with the __Host- prefix (visitor_cookie_name()).
      */
     const VISITOR_COOKIE = 'njilga_join_visitor';
 
@@ -250,6 +261,18 @@ class MyNJILGA_Join_Form {
      * @param array<string,string>|string $atts
      */
     public static function render( $atts = [] ): string {
+        // Why handle_request() set a parked invitation aside, said above
+        // whatever the page shows instead (this request only: the cookie
+        // is gone, so the next view is just the page).
+        $note   = (string) ( self::$state['invite_note'] ?? '' );
+        $prefix = $note !== '' ? MyNJILGA_Join_View::message( $note, 'info' ) : '';
+        return $prefix . self::render_page( $atts );
+    }
+
+    /**
+     * @param array<string,string>|string $atts
+     */
+    private static function render_page( $atts ): string {
         $atts = shortcode_atts( [ 'category' => 'professional', 'form' => '' ], is_array( $atts ) ? $atts : [], self::SHORTCODE );
 
         // Nothing this prints may be cached for the next visitor — an
@@ -267,23 +290,28 @@ class MyNJILGA_Join_Form {
         }
 
         // An invitation link works on any join page, whatever its category.
-        // handle_request() moved the token out of the URL into a cookie.
+        // handle_request() moved the token out of the URL into a cookie,
+        // and already set aside one that can't be used here (for a
+        // signed-in visitor, or a token that's no good) — so it never
+        // stands in for the visitor's own join page. Only the invitee's
+        // form, or "being used right now" for the seconds an account takes
+        // to create, replaces the page.
         $token = self::invite_token();
         if ( ! empty( self::$state['invite_done'] ) ) {
             return MyNJILGA_Join_View::invite_done();
         }
-        if ( $token !== '' ) {
+        if ( $token !== '' && ! is_user_logged_in() ) {
             if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
                 return MyNJILGA_Join_View::message( 'This page is temporarily unavailable. Please try again shortly.', 'error' );
             }
             $found = MyNJILGA_Join_Invites::lookup( $token );
-            if ( ! $found['invite'] ) {
+            if ( $found['invite'] ) {
+                return MyNJILGA_Join_View::invite_form( $found['invite'], $found['join'], self::$state );
+            }
+            if ( ! empty( $found['busy'] ) ) {
                 return MyNJILGA_Join_View::message( $found['error'], 'error' );
             }
-            if ( is_user_logged_in() ) {
-                return MyNJILGA_Join_View::message( 'You\'re signed in to an existing account. To use this invitation, sign out first — or, if this is your account, there\'s nothing more to do.', 'info' );
-            }
-            return MyNJILGA_Join_View::invite_form( $found['invite'], $found['join'], self::$state );
+            self::clear_invite_cookie(); // Went bad since handle_request() looked; the normal page follows.
         }
 
         $category = self::category_from_att( (string) $atts['category'] );
@@ -306,8 +334,14 @@ class MyNJILGA_Join_Form {
             if ( $open && empty( self::$state['errors'] ) && empty( self::$state['error'] ) ) {
                 return MyNJILGA_Join_View::open_join( $open, self::page_url(), self::$state );
             }
-            if ( empty( self::$state['errors'] ) && self::contact_is_current( self::user_contact( $user ), $year ) ) {
+            $contact = self::user_contact( $user );
+            if ( empty( self::$state['errors'] ) && self::contact_is_current( $contact, $year ) ) {
                 return MyNJILGA_Join_View::message( sprintf( 'You\'re already an NJILGA member for %d — thank you! There\'s nothing to pay.', $year ), 'success' );
+            }
+            // Said before the form is filled in, not after: nothing this
+            // account pays could be applied to that record.
+            if ( self::payer_record_owned_elsewhere( $contact, (string) $user->user_email, (int) $user->ID ) ) {
+                return MyNJILGA_Join_View::message( self::owned_elsewhere_message(), 'info' );
             }
         }
 
@@ -354,8 +388,8 @@ class MyNJILGA_Join_Form {
         header( 'Referrer-Policy: same-origin' );
 
         // A posted nonce is judged against the cookie this request
-        // arrived with, before visitor_token() mints one for a first-time
-        // visitor (whose re-shown form then carries a nonce for it).
+        // arrived with. A first-time visitor is given one here, but their
+        // forms are only bound to it once it comes back (visitor_nonce_uid()).
         $arrived = self::arrived_visitor_token();
         self::visitor_token();
 
@@ -382,25 +416,42 @@ class MyNJILGA_Join_Form {
             return;
         }
 
+        self::set_aside_unusable_invite();
+
         if ( $method === 'POST' && isset( $_POST[ self::ACTION_FIELD ] ) ) {
             $action = sanitize_key( wp_unslash( (string) $_POST[ self::ACTION_FIELD ] ) );
             $nonce  = isset( $_POST[ self::NONCE_FIELD ] ) ? sanitize_text_field( wp_unslash( (string) $_POST[ self::NONCE_FIELD ] ) ) : '';
             $owner  = self::nonce_owner( $nonce, self::NONCE_ACTION . '_' . $action, $arrived );
+            // A logged-out browser that sent no visitor cookie may simply
+            // not keep one — and would be told the same thing forever.
+            $cookies = ( $owner !== 'user' && ! is_user_logged_in() && $arrived === '' )
+                ? ' If you see this message again, please make sure cookies are enabled for this website.'
+                : '';
             if ( $owner === '' ) {
-                self::$state['error'] = 'This form expired before it was sent. Please check your details and try again.';
+                self::$state['error'] = 'This form expired before it was sent. Please check your details and try again.' . $cookies;
                 self::$state['old']   = self::old_from_post();
                 return;
             }
-            // A nonce minted for nobody in particular — the page went out
-            // before this browser had its visitor cookie, or came from a
-            // cache — is the same for every visitor, so on its own it
-            // can't stop another site posting this form (and logging the
-            // victim in to an attacker's account). For those, the browser
-            // has to say the form came from here.
-            if ( $owner === 'shared' && ! self::same_origin() ) {
-                self::$state['error'] = 'This form can only be sent from this website. Please check your details and try again.';
-                self::$state['old']   = self::old_from_post();
-                return;
+            // Logged out, a post is refused whenever the browser says it
+            // came from another site, whoever the nonce is for: the
+            // visitor cookie is an extra bind, not a pass — a sibling
+            // subdomain, or anyone on the network of a plain-HTTP site,
+            // can plant one of their own choosing and copy the nonce
+            // minted for it. A nonce minted for nobody in particular — a
+            // first view, before this browser's cookie came back, or a
+            // cached page — is the same for every visitor, so on its own
+            // it can't stop another site posting this form (and logging
+            // the victim in to an attacker's account): for those the
+            // browser has to say, positively, that the form came from here.
+            if ( $owner !== 'user' ) {
+                $origin = self::request_origin();
+                if ( $origin === 'foreign' || ( $owner === 'shared' && $origin !== 'same' ) ) {
+                    self::$state['error'] = ( $origin === 'foreign'
+                        ? 'This form can only be sent from this website. Please check your details and try again.'
+                        : 'For your security, please check your details and send the form again.' ) . $cookies;
+                    self::$state['old']   = self::old_from_post();
+                    return;
+                }
             }
             switch ( $action ) {
                 case 'submit':
@@ -436,33 +487,89 @@ class MyNJILGA_Join_Form {
     }
 
     private static function clear_invite_cookie(): void {
-        setcookie( self::INVITE_COOKIE, '', [ 'expires' => time() - 3600, 'path' => COOKIEPATH ?: '/', 'secure' => is_ssl(), 'httponly' => true, 'samesite' => 'Lax' ] );
+        if ( ! headers_sent() ) {
+            setcookie( self::INVITE_COOKIE, '', [ 'expires' => time() - 3600, 'path' => COOKIEPATH ?: '/', 'secure' => is_ssl(), 'httponly' => true, 'samesite' => 'Lax' ] );
+        }
         unset( $_COOKIE[ self::INVITE_COOKIE ] );
     }
 
     /**
-     * The fallback for a logged-out POST whose nonce isn't bound to this
-     * visitor: true only when the browser says the form came from this
-     * site, or says nothing at all (older browsers send no Origin on a
-     * form POST). "null" counts as foreign — it is exactly what another
-     * site gets from a sandboxed frame or a cross-site redirect chain.
-     * The one honest sender of "null", a page under Referrer-Policy:
-     * no-referrer, is normally carrying a visitor-bound nonce instead.
+     * A parked invitation takes over every join page — right for the
+     * invitee, wrong for anyone else, and anyone can park one with a
+     * link. So it is set aside (and render() says why, once, above the
+     * page) whenever it can't be used here: for a signed-in visitor, whose
+     * own join page or "continue to payment" it would otherwise replace;
+     * and when the token is no good any more — used, superseded by a
+     * resend, expired, or never one of ours. One whose account is being
+     * created this moment stays: that lasts seconds, and clearing it
+     * would strand the invitee if the creation then fails (their link
+     * works again once the claim is handed back).
      */
-    private static function same_origin(): bool {
-        $home = strtolower( (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
-        foreach ( [ 'HTTP_ORIGIN', 'HTTP_REFERER' ] as $h ) {
-            if ( empty( $_SERVER[ $h ] ) ) {
+    private static function set_aside_unusable_invite(): void {
+        $token = self::invite_token();
+        if ( $token === '' ) {
+            return;
+        }
+        if ( is_user_logged_in() ) {
+            self::clear_invite_cookie();
+            self::$state['invite_note'] = 'You\'re signed in, so the invitation link opened in this browser wasn\'t used. If it was meant for you and this isn\'t your account, sign out and open the link from your email again.';
+            return;
+        }
+        $found = MyNJILGA_Join_Invites::lookup( $token );
+        if ( $found['invite'] || ! empty( $found['busy'] ) ) {
+            return;
+        }
+        self::clear_invite_cookie();
+        self::$state['invite_note'] = (string) $found['error'];
+    }
+
+    /**
+     * Where the browser says this POST came from: 'same' (this site),
+     * 'foreign' (another host), or 'unknown' (it sent no Origin or
+     * Referer, or an opaque "null"). This site is the home URL's host and
+     * the host the request was sent to — a browser always addresses a
+     * request to its real target, so another site can't borrow that.
+     */
+    private static function request_origin(): string {
+        $hosts = [ strtolower( (string) wp_parse_url( home_url(), PHP_URL_HOST ) ) ];
+        if ( ! empty( $_SERVER['HTTP_HOST'] ) ) {
+            $hosts[] = strtolower( (string) wp_parse_url( 'http://' . sanitize_text_field( wp_unslash( (string) $_SERVER['HTTP_HOST'] ) ), PHP_URL_HOST ) );
+        }
+        return self::origin_verdict(
+            isset( $_SERVER['HTTP_ORIGIN'] ) ? sanitize_text_field( wp_unslash( (string) $_SERVER['HTTP_ORIGIN'] ) ) : '',
+            isset( $_SERVER['HTTP_REFERER'] ) ? sanitize_text_field( wp_unslash( (string) $_SERVER['HTTP_REFERER'] ) ) : '',
+            $hosts
+        );
+    }
+
+    /**
+     * The pure test behind request_origin(). Either header naming another
+     * host (or nothing parseable) is enough for 'foreign'. 'same' needs
+     * the Origin to name one of $hosts — or, from a browser that sends no
+     * Origin at all, the Referer. An Origin of "null" never counts as
+     * this site: it is exactly what another site gets from a sandboxed
+     * frame or a cross-site redirect chain. Hosts only, as the browser
+     * would compare them for cookies: the scheme and port don't matter.
+     *
+     * @param array<int,string> $hosts This site's host names, lower-case.
+     */
+    public static function origin_verdict( string $origin, string $referer, array $hosts ): string {
+        $hosts = array_filter( $hosts, 'strlen' );
+        $same  = [];
+        foreach ( [ 'origin' => trim( $origin ), 'referer' => trim( $referer ) ] as $which => $value ) {
+            if ( $value === '' || $value === 'null' ) {
                 continue;
             }
-            $value = sanitize_text_field( wp_unslash( (string) $_SERVER[ $h ] ) );
-            if ( $value === 'null' ) {
-                return false;
+            $host = strtolower( (string) parse_url( $value, PHP_URL_HOST ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- pure, so it runs without WordPress.
+            if ( $host === '' || ! in_array( $host, $hosts, true ) ) {
+                return 'foreign';
             }
-            $host = strtolower( (string) wp_parse_url( $value, PHP_URL_HOST ) );
-            return $host !== '' && $host === $home;
+            $same[ $which ] = true;
         }
-        return true;
+        if ( ! empty( $same['origin'] ) || ( trim( $origin ) === '' && ! empty( $same['referer'] ) ) ) {
+            return 'same';
+        }
+        return 'unknown';
     }
 
     /**
@@ -470,10 +577,12 @@ class MyNJILGA_Join_Form {
      * SameSite=Lax cookie, set here while the headers are still open
      * (template_redirect, or a block theme's render). Another site can
      * make a browser post our form, but can't make it send that cookie
-     * along, or read a page minted for it to copy its nonce. '' when
-     * signed in (the nonce is per-user then), or when no cookie exists
-     * and none can be set any more (headers sent) — that page's forms
-     * then carry a shared nonce, and same_origin() stands in.
+     * along, or read a page minted for it to copy its nonce. Forms are
+     * bound to it only once the browser has sent it back (the nonce
+     * filter reads arrived_visitor_token(), not this) — until then, and
+     * when no cookie can be set (signed in: the nonce is per-user; headers
+     * already sent), they carry the shared nonce and the Origin check in
+     * handle_request() stands in. '' when signed in or none can be set.
      */
     public static function visitor_token(): string {
         if ( is_user_logged_in() ) {
@@ -488,19 +597,47 @@ class MyNJILGA_Join_Form {
         }
         if ( $token !== '' && ! headers_sent() ) {
             // Re-sent on every join page, so it outlives any form left open.
-            setcookie( self::VISITOR_COOKIE, $token, [ 'expires' => time() + 2 * DAY_IN_SECONDS, 'path' => COOKIEPATH ?: '/', 'secure' => is_ssl(), 'httponly' => true, 'samesite' => 'Lax' ] );
-            $_COOKIE[ self::VISITOR_COOKIE ] = $token;
+            // Deliberately NOT copied into $_COOKIE: this request's forms
+            // must not be bound to a cookie the browser may never return.
+            $spec = self::visitor_cookie_spec( is_ssl(), (string) COOKIEPATH );
+            setcookie( $spec['name'], $token, [ 'expires' => time() + 2 * DAY_IN_SECONDS, 'path' => $spec['path'], 'secure' => $spec['secure'], 'httponly' => true, 'samesite' => 'Lax' ] );
         }
         self::$visitor = $token;
         return $token;
     }
 
     /**
+     * The visitor cookie's name on this site.
+     */
+    public static function visitor_cookie_name(): string {
+        return self::visitor_cookie_spec( is_ssl(), (string) COOKIEPATH )['name'];
+    }
+
+    /**
+     * The visitor cookie's name, path and Secure flag. Over HTTPS it is a
+     * __Host- cookie — Secure, Path=/, no Domain — which browsers accept
+     * only from this exact host over HTTPS: a sibling subdomain can't
+     * plant one of its choosing, nor shadow ours with a longer path, and
+     * neither can a forged plain-HTTP response. Plain HTTP can't carry
+     * the prefix at all, so it keeps the unprefixed name (nothing there
+     * is safe from the network anyway; the Origin check still applies).
+     *
+     * @return array{name:string,path:string,secure:bool}
+     */
+    public static function visitor_cookie_spec( bool $https, string $cookiePath ): array {
+        return $https
+            ? [ 'name' => '__Host-' . self::VISITOR_COOKIE, 'path' => '/', 'secure' => true ]
+            : [ 'name' => self::VISITOR_COOKIE, 'path' => $cookiePath !== '' ? $cookiePath : '/', 'secure' => false ];
+    }
+
+    /**
      * The visitor cookie as this request brought it, or '' (none, or not
-     * one of ours).
+     * one of ours). visitor_token() never writes $_COOKIE, so this stays
+     * what the browser sent even after a new cookie was issued.
      */
     private static function arrived_visitor_token(): string {
-        $token = isset( $_COOKIE[ self::VISITOR_COOKIE ] ) ? (string) wp_unslash( $_COOKIE[ self::VISITOR_COOKIE ] ) : '';
+        $name  = self::visitor_cookie_name();
+        $token = isset( $_COOKIE[ $name ] ) ? (string) wp_unslash( $_COOKIE[ $name ] ) : '';
         return preg_match( '/^[a-f0-9]{32}$/', $token ) ? $token : '';
     }
 
@@ -510,17 +647,35 @@ class MyNJILGA_Join_Form {
      * visitor shares, and anyone can copy off the public page. Other
      * nonces (the code AJAX calls included) are left alone.
      *
+     * Only for a cookie this request ARRIVED with. One issued just now
+     * may never come back — cookies blocked, or an edge cache that
+     * strips Set-Cookie — and a form bound to it could then never be
+     * sent. So a first view carries the shared nonce (handle_request()
+     * then needs the browser to say the form came from here) while the
+     * cookie is set for every view after it.
+     *
      * @param int|string $uid
      * @param mixed      $action
      * @return int|string
      */
     public static function visitor_nonce_uid( $uid, $action ) {
-        $prefix = self::NONCE_ACTION . '_';
-        if ( ! is_string( $action ) || strpos( $action, $prefix ) !== 0 || ! in_array( substr( $action, strlen( $prefix ) ), self::VISITOR_ACTIONS, true ) ) {
+        if ( ! self::is_visitor_action( $action ) ) {
             return $uid;
         }
-        $token = self::$nonceFor ?? self::visitor_token();
+        self::visitor_token(); // Issue the cookie while the headers are open (a block theme renders before sending them).
+        $token = self::$nonceFor ?? self::arrived_visitor_token();
         return $token !== '' ? 'njilga-visitor:' . $token : $uid;
+    }
+
+    /**
+     * Whether a nonce action is one of the logged-out forms bound to the
+     * visitor cookie (VISITOR_ACTIONS).
+     *
+     * @param mixed $action
+     */
+    private static function is_visitor_action( $action ): bool {
+        $prefix = self::NONCE_ACTION . '_';
+        return is_string( $action ) && strpos( $action, $prefix ) === 0 && in_array( substr( $action, strlen( $prefix ) ), self::VISITOR_ACTIONS, true );
     }
 
     /**
@@ -533,7 +688,9 @@ class MyNJILGA_Join_Form {
             return wp_verify_nonce( $nonce, $action ) ? 'user' : '';
         }
         try {
-            if ( $arrived !== '' ) {
+            // Only a visitor form's nonce can be bound to the cookie; any
+            // other logged-out nonce verifying here is the shared one.
+            if ( $arrived !== '' && self::is_visitor_action( $action ) ) {
                 self::$nonceFor = $arrived;
                 if ( wp_verify_nonce( $nonce, $action ) ) {
                     return 'visitor';
@@ -699,20 +856,25 @@ class MyNJILGA_Join_Form {
         // Who is already covered — only asked once the visitor has proved
         // their own address (or is signed in). The payer's own answer can
         // be specific; a colleague's never says which of their records
-        // it came from, and asking again and again is limited hard, so the
-        // form can't be used to look up other people's membership or
-        // whether their firm owes dues.
+        // it came from, so the form can't be used to look up other
+        // people's membership or whether their firm owes dues. How often
+        // it can be asked about colleagues at all is counted FIRST, row by
+        // row, whatever the answer turns out to be; past the allowance
+        // nothing is looked up, so "too many" can't hint at who is covered.
         $payerEmail = $loggedIn ? (string) $user->user_email : (string) ( $old['email'] ?? '' );
-        $conflicts  = self::membership_conflicts( $payerEmail, $colleagues, $year, ! self::is_test_mode(), $loggedIn ? (int) $user->ID : 0 );
+        if ( $colleagues && ! self::take_colleague_checks( $ip, $payerEmail, $loggedIn ? (int) $user->ID : 0, count( $colleagues ) ) ) {
+            if ( ! $loggedIn ) {
+                self::$state['needs_code'] = true; // Keep the (still valid) code box on screen.
+            }
+            self::$state['error'] = 'Too many colleague checks from your connection or account today, so we can\'t add colleagues online just now — please try again tomorrow, or contact NJILGA to add them. You can still join on your own now: choose "No, just me".' . ( $loggedIn ? '' : $again );
+            return;
+        }
+        $conflicts = self::membership_conflicts( $payerEmail, $colleagues, $year, ! self::is_test_mode(), $loggedIn ? (int) $user->ID : 0 );
         if ( $conflicts ) {
             if ( ! $loggedIn ) {
                 self::$state['needs_code'] = true; // Keep the (still valid) code box on screen.
             }
             $aboutColleagues = preg_grep( '/^colleague_/', array_keys( $conflicts ) );
-            if ( $aboutColleagues && ( ! self::rate_ok( 'conflict_ip', $ip, self::RATE_CONFLICTS, 3600 ) || ! self::rate_ok( 'conflict_email', strtolower( $payerEmail ), self::RATE_CONFLICTS, 3600 ) ) ) {
-                self::$state['error'] = 'Too many attempts — please wait an hour and try again, or contact NJILGA to add your colleagues.';
-                return;
-            }
             // Removing a colleague and sending again needs the password
             // again — said once, on the first colleague's message (every
             // message is also listed at the top of the form).
@@ -1093,7 +1255,11 @@ class MyNJILGA_Join_Form {
 
         $found = MyNJILGA_Join_Invites::lookup( $token );
         if ( ! $found['invite'] ) {
-            self::$state['error'] = $found['error'];
+            // Already set aside by handle_request() — the note above the
+            // page says why — or gone since.
+            if ( empty( self::$state['invite_note'] ) ) {
+                self::$state['error'] = $found['error'];
+            }
             return;
         }
         $ip = self::client_ip();
@@ -1251,7 +1417,18 @@ class MyNJILGA_Join_Form {
      */
     private static function validate_address( array $old, array &$errors ): void {
         if ( ! empty( $old['outside_us'] ) ) {
+            // Outside the US the State list and the ZIP pattern don't
+            // apply. Without JavaScript the State select still arrives
+            // (whatever it was left on) and is ignored — applicant_answers()
+            // and the invite take the region instead. The postcode is
+            // whatever the country uses, if it has one at all.
             self::require_fields( $old, [ 'country' => 'Country' ], $errors );
+            foreach ( [ 'country' => [ 'Country', 80 ], 'region' => [ 'State / province / region', 80 ], 'postal_code' => [ 'Postal code', 20 ] ] as $k => $rule ) {
+                $bad = self::plain_text_problem( (string) ( $old[ $k ] ?? '' ), $rule[1] );
+                if ( $bad !== '' && ! isset( $errors[ $k ] ) ) {
+                    $errors[ $k ] = $rule[0] . ' ' . $bad;
+                }
+            }
             return;
         }
         if ( ! isset( MyNJILGA_Join_View::us_states()[ (string) ( $old['state'] ?? '' ) ] ) ) {
@@ -1408,6 +1585,8 @@ class MyNJILGA_Join_Form {
         }
         if ( self::contact_is_current( $payer, $year ) ) {
             $errors['email'] = sprintf( 'This email already belongs to an NJILGA member for %d — there\'s nothing to pay.', $year );
+        } elseif ( self::payer_record_owned_elsewhere( $payer, $payerEmail, $userId ) ) {
+            $errors['email'] = self::owned_elsewhere_message();
         } elseif ( self::contact_on_open_invoice( $payer, $year, $livemode ) ) {
             $errors['email'] = sprintf( 'You\'re already on your firm\'s %d dues invoice, which covers your membership once it\'s paid — there\'s nothing to pay here. Contact NJILGA if that looks wrong.', $year );
         } elseif ( $paying ) {
@@ -1592,6 +1771,46 @@ class MyNJILGA_Join_Form {
         return MyNJILGA_Join_Fulfillment::contact_for_user( $userId, $email );
     }
 
+    /**
+     * Whether the FluentCRM record this payer's email belongs to is linked
+     * to a DIFFERENT website account — an old account of theirs, or one
+     * staff re-pointed it to. A payment from here could only land on that
+     * record (fulfillment matches contacts by email when the account has
+     * none of its own), so the money would buy a membership another
+     * account holds: the join is refused up front, and staff sort the
+     * records out.
+     *
+     * Signed in: only when the account has no contact of its own
+     * ($payer, from contact_for_user(), which never returns one another
+     * account owns). Logged out: the account doesn't exist yet, so any
+     * account linked to the address's record is another one. The payer
+     * has proved the address, so telling them says nothing about anyone
+     * else.
+     *
+     * @param object|null $payer
+     */
+    private static function payer_record_owned_elsewhere( $payer, string $email, int $userId ): bool {
+        if ( $userId > 0 ) {
+            if ( $payer ) {
+                return false;
+            }
+            $payer = self::contact_by_email( $email );
+        }
+        return $payer ? self::linked_to_other_account( (int) $payer->user_id, $userId ) : false;
+    }
+
+    /**
+     * The pure test behind payer_record_owned_elsewhere(): a contact's
+     * user_id names an account, and it isn't this one (0 = not signed in).
+     */
+    public static function linked_to_other_account( int $contactUserId, int $userId ): bool {
+        return $contactUserId > 0 && $contactUserId !== $userId;
+    }
+
+    private static function owned_elsewhere_message(): string {
+        return 'This email\'s NJILGA membership record belongs to another website account, so it can\'t be paid for from here. Please contact NJILGA and we\'ll sort it out.';
+    }
+
     // -------------------------------------------------------------------------
     // Email verification codes
     // -------------------------------------------------------------------------
@@ -1670,6 +1889,15 @@ class MyNJILGA_Join_Form {
     }
 
     /**
+     * What any wrong code is told — and, the same words, any code typed
+     * for an address that has an account (whose email held a log-in note,
+     * not a code).
+     */
+    public static function wrong_code_message(): string {
+        return 'That code isn\'t right — check the latest email we sent you and try again. (If that email says the address already has an NJILGA account, log in instead.)';
+    }
+
+    /**
      * Email a fresh 6-digit code — or, when the address already has an
      * account, a note telling its owner how to log in. The answer is the
      * same either way, so this can't be used to find out who has an
@@ -1695,6 +1923,13 @@ class MyNJILGA_Join_Form {
         }
 
         if ( email_exists( $email ) ) {
+            // A decoy code row, stored exactly like a real one (same
+            // expiry, same attempt count), whose hash is of nothing a
+            // person could type. A guess at it is then answered — and
+            // counted — like a wrong guess at a real code. Without it the
+            // guess would find no row and be told "expired", and straight
+            // after a send only an address with an account hears that.
+            self::store_code( $email, hash_hmac( 'sha256', 'decoy|' . bin2hex( random_bytes( 16 ) ), wp_salt( 'nonce' ) ) );
             MyNJILGA_Join_Fulfillment::mail(
                 $email,
                 'Your NJILGA website account',
@@ -1707,19 +1942,26 @@ class MyNJILGA_Join_Form {
             return [ 'ok' => true, 'error' => '' ];
         }
 
-        global $wpdb;
-        $code  = str_pad( (string) random_int( 0, 999999 ), 6, '0', STR_PAD_LEFT );
-        // The expiry is fixed here, inside the entry: nothing a guess does
-        // can keep a code alive longer.
-        $entry = [ 'hash' => self::code_hash( $email, $code ), 'tries' => 0, 'sent' => time(), 'expires' => time() + self::CODE_TTL ];
-        $wpdb->query( $wpdb->prepare( "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no') ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)", self::code_key( $email ), (string) wp_json_encode( $entry ) ) ); // phpcs:ignore
-        self::purge_stale_codes();
+        $code = str_pad( (string) random_int( 0, 999999 ), 6, '0', STR_PAD_LEFT );
+        self::store_code( $email, self::code_hash( $email, $code ) );
         MyNJILGA_Join_Fulfillment::mail(
             $email,
             sprintf( 'Your NJILGA verification code: %s', $code ),
             sprintf( "Your code to confirm this email address for your NJILGA membership is:\n\n    %s\n\nIt expires in 15 minutes. If you didn't ask for this, you can ignore this email.\n\nNJILGA", $code )
         );
         return [ 'ok' => true, 'error' => '' ];
+    }
+
+    /**
+     * Store (or replace) an address's code row — a real code's hash, or a
+     * decoy's — with a fresh attempt count. The expiry is fixed here,
+     * inside the entry: nothing a guess does can keep a code alive longer.
+     */
+    private static function store_code( string $email, string $hash ): void {
+        global $wpdb;
+        $entry = [ 'hash' => $hash, 'tries' => 0, 'sent' => time(), 'expires' => time() + self::CODE_TTL ];
+        $wpdb->query( $wpdb->prepare( "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no') ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)", self::code_key( $email ), (string) wp_json_encode( $entry ) ) ); // phpcs:ignore
+        self::purge_stale_codes();
     }
 
     /**
@@ -1753,7 +1995,9 @@ class MyNJILGA_Join_Form {
                 continue; // Another check landed first — read the count it left.
             }
             if ( ! preg_match( '/^\d{6}$/', $code ) || ! hash_equals( (string) $entry['hash'], self::code_hash( $email, $code ) ) ) {
-                return [ 'ok' => false, 'error' => 'That code isn\'t right — check the email and try again.' ];
+                // Also what an address with an account hears (its row is
+                // a decoy), so the words point that owner to log in too.
+                return [ 'ok' => false, 'error' => self::wrong_code_message() ];
             }
             if ( $consume ) {
                 if ( ! self::delete_code( $key, (string) wp_json_encode( $entry ) ) ) {
@@ -1830,12 +2074,66 @@ class MyNJILGA_Join_Form {
         if ( $who === '' ) {
             return true;
         }
-        $key   = 'njilga_join_' . $bucket . '_' . md5( $who );
-        $count = (int) get_transient( $key );
+        $count = self::rate_count( $bucket, $who );
         if ( $count >= $limit ) {
             return false;
         }
-        set_transient( $key, $count + 1, $window );
+        set_transient( self::rate_key( $bucket, $who ), $count + 1, $window );
         return true;
+    }
+
+    private static function rate_key( string $bucket, string $who ): string {
+        return 'njilga_join_' . $bucket . '_' . md5( $who );
+    }
+
+    private static function rate_count( string $bucket, string $who ): int {
+        return $who === '' ? 0 : (int) get_transient( self::rate_key( $bucket, $who ) );
+    }
+
+    /**
+     * Count $rows colleague lookups against the connection, the payer's
+     * mailbox ("ann+1@" and "ann+2@" are one) and their account — all or
+     * nothing: false, with nothing counted, when any of them hasn't room
+     * for every row. Decided on the counts alone, before anyone is looked
+     * up.
+     */
+    private static function take_colleague_checks( string $ip, string $payerEmail, int $userId, int $rows ): bool {
+        $max     = (int) MyNJILGA_Dues_Settings::general( 'join_max_colleagues', 10 );
+        $buckets = [
+            [ 'colleague_ip', $ip, self::colleague_check_limit( $max, true ) ],
+            [ 'colleague_email', self::mailbox_key( $payerEmail ), self::colleague_check_limit( $max, false ) ],
+            [ 'colleague_user', $userId > 0 ? (string) $userId : '', self::colleague_check_limit( $max, false ) ],
+        ];
+        foreach ( $buckets as $b ) {
+            if ( $b[1] !== '' && ! self::rate_allows( self::rate_count( $b[0], $b[1] ), $rows, $b[2] ) ) {
+                return false;
+            }
+        }
+        foreach ( $buckets as $b ) {
+            if ( $b[1] !== '' ) {
+                set_transient( self::rate_key( $b[0], $b[1] ), self::rate_count( $b[0], $b[1] ) + $rows, self::RATE_COLLEAGUE_WINDOW );
+            }
+        }
+        return true;
+    }
+
+    /**
+     * How many colleague rows a day one payer (or, $perIp, one connection)
+     * may have checked: room for three full lists at the Settings maximum
+     * (six per connection), and never less than the RATE_COLLEAGUE_ROWS*
+     * floors.
+     */
+    public static function colleague_check_limit( int $maxColleagues, bool $perIp ): int {
+        return $perIp
+            ? max( self::RATE_COLLEAGUE_ROWS_IP, 6 * max( 0, $maxColleagues ) )
+            : max( self::RATE_COLLEAGUE_ROWS, 3 * max( 0, $maxColleagues ) );
+    }
+
+    /**
+     * Whether $asking more fit under $limit after $used — the whole batch
+     * or none of it.
+     */
+    public static function rate_allows( int $used, int $asking, int $limit ): bool {
+        return $asking >= 0 && $used + $asking <= $limit;
     }
 }

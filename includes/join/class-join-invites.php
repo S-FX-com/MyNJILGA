@@ -108,28 +108,31 @@ class MyNJILGA_Join_Invites {
     }
 
     /**
-     * The usable invite behind a token, or why there isn't one.
+     * The usable invite behind a token, or why there isn't one. 'busy' is
+     * true only while an account is being created through it this moment
+     * — the one failure that passes by itself within seconds (every other
+     * one is for good, and the join form treats the link as spent).
      *
-     * @return array{invite:?object,join:?object,error:string}
+     * @return array{invite:?object,join:?object,error:string,busy:bool}
      */
     public static function lookup( string $token ): array {
         $invite = MyNJILGA_Join_Invites_Table::get_by_token( $token );
         if ( $invite && MyNJILGA_Join_Invites_Table::is_being_claimed( $invite ) ) {
-            return [ 'invite' => null, 'join' => null, 'error' => self::claimed_message() ];
+            return [ 'invite' => null, 'join' => null, 'error' => self::claimed_message(), 'busy' => true ];
         }
         // A stale claim (its request died) is still a usable invite:
         // accept() can take it over.
         if ( ! $invite || ! in_array( $invite->status, [ MyNJILGA_Join_Invites_Table::STATUS_SENT, MyNJILGA_Join_Invites_Table::STATUS_CLAIMING ], true ) ) {
-            return [ 'invite' => null, 'join' => null, 'error' => 'This invitation link is not valid any more — it may already have been used. If you already created your account, just log in.' ];
+            return [ 'invite' => null, 'join' => null, 'error' => 'This invitation link is not valid any more — it may already have been used, or a newer one sent. If you already created your account, just log in.', 'busy' => false ];
         }
         if ( MyNJILGA_Join_Invites_Table::is_expired( $invite ) ) {
-            return [ 'invite' => null, 'join' => null, 'error' => 'This invitation link has expired. Please ask NJILGA to send you a new one.' ];
+            return [ 'invite' => null, 'join' => null, 'error' => 'This invitation link has expired. Please ask NJILGA to send you a new one.', 'busy' => false ];
         }
         $join = MyNJILGA_Join_Orders_Table::get( (int) $invite->join_id );
         if ( ! $join ) {
-            return [ 'invite' => null, 'join' => null, 'error' => 'This invitation is no longer valid. Please contact NJILGA.' ];
+            return [ 'invite' => null, 'join' => null, 'error' => 'This invitation is no longer valid. Please contact NJILGA.', 'busy' => false ];
         }
-        return [ 'invite' => $invite, 'join' => $join, 'error' => '' ];
+        return [ 'invite' => $invite, 'join' => $join, 'error' => '', 'busy' => false ];
     }
 
     /**

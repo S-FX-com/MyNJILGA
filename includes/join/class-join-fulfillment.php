@@ -211,12 +211,24 @@ class MyNJILGA_Join_Fulfillment {
             return self::result( $now && $now->status === $T::STATUS_FULFILLED, $now ? (string) $now->status : '', 'Another process is completing this join.' );
         }
 
-        MyNJILGA_Join_Orders_Table::update( $joinId, [
+        $fields = [
             'paid_at'                  => $join->paid_at ?: current_time( 'mysql' ),
             'stripe_payment_intent_id' => (string) $fresh['payment_intent_id'],
             'stripe_customer_id'       => (string) $fresh['customer'],
             'stripe_invoice_id'        => (string) $fresh['invoice_id'],
-        ] );
+        ];
+        // The money is settled and checked against this join. Recorded,
+        // so that if this run fails part-way the join, back at 'paid',
+        // still counts as paying for its people — unlike a 'paid' join
+        // held back by verify_session() above, which covers nobody until
+        // staff decide (MyNJILGA_Join_Orders_Table::payment_settled()).
+        $claimed = MyNJILGA_Join_Orders_Table::get( $joinId );
+        if ( $claimed ) {
+            $progress                      = MyNJILGA_Join_Orders_Table::json( $claimed, 'progress' );
+            $progress['payment_confirmed'] = true;
+            $fields['progress']            = $progress;
+        }
+        MyNJILGA_Join_Orders_Table::update( $joinId, $fields );
 
         return self::run( $joinId, $trigger, $fresh );
     }
@@ -312,8 +324,58 @@ class MyNJILGA_Join_Fulfillment {
                     (string) $join->source_url
                 )
             );
+            try {
+                self::flag_rows_priced_by_failed_join( $join );
+            } catch ( \Throwable $e ) {
+                // A courtesy to staff; the failure itself is recorded.
+            }
         }
         return $failed;
+    }
+
+    /**
+     * A join whose bank payment failed paid for nobody — but a firm
+     * invoice priced while it was clearing may still list its people at
+     * $0 as covered by it: 3.1.3 priced a clearing join as paid (nothing
+     * does now — see MyNJILGA_Dues_Preview::join_coverage()). Paid, such
+     * an invoice would make them members for free, so each one still open
+     * is flagged on its row: an approved one also goes back to draft, for
+     * Refresh Firms to re-price, and one already out says what is unpaid.
+     * Anyone a payment that HAS settled covers after all is left alone.
+     */
+    private static function flag_rows_priced_by_failed_join( object $join ): void {
+        $year     = (int) $join->dues_year;
+        $livemode = ! empty( $join->livemode );
+        $covered  = MyNJILGA_Dues_Preview::join_coverage( $year, $livemode )['covered'];
+        $hits     = []; // row id => [ row, names[] ]
+        foreach ( self::contact_ids_for( $join ) as $cid ) {
+            if ( isset( $covered[ $cid ] ) ) {
+                continue;
+            }
+            foreach ( MyNJILGA_Dues_Invoice_Table::open_rows_listing_contact( $cid, $year, $livemode ) as $row ) {
+                $m = MyNJILGA_Dues_Invoice_Table::listed_member( $row, $cid );
+                if ( $m && MyNJILGA_Dues_Preview::priced_as_join_covered( $m ) ) {
+                    $hits[ (int) $row->id ]['row']     = $row;
+                    $hits[ (int) $row->id ]['names'][] = (string) ( $m['name'] ?? '' ) !== '' ? (string) $m['name'] : 'Contact #' . $cid;
+                }
+            }
+        }
+        $T = 'MyNJILGA_Dues_Invoice_Table';
+        foreach ( $hits as $rowId => $hit ) {
+            $names  = implode( ', ', $hit['names'] );
+            $status = (string) $hit['row']->status;
+            if ( $status === $T::STATUS_APPROVED && ! MyNJILGA_Dues_Invoice_Table::return_to_draft( $rowId ) ) {
+                // Moved on meanwhile (created, most likely): say it as it is now.
+                $now    = MyNJILGA_Dues_Invoice_Table::get( $rowId );
+                $status = $now ? (string) $now->status : $status;
+            }
+            if ( in_array( $status, [ $T::STATUS_DRAFT, $T::STATUS_APPROVED ], true ) ) {
+                $message = sprintf( '%s %s listed at $0 as paid by online join #%d, whose bank payment has failed — click Refresh Firms to re-price this invoice before creating it.', $names, count( $hit['names'] ) === 1 ? 'is' : 'are', (int) $join->id );
+            } else {
+                $message = sprintf( 'This invoice went out listing %s at $0 as paid by online join #%d, whose bank payment has since failed: their %d dues are unpaid, and paying this invoice would still make them members. Bill them separately, or void it and create it again.', $names, (int) $join->id, $year );
+            }
+            MyNJILGA_Dues_Invoice_Table::set_error( $rowId, $message );
+        }
     }
 
     /**
@@ -506,7 +568,11 @@ class MyNJILGA_Join_Fulfillment {
 
             // 1. Payer contact.
             if ( empty( $progress['contact_id'] ) ) {
-                $progress['contact_id'] = self::upsert_contact( self::applicant_fields( $applicant ), self::applicant_custom_values( $applicant, $isStudent ), (int) $join->wp_user_id );
+                [ $contactId, $otherAccount ] = self::upsert_contact( self::applicant_fields( $applicant ), self::applicant_custom_values( $applicant, $isStudent ), (int) $join->wp_user_id );
+                $progress['contact_id'] = $contactId;
+                if ( $otherAccount > 0 ) {
+                    $progress['payer_other_account'] = $otherAccount; // Flagged in step 4.
+                }
                 $save();
             }
             $payerId = (int) $progress['contact_id'];
@@ -621,7 +687,12 @@ class MyNJILGA_Join_Fulfillment {
                 foreach ( self::on_firm_invoices( $join, $payerId, $colleagues, $colleagueIds ) as $line ) {
                     $checks[] = $line;
                 }
-                if ( $payerContact && (int) $join->wp_user_id > 0 && ! empty( $payerContact->user_id ) && (int) $payerContact->user_id !== (int) $join->wp_user_id ) {
+                // The payment went onto a contact another website account
+                // owns (see upsert_contact()) — never silently.
+                $otherAccount = (int) ( $progress['payer_other_account'] ?? 0 );
+                if ( $otherAccount > 0 ) {
+                    $checks[] = sprintf( 'The FluentCRM contact for %s (#%d) is linked to a different website account (user #%d) than the one that paid (user #%d). The membership was applied to that contact, whose details were only filled in where blank (this join\'s answers are on the Online joins screen) — check which account it belongs to, and whether it was already current.', (string) $join->email, $payerId, $otherAccount, (int) $join->wp_user_id );
+                } elseif ( $payerContact && (int) $join->wp_user_id > 0 && ! empty( $payerContact->user_id ) && (int) $payerContact->user_id !== (int) $join->wp_user_id ) {
                     $checks[] = sprintf( 'The FluentCRM contact for %s is linked to a different website account (user #%d) than the one that paid (user #%d) — the membership is on that contact; check which account it belongs to.', (string) $join->email, (int) $payerContact->user_id, (int) $join->wp_user_id );
                 }
                 if ( ! empty( $progress['reopened_from'] ) ) {
@@ -657,7 +728,7 @@ class MyNJILGA_Join_Fulfillment {
                 // (their firm's invoice was paid, or another join covered
                 // them) has now been paid for twice — say so, for a refund.
                 if ( ! isset( $progress['already_current'] ) ) {
-                    $progress['already_current'] = self::already_current( $join, $priced, $payerId, $colleagueIds );
+                    $progress['already_current'] = self::already_current( $join, $priced, $payerId, $colleagueIds, $rowId );
                     $save();
                 }
 
@@ -813,14 +884,38 @@ class MyNJILGA_Join_Fulfillment {
      * who once unsubscribed from NJILGA email stays unsubscribed —
      * joining is not consent to marketing they previously declined.
      *
+     * The contact with that email may be linked to a DIFFERENT website
+     * account than the payer's. The join form refuses such a payer before
+     * they pay, but one can still get here (the contact was re-linked
+     * while an ACH debit cleared, or the join predates that check). The
+     * membership still goes on that contact — FluentCRM has one record per
+     * address, and the money is in — but never silently: the other
+     * account is returned for run() to flag, and that record's details
+     * are only filled in where blank, as a colleague's are. They are
+     * someone else's; the payer's answers stay on the join.
+     *
      * @param array<string,string> $fields  email, first_name, last_name, plus optional phone/address fields.
      * @param array<string,string> $custom  FluentCRM custom field slug => value.
+     * @return array{0:int,1:int} [contact id, the other website account that owns it (0 = none)]
      */
-    private static function upsert_contact( array $fields, array $custom, int $userId ): int {
+    private static function upsert_contact( array $fields, array $custom, int $userId ): array {
         $email    = strtolower( trim( (string) ( $fields['email'] ?? '' ) ) );
         $existing = self::contact_for_user( $userId, $email );
         if ( ! $existing ) {
             $existing = \FluentCrm\App\Models\Subscriber::where( 'email', $email )->first();
+            if ( $existing && $userId > 0 && ! empty( $existing->user_id ) && (int) $existing->user_id !== $userId ) {
+                $dirty = false;
+                foreach ( $fields as $k => $v ) {
+                    if ( $k !== 'email' && (string) $v !== '' && (string) ( $existing->$k ?? '' ) === '' ) {
+                        $existing->$k = (string) $v;
+                        $dirty        = true;
+                    }
+                }
+                if ( $dirty ) {
+                    $existing->save();
+                }
+                return [ (int) $existing->id, (int) $existing->user_id ];
+            }
         }
 
         $data = array_filter( $fields, static function ( $v ) { return (string) $v !== ''; } );
@@ -851,7 +946,7 @@ class MyNJILGA_Join_Fulfillment {
             $contact->user_id = $userId;
             $contact->save();
         }
-        return (int) $contact->id;
+        return [ (int) $contact->id, 0 ];
     }
 
     /**
@@ -1386,9 +1481,10 @@ class MyNJILGA_Join_Fulfillment {
      *
      * @param array<string,mixed> $priced
      * @param array<string,int>   $colleagueIds
+     * @param int                 $ownRowId     This join's own invoice row, already written as paid.
      * @return array<int,string> One line per person.
      */
-    private static function already_current( object $join, array $priced, int $payerId, array $colleagueIds ): array {
+    private static function already_current( object $join, array $priced, int $payerId, array $colleagueIds, int $ownRowId ): array {
         $yearTag  = MyNJILGA_Dues_Settings::year_tag( 'year_paid_tag_pattern', (int) $join->dues_year );
         $inactive = (string) MyNJILGA_Dues_Settings::general( 'inactive_tag', 'inactive' );
         $out      = [];
@@ -1399,13 +1495,40 @@ class MyNJILGA_Join_Fulfillment {
             if ( ! $contact ) {
                 continue;
             }
-            if ( MyNJILGA_Tags::has_title( $contact, $yearTag ) ) {
+            if ( MyNJILGA_Tags::has_title( $contact, $yearTag ) && self::current_before_join( $cid, $join, $ownRowId ) ) {
                 $out[] = sprintf( '%s was already a %d member when this payment cleared — consider refunding their %s line.', (string) ( $m['name'] ?? '' ), (int) $join->dues_year, MyNJILGA_Invoicing::money( (int) ( $m['dues_cents'] ?? 0 ) ) );
             } elseif ( ! $isPayer && $inactive !== '' && MyNJILGA_Tags::has_slug( $contact, $inactive ) ) {
                 $out[] = sprintf( '%s carries the "%s" tag — they are paid for %d, but next year\'s batch won\'t bill them until it is removed.', (string) ( $m['name'] ?? '' ), $inactive, (int) $join->dues_year );
             }
         }
         return $out;
+    }
+
+    /**
+     * Whether a contact's "Dues Paid" tag for the join's year means they
+     * were current without this join. Not when the only paid invoices
+     * listing them priced them at $0 BECAUSE of an online join — a firm
+     * invoice drafted while this join was clearing or waiting on a retry:
+     * this join is what pays for them there, and a refund would leave the
+     * membership that invoice granted paid for by nobody. Any other paid
+     * row listing them — charging their dues, or covering them for free
+     * as a 6th-or-later or exempt member — made them current on its own;
+     * so does a tag no paid row explains (set by hand).
+     */
+    private static function current_before_join( int $contactId, object $join, int $ownRowId ): bool {
+        $explained = false;
+        $rows      = MyNJILGA_Dues_Invoice_Table::rows_listing_member( $contactId, (int) $join->dues_year, ! empty( $join->livemode ), [ MyNJILGA_Dues_Invoice_Table::STATUS_PAID ], true );
+        foreach ( $rows as $row ) {
+            if ( (int) $row->id === $ownRowId ) {
+                continue;
+            }
+            $m = MyNJILGA_Dues_Invoice_Table::listed_member( $row, $contactId );
+            if ( $m && ! MyNJILGA_Dues_Preview::priced_as_join_covered( $m ) ) {
+                return true;
+            }
+            $explained = true;
+        }
+        return ! $explained;
     }
 
     /**
@@ -1431,6 +1554,14 @@ class MyNJILGA_Join_Fulfillment {
         $out  = [];
         foreach ( $people as $cid => $name ) {
             foreach ( MyNJILGA_Dues_Invoice_Table::open_rows_listing_contact( (int) $cid, $year, ! empty( $join->livemode ) ) as $row ) {
+                // Listed there at $0 — priced as paid by this very join
+                // before it was applied, or a 6th-or-later or exempt member —
+                // that invoice charges them nothing, so it can't pay for
+                // them twice: nothing to take off, nothing to refund.
+                $m = MyNJILGA_Dues_Invoice_Table::listed_member( $row, (int) $cid );
+                if ( ! $m || (int) ( $m['dues_cents'] ?? 0 ) <= 0 ) {
+                    continue;
+                }
                 $firm = MyNJILGA_Dues_Snapshot::company_name( $row );
                 if ( (string) $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT ) {
                     // A fresh preview prices them as paid via this join.
