@@ -115,10 +115,14 @@ class MyNJILGA_Page_Shortcodes {
                 'warning'
             );
         } else {
-            MyNJILGA_Admin_UI::callout( sprintf( '<strong>Online joining is open.</strong> Visitors join and pay in Stripe <strong>Live</strong> mode, whichever way the admin Test/Live toggle is set. <a href="%s">Setup</a> checks the Stripe key and webhook behind it.', esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) ) ), 'success' );
+            MyNJILGA_Admin_UI::callout( sprintf(
+                '<strong>Online joining is open.</strong> Visitors join and pay in the Stripe mode active under Settings → Payments — <strong>%s</strong> right now. <a href="%s">Setup</a> checks the Stripe key and webhook behind it.',
+                MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE ? 'Live' : 'Test',
+                esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) )
+            ), 'success' );
         }
         MyNJILGA_Admin_UI::callout(
-            '<strong>Staff test mode:</strong> signed in as an administrator, add <code>?njilga_test=1</code> to a join page\'s address (the <strong>Test</strong> links below do that). The form then runs in Stripe Test mode — pay with a test card such as 4242 4242 4242 4242. No real money moves and the join\'s emails come to you, but the FluentCRM contacts, tags and firm changes are real. ' . self::test_mode_state(),
+            '<strong>Staff test mode:</strong> while the site is in Live mode, sign in as an administrator and add <code>?njilga_test=1</code> to a join page\'s address (the <strong>Test</strong> links below do that). The form then runs in Stripe Test mode — pay with a test card such as 4242 4242 4242 4242. No real money moves and the join\'s emails come to you, but the FluentCRM contacts, tags and firm changes are real. With Settings → Payments on Test, every join is a test join, no flag needed. ' . self::test_mode_state(),
             'info'
         );
 

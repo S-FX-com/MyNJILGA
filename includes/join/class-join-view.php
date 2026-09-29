@@ -237,7 +237,7 @@ class MyNJILGA_Join_View {
         ?>
         <div class="njilga-join" id="<?php echo esc_attr( $uid ); ?>-wrap">
             <?php if ( $a['test_mode'] ) : ?>
-                <div class="njilga-join__notice njilga-join__notice--warning"><strong>Test mode</strong> (?njilga_test=1, staff only) — pay with a Stripe test card such as 4242 4242 4242 4242. No real money moves, and every email this join sends comes to you rather than to the colleagues you list — but the FluentCRM contacts, tags and firm changes are real.</div>
+                <div class="njilga-join__notice njilga-join__notice--warning"><strong>Test mode</strong> — pay with a Stripe test card such as 4242 4242 4242 4242. No real money moves, and every email this join sends comes to you rather than to the colleagues you list — but the FluentCRM contacts, tags and firm changes are real.</div>
             <?php endif; ?>
 
             <div class="njilga-join__plan">

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(& \"$env:LOCALAPPDATA\\\\Temp\\\\njilga-php\\\\php.exe\" -l \"$env:LOCALAPPDATA\\\\Temp\\\\claude\\\\njilga-join-diag.php\"; Remove-Item \"$env:LOCALAPPDATA\\\\Temp\\\\claude\\\\njilga-stripe-diag.php\" -ErrorAction SilentlyContinue; Test-Path \"$env:LOCALAPPDATA\\\\Temp\\\\claude\\\\njilga-stripe-diag.php\")",
+      "PowerShell(git pull --ff-only)",
+      "PowerShell(git switch -c fix/join-follows-dashboard-mode)",
+      "PowerShell(& \"$env:LOCALAPPDATA\\\\Temp\\\\njilga-php\\\\php.exe\" tests\\\\run.php | Select-Object -Last 4)",
+      "PowerShell(& \"$env:LOCALAPPDATA\\\\Temp\\\\njilga-php\\\\php.exe\" tests\\\\run.php | Select-String -Pattern \"✗|FAILURES\" -Context 0,2; & \"$env:LOCALAPPDATA\\\\Temp\\\\njilga-php\\\\php.exe\" -m | Select-String -Pattern \"sodium|mbstring|json|openssl\")",
+      "PowerShell($php = \"$env:LOCALAPPDATA\\\\Temp\\\\njilga-php\"; & \"$php\\\\php.exe\" -d \"extension_dir=$php\\\\ext\" -d extension=mbstring -d extension=sodium tests\\\\run.php | Select-Object -Last 2)",
+      "PowerShell($c = Get-Content tests\\\\JoinFormTest.php; $c.Count; $c | Select-Object -Last 15)",
+      "PowerShell($php = \"$env:LOCALAPPDATA\\\\Temp\\\\njilga-php\"; & \"$php\\\\php.exe\" -d \"extension_dir=$php\\\\ext\" -d extension=mbstring -d extension=sodium tests\\\\run.php --filter=rehearse | Select-Object -Last 4; & \"$php\\\\php.exe\" -d \"extension_dir=$php\\\\ext\" -d extension=mbstring -d extension=sodium tests\\\\run.php --filter=follow_the_mode | Select-Object -Last 4)"
+    ]
+  }
+}

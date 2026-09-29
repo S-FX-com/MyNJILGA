@@ -137,15 +137,33 @@ class MyNJILGA_Join_Form {
     }
 
     /**
-     * The Stripe mode this visitor's join runs in. Everyone joins in Live,
-     * whichever mode staff have the admin toggle on — flipping to Test to
-     * try an invoice must never take membership sign-ups offline (the
-     * member-facing firm status page is pinned Live for the same reason).
-     * Staff rehearse the flow in Test by adding ?njilga_test=1.
+     * The Stripe mode this visitor's join runs in: the mode active under
+     * Settings → Payments, the same one invoices bill in — so a site
+     * switched to Test (a staging copy) takes every join in Test, and
+     * Settings warns that it does. While the site is Live, staff can still
+     * rehearse one join in Test by adding ?njilga_test=1.
      */
     public static function join_mode(): string {
+        return self::mode_for( MyNJILGA_Stripe_Connection::active_mode(), self::staff_rehearsal() );
+    }
+
+    /**
+     * PURE: join_mode()'s decision, for the tests.
+     */
+    public static function mode_for( string $activeMode, bool $staffRehearsal ): string {
+        if ( $staffRehearsal || $activeMode === MyNJILGA_Stripe_Connection::MODE_TEST ) {
+            return MyNJILGA_Stripe_Connection::MODE_TEST;
+        }
+        return MyNJILGA_Stripe_Connection::MODE_LIVE;
+    }
+
+    /**
+     * An administrator asked for Test with ?njilga_test=1. Anyone else's
+     * flag is ignored.
+     */
+    private static function staff_rehearsal(): bool {
         $flag = ! empty( $_GET['njilga_test'] ) || ! empty( $_POST['njilga_test'] ); // phpcs:ignore WordPress.Security.NonceVerification
-        return ( $flag && current_user_can( 'manage_options' ) ) ? MyNJILGA_Stripe_Connection::MODE_TEST : MyNJILGA_Stripe_Connection::MODE_LIVE;
+        return $flag && current_user_can( 'manage_options' );
     }
 
     public static function is_test_mode(): bool {
@@ -757,7 +775,9 @@ class MyNJILGA_Join_Form {
             $url = home_url( '/' );
         }
         $url = remove_query_arg( [ 'njilga_join', 'session_id', MyNJILGA_Join_Invites::QUERY_ARG, 'njilga_test' ], $url );
-        return self::is_test_mode() ? add_query_arg( 'njilga_test', '1', $url ) : $url;
+        // Only a staff rehearsal needs the flag carried along; a site in
+        // Test is in Test for every URL already.
+        return self::staff_rehearsal() ? add_query_arg( 'njilga_test', '1', $url ) : $url;
     }
 
     // -------------------------------------------------------------------------
