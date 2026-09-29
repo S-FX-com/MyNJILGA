@@ -31,6 +31,24 @@ class RoleSyncTest extends NJILGA_TestCase {
         $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $this->categories(), [], 'deleted_key' ) );
     }
 
+    /**
+     * "— no role —" on a category means exactly that: a member matched to
+     * it holds no membership role — NOT the default category's, which is
+     * what the pre-3.6.0 login sync fell back to.
+     */
+    public function test_a_matched_category_with_no_role_means_no_role_not_the_default(): void {
+        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $this->categories(), [ 'honorary' ], 'professional' ) );
+    }
+
+    /**
+     * Roles that only history keeps managed (no longer in the map, not the
+     * legacy role) are the ones staff may stop managing from Setup.
+     */
+    public function test_forgettable_roles_are_the_history_only_ones(): void {
+        $forgettable = MyNJILGA_Role_Sync::forgettable_roles( $this->categories(), [ 'associate', 'student', 'professional', 'subscriber', 'shop_manager' ] );
+        $this->assertSame( [ 'associate', 'shop_manager' ], $forgettable );
+    }
+
     public function test_a_category_without_a_tag_never_matches(): void {
         $cats = [
             [ 'key' => 'blank',        'tag' => '',             'role' => 'wrong' ],

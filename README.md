@@ -169,6 +169,8 @@ A paid member's WordPress role follows their category (Settings → Membership c
 
 Only *managed* roles are ever removed — every role the category map uses or has used, plus the legacy `professional` — never WordPress's own `administrator`, `editor`, `author`, `contributor` or `subscriber`. Contacts not paid for the current or next dues year are left alone (non-payment is the downgrade sweep's job), and a category mapped to a role the site doesn't define leaves its members untouched.
 
+**Upgrading from 3.5.x:** a category set to *— no membership role —* now means exactly that — its paid members lose every managed role at their next login, payment or category change (3.5.x quietly gave them the default category's role at login instead). If a category was set that way to mean "no *extra* role", map it to the role it should carry. A role that was mapped once stays managed after it's taken out of the map, so it can still be removed from members who hold it; Setup → WordPress role sync lists those with a **Stop managing** button for each.
+
 ### Company Notes (spec §8)
 
 Created, sent, paid, downgraded, application approved/rejected — each leaves a note on the FluentCRM Company's "Notes & Activities".

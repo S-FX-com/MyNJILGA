@@ -730,7 +730,7 @@ class MyNJILGA_Page_Settings {
     }
 
     private static function role_select( string $name, string $current, array $roles ): string {
-        $html = sprintf( '<select name="%s"><option value="">— no role —</option>', esc_attr( $name ) );
+        $html = sprintf( '<select name="%s"><option value="">— no membership role (removes any) —</option>', esc_attr( $name ) );
         $found = false;
         foreach ( $roles as $slug => $label ) {
             $sel = $slug === $current ? ' selected' : '';

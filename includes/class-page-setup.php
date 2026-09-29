@@ -16,6 +16,9 @@ class MyNJILGA_Page_Setup {
     // admin-post action (and nonce) for "Apply role changes".
     const ACTION_ROLE_SYNC = 'my_njilga_role_sync';
 
+    // admin-post action (and nonce) for "Stop managing" a role only the history keeps managed.
+    const ACTION_ROLE_FORGET = 'my_njilga_role_forget';
+
     public static function render(): void {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( 'Access denied.' );
@@ -53,6 +56,12 @@ class MyNJILGA_Page_Setup {
                 ),
                 'success'
             );
+        }
+        if ( ! empty( $_GET['role_forgot'] ) ) {
+            MyNJILGA_Admin_UI::callout( sprintf( 'No longer managing <code>%s</code> — role sync won\'t remove it from anyone.', esc_html( sanitize_key( wp_unslash( $_GET['role_forgot'] ) ) ) ), 'success' );
+        }
+        if ( ! empty( $_GET['role_forget_error'] ) ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<code>%s</code> is still in the mapping (or is the legacy role), so it stays managed.', esc_html( sanitize_key( wp_unslash( $_GET['role_forget_error'] ) ) ) ), 'warning' );
         }
         self::maybe_recheck_checkout();
 
@@ -136,6 +145,25 @@ class MyNJILGA_Page_Setup {
         }
         $r = MyNJILGA_Role_Sync::queue_full_sync();
         wp_safe_redirect( add_query_arg( [ 'role_sync_queued' => $r['contacts'], 'role_sync_mode' => $r['mode'] ], MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) ) );
+        exit;
+    }
+
+    /**
+     * admin-post handler: "Stop managing" a role only the history keeps
+     * managed, so a role mapped by mistake stops being removed from members.
+     */
+    public static function handle_role_forget(): void {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Access denied.' );
+        }
+        check_admin_referer( self::ACTION_ROLE_FORGET );
+
+        $role = sanitize_key( wp_unslash( $_POST['role'] ?? '' ) );
+        wp_safe_redirect( add_query_arg(
+            MyNJILGA_Role_Sync::forget_role( $role ) ? 'role_forgot' : 'role_forget_error',
+            $role,
+            MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP )
+        ) );
         exit;
     }
 
@@ -642,7 +670,7 @@ class MyNJILGA_Page_Setup {
         foreach ( MyNJILGA_Dues_Settings::categories() as $i => $cat ) {
             $role = (string) $cat['role'];
             if ( $role === '' ) {
-                $roleCell = MyNJILGA_Admin_UI::status( 'No role', 'muted' );
+                $roleCell = MyNJILGA_Admin_UI::status( 'No role — members of this category lose every managed role', 'muted' );
             } elseif ( get_role( $role ) ) {
                 $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( 'defined', true );
             } else {
@@ -666,6 +694,17 @@ class MyNJILGA_Page_Setup {
         }
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table njilga-kv"><tbody>';
         printf( '<tr><th>Managed roles (a sync may remove these)</th><td>%s</td></tr>', $pills ? implode( ' ', $pills ) : MyNJILGA_Admin_UI::blank() );
+        $forgettable = MyNJILGA_Role_Sync::forgettable_roles( MyNJILGA_Dues_Settings::categories(), MyNJILGA_Role_Sync::history() );
+        if ( $forgettable ) {
+            $cells = [];
+            foreach ( $forgettable as $role ) {
+                $cells[] = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::action_form( self::ACTION_ROLE_FORGET, 'Stop managing', [ 'role' => $role ], 'outline', '', '', 'sm' );
+            }
+            printf(
+                '<tr><th>No longer in the mapping — still removed from members</th><td>%s<p class="njilga-help">A role that was mapped once stays managed so it can be taken back from members who still hold it. Stop managing it once that\'s done, or if it was mapped by mistake.</p></td></tr>',
+                implode( '<br>', $cells )
+            );
+        }
         printf( '<tr><th>Last full sync</th><td>%s</td></tr>', self::role_sync_last_run_cell( MyNJILGA_Role_Sync::last_run() ) );
         echo '</tbody></table></div></div>';
 

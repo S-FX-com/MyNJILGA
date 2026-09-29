@@ -83,6 +83,21 @@ class MyNJILGA_Role_Sync {
     }
 
     /**
+     * Roles only the history keeps managed — no longer in the map, not the
+     * legacy role — which staff may stop managing from Setup.
+     *
+     * @param array<int,array<string,mixed>> $categories
+     * @param array<int,string>              $history
+     * @return array<int,string> Sorted, unique.
+     */
+    public static function forgettable_roles( array $categories, array $history ): array {
+        $mapped = array_map( 'strval', array_column( $categories, 'role' ) );
+        $roles  = array_diff( self::managed_roles( $categories, $history ), $mapped, [ self::LEGACY_ROLE ] );
+        sort( $roles );
+        return array_values( $roles );
+    }
+
+    /**
      * What a sync would do to one account. A desired role the site
      * doesn't define changes nothing at all — never strip a member's old
      * role and leave them with none over a typo in Settings.
@@ -245,6 +260,20 @@ class MyNJILGA_Role_Sync {
         if ( $merged !== $history ) {
             update_option( self::OPTION_HISTORY, $merged, false );
         }
+    }
+
+    /**
+     * Stop managing a role only the history keeps managed: a sync no
+     * longer removes it from anyone. False when the role isn't forgettable
+     * (still mapped, the legacy role, or never managed).
+     */
+    public static function forget_role( string $role ): bool {
+        $role = sanitize_key( $role );
+        if ( ! in_array( $role, self::forgettable_roles( MyNJILGA_Dues_Settings::categories(), self::history() ), true ) ) {
+            return false;
+        }
+        update_option( self::OPTION_HISTORY, array_values( array_diff( self::history(), [ $role ] ) ), false );
+        return true;
     }
 
     /** @return array<int,string> */

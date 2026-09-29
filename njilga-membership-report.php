@@ -180,6 +180,7 @@ add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_
 
 // Setup page: apply a full WordPress role sync after the confirmation screen.
 add_action( 'admin_post_' . MyNJILGA_Page_Setup::ACTION_ROLE_SYNC, [ 'MyNJILGA_Page_Setup', 'handle_role_sync' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Setup::ACTION_ROLE_FORGET, [ 'MyNJILGA_Page_Setup', 'handle_role_forget' ] );
 
 // Per-page CSV exports. ?type=members|trustees|companies determines the report.
 add_action( 'admin_post_my_njilga_export_csv', static function () {
