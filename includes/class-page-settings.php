@@ -97,6 +97,18 @@ class MyNJILGA_Page_Settings {
         if ( ! empty( $_GET['reset'] ) ) {
             MyNJILGA_Admin_UI::callout( 'Settings reset to the seeded defaults.', 'success' );
         }
+        if ( isset( $_GET['role_sync'] ) ) {
+            $n = (int) $_GET['role_sync'];
+            MyNJILGA_Admin_UI::callout(
+                sprintf(
+                    '<strong>Role mapping changed</strong> — role sync started for %d paid member%s. Progress and results are on <a href="%s">Setup → WordPress role sync</a>.',
+                    $n,
+                    $n === 1 ? '' : 's',
+                    esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) )
+                ),
+                'info'
+            );
+        }
 
         self::render_tag_datalist( $tags );
 
@@ -559,7 +571,7 @@ class MyNJILGA_Page_Settings {
     private static function render_categories( array $s, array $tags, array $roles ): void {
         MyNJILGA_Admin_UI::section(
             'Membership categories',
-            'Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> is granted on payment, best-effort.'
+            'Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> follows the category: granted on payment, and swapped when a paid member\'s category tag or this mapping changes (Setup → WordPress role sync).'
         );
 
         // Stripe bills inline line items, so the Price column IS the
@@ -757,6 +769,7 @@ class MyNJILGA_Page_Settings {
         $current  = MyNJILGA_Dues_Settings::get();
         $defaults = MyNJILGA_Dues_Settings::defaults();
         $in       = wp_unslash( $_POST );
+        $roleSignature = MyNJILGA_Role_Sync::current_signature();
 
         // --- General
         $g    = (array) ( $in['general'] ?? [] );
@@ -911,7 +924,12 @@ class MyNJILGA_Page_Settings {
             'firm_overrides' => $overrides,
         ] );
 
-        wp_safe_redirect( add_query_arg( 'saved', '1', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) );
+        $args   = [ 'saved' => '1' ];
+        $queued = MyNJILGA_Role_Sync::after_settings_change( $current['categories'], $roleSignature );
+        if ( $queued !== null ) {
+            $args['role_sync'] = $queued;
+        }
+        wp_safe_redirect( add_query_arg( $args, MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) );
         exit;
     }
 
@@ -920,8 +938,15 @@ class MyNJILGA_Page_Settings {
             wp_die( 'Access denied.' );
         }
         check_admin_referer( self::ACTION_RESET );
+        $oldCategories = MyNJILGA_Dues_Settings::categories();
+        $roleSignature = MyNJILGA_Role_Sync::current_signature();
         MyNJILGA_Dues_Settings::reset_to_defaults();
-        wp_safe_redirect( add_query_arg( 'reset', '1', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) );
+        $args   = [ 'reset' => '1' ];
+        $queued = MyNJILGA_Role_Sync::after_settings_change( $oldCategories, $roleSignature );
+        if ( $queued !== null ) {
+            $args['role_sync'] = $queued;
+        }
+        wp_safe_redirect( add_query_arg( $args, MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) );
         exit;
     }
 
