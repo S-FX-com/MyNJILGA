@@ -403,6 +403,38 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
+     * Every invoice row — any year, kind or status — whose frozen roster
+     * lists this contact as a MEMBER, newest year first. Backs the
+     * member-facing My Membership view, which needs a person's whole fee
+     * history even where it isn't filed under a firm they belong to now
+     * (an online join before they were linked to a firm, a former firm).
+     *
+     * Same narrowing as rows_listing_member(): the LIKE only limits what
+     * is fetched, and each row is decoded and its members[] checked, so an
+     * Owner or bill-to who isn't on the roster never matches. $livemode is
+     * required for the reason get_for_companies() gives — this read faces
+     * members, and must never show them a test-mode invoice.
+     *
+     * @return array<int,object>
+     */
+    public static function rows_listing_contact( int $contactId, bool $livemode ): array {
+        global $wpdb;
+        if ( $contactId <= 0 ) {
+            return [];
+        }
+        $table = self::table_name();
+        $like  = '%' . $wpdb->esc_like( '"contact_id":' . $contactId . ',' ) . '%';
+        $rows  = (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE livemode = %d AND roster_snapshot LIKE %s ORDER BY dues_year DESC, id ASC",
+            $livemode ? 1 : 0,
+            $like
+        ) );
+        return array_values( array_filter( $rows, static function ( $row ) use ( $contactId ) {
+            return self::listed_member( $row, $contactId ) !== null;
+        } ) );
+    }
+
+    /**
      * This contact's entry in a row's frozen members[] — null when the
      * snapshot doesn't list them as a member (being its Owner or bill-to
      * doesn't count). Pure — tested directly.

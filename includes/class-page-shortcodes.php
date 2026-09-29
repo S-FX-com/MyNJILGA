@@ -45,18 +45,19 @@ class MyNJILGA_Page_Shortcodes {
 
         MyNJILGA_Admin_UI::callout(
             sprintf(
-                '<strong>Joining online?</strong> Put <code>[njilga_join]</code> on a Membership page for each category below — applicants pay in Stripe Checkout and are members as soon as the payment clears. <code>[njilga_membership_application]</code> is the older apply-then-approve form (no payment; staff approve each applicant in <a href="%s">Applications</a>); <code>[njilga_firm_dues_status]</code> is for signed-in members, not joiners.',
+                '<strong>Joining online?</strong> Put <code>[njilga_join]</code> on a Membership page for each category below — applicants pay in Stripe Checkout and are members as soon as the payment clears. <code>[njilga_membership_application]</code> is the older apply-then-approve form (no payment; staff approve each applicant in <a href="%s">Applications</a>); <code>[njilga_firm_dues_status]</code> and <code>[njilga_my_membership]</code> are for signed-in members, not joiners.',
                 esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) )
             ),
             'info'
         );
 
-        $uses = self::uses( [ MyNJILGA_Join_Form::SHORTCODE, MyNJILGA_Application_Form::SHORTCODE, MyNJILGA_Firm_Status_Page::SHORTCODE ] );
+        $uses = self::uses( [ MyNJILGA_Join_Form::SHORTCODE, MyNJILGA_Application_Form::SHORTCODE, MyNJILGA_Firm_Status_Page::SHORTCODE, MyNJILGA_My_Membership::SHORTCODE ] );
 
         self::render_how_to();
         self::render_join( $uses[ MyNJILGA_Join_Form::SHORTCODE ] );
         self::render_application( $uses[ MyNJILGA_Application_Form::SHORTCODE ] );
         self::render_firm_status( $uses[ MyNJILGA_Firm_Status_Page::SHORTCODE ] );
+        self::render_my_membership( $uses[ MyNJILGA_My_Membership::SHORTCODE ] );
 
         self::scripts();
         MyNJILGA_Admin_UI::close();
@@ -241,6 +242,17 @@ class MyNJILGA_Page_Shortcodes {
             'For members, not joiners. A signed-in member sees the dues invoices of every firm they belong to, newest year first: the roster, amounts, status and the payment link — every member of the firm, not just the Owner. Visitors who aren\'t signed in are asked to log in. It always shows Live-mode invoices, whichever way the admin Test/Live toggle is set. Put it on a page members reach once they\'ve logged in. No attributes.'
         );
         self::single_line_table( '[' . MyNJILGA_Firm_Status_Page::SHORTCODE . ']', $hits );
+    }
+
+    /**
+     * @param array<int,array{post:WP_Post,via:?WP_Post,atts:array<int,string>}> $hits
+     */
+    private static function render_my_membership( array $hits ): void {
+        MyNJILGA_Admin_UI::section(
+            'My Membership — [njilga_my_membership]',
+            'For members, not joiners — the page to call "My Membership". A signed-in member sees whether they are an active or expired member and when it next expires (12/31/YYYY), the firm they belong to and whether that firm manages their membership, every member of the firm with each one\'s standing, and every fee invoiced to each of them (dues, trustee dinner assessments) with the invoices they sit on and the way to pay. Expiration is worked out from the <code>Dues Paid {year}</code> tags: paid through a year means it ends 12/31 of that year. Everyone at a firm sees the same firm view, not just the Owner. It always shows Live-mode invoices and never staff-only drafts. The page carries other people\'s names and fees, so keep it out of any page or CDN cache (the shortcode asks caching plugins to skip it). No attributes.'
+        );
+        self::single_line_table( '[' . MyNJILGA_My_Membership::SHORTCODE . ']', $hits );
     }
 
     /**

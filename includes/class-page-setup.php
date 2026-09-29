@@ -697,7 +697,7 @@ class MyNJILGA_Page_Setup {
     private static function render_shortcodes(): void {
         MyNJILGA_Admin_UI::section( 'Shortcodes' );
         printf(
-            '<div class="njilga-banner"><div><div class="njilga-banner-title">Shortcodes for the public pages</div><div class="njilga-banner-desc">Ready-to-paste lines for <code>[njilga_join]</code> (one per category an applicant may pick), <code>[njilga_membership_application]</code> and <code>[njilga_firm_dues_status]</code>: what each does, which to use, and the pages that carry them now.</div></div><a class="njilga-btn njilga-btn-outline" href="%s">Open Shortcodes</a></div>',
+            '<div class="njilga-banner"><div><div class="njilga-banner-title">Shortcodes for the public pages</div><div class="njilga-banner-desc">Ready-to-paste lines for <code>[njilga_join]</code> (one per category an applicant may pick), <code>[njilga_membership_application]</code>, <code>[njilga_firm_dues_status]</code> and <code>[njilga_my_membership]</code>: what each does, which to use, and the pages that carry them now.</div></div><a class="njilga-btn njilga-btn-outline" href="%s">Open Shortcodes</a></div>',
             esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SHORTCODES ) )
         );
     }

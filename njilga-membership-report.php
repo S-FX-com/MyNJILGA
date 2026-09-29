@@ -2,8 +2,8 @@
 /**
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
- * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
- * Version:     3.5.0
+ * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and a member-facing dues status and membership overview — driven entirely from FluentCRM tags on the local install.
+ * Version:     3.6.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -88,6 +88,7 @@ require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-form.php
 require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-review.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-applications.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-firm-status-page.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-my-membership.php';
 
 // Online joining — [njilga_join]: join and pay through Stripe Checkout,
 // with the firm upsell and colleague invitations. See includes/join/.
@@ -151,11 +152,12 @@ MyNJILGA_Stripe_Reconciler::register();
 add_action( 'plugins_loaded', [ 'MyNJILGA_Payment_Listener', 'register' ], 20 );
 
 // Public shortcodes: [njilga_membership_application], [njilga_firm_dues_status],
-// [njilga_join] (online joining; its tables are created on first use as
-// well as on admin_init, since a public page can be the first request
-// after an update).
+// [njilga_my_membership] (a member's standing, firm and fees), [njilga_join]
+// (online joining; its tables are created on first use as well as on
+// admin_init, since a public page can be the first request after an update).
 MyNJILGA_Application_Form::register();
 MyNJILGA_Firm_Status_Page::register();
+MyNJILGA_My_Membership::register();
 MyNJILGA_Join_Form::register();
 MyNJILGA_Join_Documents::register();
 add_action( 'init', static function () {
