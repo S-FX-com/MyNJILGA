@@ -1,230 +1,166 @@
 <?php
 /**
- * The pure half of MyNJILGA_Role_Sync — which role a paying member gets,
- * what to do about it, and how a batch of outcomes is reported:
- *
- *   resolve_role()    first category in Settings order whose tag the contact
- *                     holds, else the default's, else '' — the very rule
- *                     pricing uses to pick a category
- *   plan()            ADD-ONLY: never a removal, whatever the input
- *   is_privileged()   the administrator-level deny-list
- *   aggregate() / describe_outcomes() / describe_problems()
- *                     the per-status tally and the Company Note wording
- *   merge_problem() / next_problem()
- *                     the "role problem" callout: accumulates, and clears
- *                     when a payment grants that role or the mapping is fixed
- *
- * The WordPress-facing methods (sync_contact, apply_role, settle()'s
- * accounting) need WordPress and FluentCRM and are not run here.
+ * Unit tests for the pure half of MyNJILGA_Role_Sync — which role a paid
+ * member should hold, which roles a sync may take away, and what a sync
+ * would change on one account.
  */
-declare( strict_types=1 );
-
-require_once dirname( __DIR__ ) . '/includes/invoicing/class-role-sync.php';
-// Loaded for the WP_ROLE constant the lazily created role is pinned to.
-require_once dirname( __DIR__ ) . '/includes/invoicing/class-payment-listener.php';
-
 class RoleSyncTest extends NJILGA_TestCase {
 
-    private const NOW = '2026-09-29 12:00:00';
+    /** Settings order: exempt first, then student, professional, a no-role category. */
+    private function categories(): array {
+        return [
+            [ 'key' => 'senior_trustee', 'label' => 'Senior Trustee', 'tag' => 'senior-trustee', 'role' => 'trustee',      'price_cents' => 0 ],
+            [ 'key' => 'law_student',    'label' => 'Law Student',    'tag' => 'law-student',    'role' => 'student',      'price_cents' => 3000 ],
+            [ 'key' => 'professional',   'label' => 'Professional',   'tag' => 'professional',   'role' => 'professional', 'price_cents' => 12500 ],
+            [ 'key' => 'honorary',       'label' => 'Honorary',       'tag' => 'honorary',       'role' => '',             'price_cents' => 0 ],
+        ];
+    }
+
+    public function test_first_category_in_order_wins(): void {
+        $role = MyNJILGA_Role_Sync::resolve_role( $this->categories(), [ 'professional', 'senior-trustee' ], 'professional' );
+        $this->assertSame( 'trustee', $role, 'Senior Trustee is listed before Professional' );
+    }
+
+    public function test_no_category_tag_falls_back_to_the_default_category(): void {
+        $this->assertSame( 'professional', MyNJILGA_Role_Sync::resolve_role( $this->categories(), [], 'professional' ) );
+        $this->assertSame( 'student', MyNJILGA_Role_Sync::resolve_role( $this->categories(), [ 'unrelated-tag' ], 'law_student' ) );
+    }
+
+    public function test_no_category_tag_and_no_usable_default_resolves_to_no_role(): void {
+        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $this->categories(), [], '' ) );
+        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $this->categories(), [], 'deleted_key' ) );
+    }
 
     /**
-     * The seeded categories in their seeded order (past president, senior
-     * trustee, law student, emerging professional, professional), with the
-     * given key => role overrides. A key not listed keeps the seeded role.
-     *
-     * @param array<string,string> $roleByKey
-     * @return array<int,array<string,mixed>>
+     * "— no role —" on a category means exactly that: a member matched to
+     * it holds no membership role — NOT the default category's, which is
+     * what the pre-3.6.0 login sync fell back to.
      */
-    private function categories( array $roleByKey = [] ): array {
-        $cats = MyNJILGA_Dues_Settings::defaults()['categories'];
-        foreach ( $cats as $i => $cat ) {
-            if ( isset( $roleByKey[ $cat['key'] ] ) ) {
-                $cats[ $i ]['role'] = $roleByKey[ $cat['key'] ];
-            }
-        }
-        return $cats;
+    public function test_a_matched_category_with_no_role_means_no_role_not_the_default(): void {
+        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $this->categories(), [ 'honorary' ], 'professional' ) );
     }
 
-    /** A site that maps students to their own role and professionals to `professional`. */
-    private function studentSite(): array {
-        return $this->categories( [ 'law_student' => 'student', 'professional' => 'professional' ] );
+    /**
+     * Roles that only history keeps managed (no longer in the map, not the
+     * legacy role) are the ones staff may stop managing from Setup.
+     */
+    public function test_forgettable_roles_are_the_history_only_ones(): void {
+        $forgettable = MyNJILGA_Role_Sync::forgettable_roles( $this->categories(), [ 'associate', 'student', 'professional', 'subscriber', 'shop_manager' ] );
+        $this->assertSame( [ 'associate', 'shop_manager' ], $forgettable );
     }
 
-    // -------------------------------------------------------------------
-    // resolve_role — the spec's Rule 2
-    // -------------------------------------------------------------------
-
-    public function test_a_professional_tag_resolves_to_the_professional_role(): void {
-        $this->assertSame( 'professional', MyNJILGA_Role_Sync::resolve_role( $this->studentSite(), [ 'professional' ], 'law_student' ) );
-    }
-
-    public function test_the_first_category_in_settings_order_wins_over_a_later_one(): void {
-        // law_student comes before professional in Settings, so a contact
-        // carrying both is a student — whichever tag was added last.
-        $cats = $this->studentSite();
-        $this->assertSame( 'student', MyNJILGA_Role_Sync::resolve_role( $cats, [ 'professional', 'law-student' ], 'professional' ) );
-        $this->assertSame( 'student', MyNJILGA_Role_Sync::resolve_role( $cats, [ 'law-student', 'professional' ], 'professional' ) );
-
-        // Put professional first and the same contact becomes a professional: order is the whole rule.
-        $reordered = array_reverse( $cats );
-        $this->assertSame( 'professional', MyNJILGA_Role_Sync::resolve_role( $reordered, [ 'law-student', 'professional' ], '' ) );
-    }
-
-    public function test_a_customised_mapping_is_followed(): void {
-        $cats = $this->categories( [ 'law_student' => 'student' ] );
-        $this->assertSame( 'student', MyNJILGA_Role_Sync::resolve_role( $cats, [ 'law-student' ], 'professional' ) );
-        $this->assertSame( 'professional', MyNJILGA_Role_Sync::resolve_role( $cats, [ 'emerging-professional' ], 'professional' ) );
-    }
-
-    public function test_no_category_tag_falls_back_to_the_default_categorys_role(): void {
-        $cats = $this->categories( [ 'law_student' => 'student', 'professional' => 'professional' ] );
-        $this->assertSame( 'student', MyNJILGA_Role_Sync::resolve_role( $cats, [], 'law_student' ) );
-        $this->assertSame( 'professional', MyNJILGA_Role_Sync::resolve_role( $cats, [ 'some-other-tag', 'dues-paid' ], 'professional' ) );
-    }
-
-    public function test_no_category_tag_and_no_default_resolves_to_nothing(): void {
-        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $this->studentSite(), [], '' ) );
-        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $this->studentSite(), [ 'dues-paid' ], '' ) );
-    }
-
-    public function test_a_default_that_names_no_category_resolves_to_nothing(): void {
-        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $this->studentSite(), [], 'deleted_category' ) );
-    }
-
-    public function test_a_category_mapped_to_no_role_means_no_role_not_the_defaults(): void {
-        // "— no role —" in Settings is a choice; falling through to the
-        // default's role would grant the one the owner declined to give.
-        $cats = $this->categories( [ 'law_student' => '', 'professional' => 'professional' ] );
-        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $cats, [ 'law-student' ], 'professional' ) );
-        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $cats, [], 'law_student' ) );
-    }
-
-    public function test_a_category_with_no_tag_never_matches_a_contact(): void {
-        $cats = $this->studentSite();
-        $cats[2]['tag'] = ''; // law_student loses its tag
-        $this->assertSame( 'professional', MyNJILGA_Role_Sync::resolve_role( $cats, [ '' ], 'professional' ), 'an empty slug is not a tag anyone holds' );
-    }
-
-    public function test_resolve_role_is_exactly_the_category_pricing_would_pick(): void {
-        // Every subset of the category tags (plus a stranger), against every
-        // default: the role must be the role of category_for()'s category.
-        $cats = $this->categories( [ 'past_president' => 'exempt', 'senior_trustee' => 'exempt', 'law_student' => 'student', 'emerging_professional' => 'emerging', 'professional' => 'professional' ] );
-        $tags = [ 'past-president', 'senior-trustee', 'law-student', 'emerging-professional', 'professional', 'unrelated' ];
-        $roleOf = static function ( string $key ) use ( $cats ): string {
-            foreach ( $cats as $c ) {
-                if ( $c['key'] === $key ) {
-                    return (string) $c['role'];
-                }
-            }
-            return '';
-        };
-        $checked = 0;
-        for ( $mask = 0; $mask < ( 1 << count( $tags ) ); $mask++ ) {
-            $held = [];
-            foreach ( $tags as $i => $t ) {
-                if ( $mask & ( 1 << $i ) ) {
-                    $held[] = $t;
-                }
-            }
-            foreach ( [ '', 'professional', 'law_student', 'nope' ] as $default ) {
-                $key      = MyNJILGA_Pricing_Engine::category_for( $held, $cats, $default );
-                $expected = $key === null ? '' : $roleOf( $key );
-                $this->assertSame( $expected, MyNJILGA_Role_Sync::resolve_role( $cats, $held, $default ), 'held=' . implode( ',', $held ) . ' default=' . $default );
-                $checked++;
-            }
-        }
-        $this->assertSame( 256, $checked );
-    }
-
-    public function test_todays_behaviour_is_reproduced_under_the_seeded_settings(): void {
-        // Seeded Settings: EVERY category and the default map to
-        // 'professional', so the frozen snapshot role and the role from
-        // current tags are the same string for any contact — settle()'s old
-        // behaviour is unchanged for a site that never customised the mapping.
-        $cats    = $this->categories();
-        $default = (string) MyNJILGA_Dues_Settings::defaults()['general']['default_category'];
-        foreach ( $cats as $cat ) {
-            $this->assertSame( 'professional', (string) $cat['role'], $cat['key'] . ' is seeded to professional' );
-            $this->assertSame( 'professional', MyNJILGA_Role_Sync::resolve_role( $cats, [ (string) $cat['tag'] ], $default ), $cat['key'] );
-        }
-        $this->assertSame( 'professional', MyNJILGA_Role_Sync::resolve_role( $cats, [], $default ), 'an untagged contact takes the default' );
-        $this->assertSame( 'professional', MyNJILGA_Payment_Listener::WP_ROLE );
-    }
-
-    // -------------------------------------------------------------------
-    // plan — add-only
-    // -------------------------------------------------------------------
-
-    public function test_plan_adds_the_role_a_member_lacks(): void {
-        $this->assertSame( [ 'status' => 'changed', 'add' => [ 'professional' ] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], 'professional', true, [ 'read' => true ] ) );
-        $this->assertSame( [ 'status' => 'changed', 'add' => [ 'professional' ] ], MyNJILGA_Role_Sync::plan( [], 'professional', true ) );
-    }
-
-    public function test_plan_is_unchanged_when_the_role_is_already_held(): void {
-        $this->assertSame( [ 'status' => 'unchanged', 'add' => [] ], MyNJILGA_Role_Sync::plan( [ 'subscriber', 'professional' ], 'professional', true ) );
-    }
-
-    public function test_plan_reports_a_role_the_site_does_not_define_and_adds_nothing(): void {
-        $this->assertSame( [ 'status' => 'role_undefined', 'add' => [] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], 'student', false ) );
-        // Undefined is checked before "already held": a stale role slug in a user's meta must not hide the misconfiguration.
-        $this->assertSame( [ 'status' => 'role_undefined', 'add' => [] ], MyNJILGA_Role_Sync::plan( [ 'student' ], 'student', false ) );
-    }
-
-    public function test_plan_with_no_role_wanted_reports_no_role_configured(): void {
-        $this->assertSame( [ 'status' => 'no_role_configured', 'add' => [] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], '', true ) );
-        $this->assertSame( [ 'status' => 'no_role_configured', 'add' => [] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], '', false ), 'nothing wanted beats nothing defined' );
-    }
-
-    public function test_plan_never_returns_a_removal_for_any_input(): void {
-        $roleSets = [
-            [], [ 'subscriber' ], [ 'professional' ], [ 'student' ], [ 'administrator' ], [ 'editor', 'professional' ],
-            [ 'subscriber', 'professional', 'student' ], [ 'shop_manager' ], [ 'administrator', 'professional' ],
+    public function test_a_category_without_a_tag_never_matches(): void {
+        $cats = [
+            [ 'key' => 'blank',        'tag' => '',             'role' => 'wrong' ],
+            [ 'key' => 'professional', 'tag' => 'professional', 'role' => 'professional' ],
         ];
-        $desired  = [ '', 'professional', 'student', 'administrator', 'editor', 'shop_manager', 'never_heard_of_it' ];
-        $capSets  = [ [], [ 'read' => true ], [ 'manage_options' => true ], [ 'promote_users' => false ], [ 'edit_posts', 'edit_others_posts' ], [ 'read' => true, 'edit_users' => true ] ];
+        $this->assertSame( '', MyNJILGA_Role_Sync::resolve_role( $cats, [ '' ], '' ) );
+    }
 
-        $checked = 0;
-        foreach ( $roleSets as $roles ) {
-            foreach ( $desired as $want ) {
-                foreach ( [ true, false ] as $defined ) {
-                    foreach ( $capSets as $caps ) {
-                        $plan = MyNJILGA_Role_Sync::plan( $roles, $want, $defined, $caps );
+    public function test_managed_roles_cover_map_history_and_legacy_but_never_core_roles(): void {
+        $cats   = $this->categories();
+        $cats[] = [ 'key' => 'staff', 'tag' => 'staff', 'role' => 'editor' ];
+        $managed = MyNJILGA_Role_Sync::managed_roles( $cats, [ 'associate', 'subscriber', '' ] );
+        $this->assertSame( [ 'associate', 'professional', 'student', 'trustee' ], $managed );
+    }
 
-                        $this->assertSame( [ 'status', 'add' ], array_keys( $plan ), 'the plan has no remove list at all' );
-                        foreach ( $plan['add'] as $added ) {
-                            $this->assertSame( $want, $added, 'only the wanted role is ever added' );
-                            $this->assertFalse( in_array( $added, $roles, true ), 'and never one the account already holds' );
-                        }
-                        $this->assertTrue( count( $plan['add'] ) <= 1 );
-                        $this->assertTrue( in_array( $plan['status'], [ 'changed', 'unchanged', 'no_role_configured', 'role_undefined', 'role_privileged' ], true ), $plan['status'] );
-                        // "changed" is the ONLY status that adds anything.
-                        $this->assertSame( $plan['status'] === 'changed', $plan['add'] !== [] );
-                        $checked++;
-                    }
-                }
-            }
-        }
-        $this->assertSame( 9 * 7 * 2 * 6, $checked );
+    public function test_plan_swaps_the_old_category_role_for_the_new_one(): void {
+        $plan = MyNJILGA_Role_Sync::plan( [ 'subscriber', 'student' ], 'professional', [ 'professional', 'student', 'trustee' ], true );
+        $this->assertSame( 'changed', $plan['status'] );
+        $this->assertSame( [ 'professional' ], $plan['add'] );
+        $this->assertSame( [ 'student' ], $plan['remove'] );
+    }
+
+    public function test_plan_is_a_no_op_when_the_member_already_holds_their_role(): void {
+        $plan = MyNJILGA_Role_Sync::plan( [ 'subscriber', 'professional' ], 'professional', [ 'professional', 'student' ], true );
+        $this->assertSame( [ 'status' => 'unchanged', 'add' => [], 'remove' => [] ], $plan );
+    }
+
+    public function test_plan_for_no_role_removes_every_managed_role(): void {
+        $plan = MyNJILGA_Role_Sync::plan( [ 'subscriber', 'student', 'professional' ], '', [ 'professional', 'student' ], true );
+        $this->assertSame( [], $plan['add'] );
+        $this->assertSame( [ 'student', 'professional' ], $plan['remove'] );
+    }
+
+    public function test_plan_leaves_everyone_alone_when_the_role_is_not_defined_on_the_site(): void {
+        $plan = MyNJILGA_Role_Sync::plan( [ 'student' ], 'professional', [ 'professional', 'student' ], false );
+        $this->assertSame( [ 'status' => 'role_undefined', 'add' => [], 'remove' => [] ], $plan );
+    }
+
+    public function test_plan_never_touches_core_or_unmanaged_roles(): void {
+        $managed = MyNJILGA_Role_Sync::managed_roles( $this->categories(), [] );
+        $plan    = MyNJILGA_Role_Sync::plan( [ 'administrator', 'shop_manager', 'student' ], 'professional', $managed, true );
+        $this->assertSame( [ 'professional' ], $plan['add'] );
+        $this->assertSame( [ 'student' ], $plan['remove'], 'administrator and shop_manager must survive' );
+    }
+
+    public function test_plan_accepts_wordpress_keyed_role_arrays(): void {
+        // WP_User::$roles can come back with non-sequential keys.
+        $plan = MyNJILGA_Role_Sync::plan( [ 2 => 'student', 5 => 'subscriber' ], 'professional', [ 'professional', 'student' ], true );
+        $this->assertSame( [ 'student' ], $plan['remove'] );
+    }
+
+    public function test_applying_a_plan_then_planning_again_changes_nothing(): void {
+        $managed = [ 'professional', 'student', 'trustee' ];
+        $roles   = [ 'subscriber', 'student', 'trustee' ];
+        $first   = MyNJILGA_Role_Sync::plan( $roles, 'professional', $managed, true );
+        $roles   = array_values( array_diff( array_merge( $roles, $first['add'] ), $first['remove'] ) );
+        $second  = MyNJILGA_Role_Sync::plan( $roles, 'professional', $managed, true );
+        $this->assertSame( 'unchanged', $second['status'] );
+    }
+
+    public function test_signature_ignores_label_and_price(): void {
+        $a = $this->categories();
+        $b = $a;
+        $b[1]['label']       = 'Law Student (renamed)';
+        $b[1]['price_cents'] = 0;
+        $this->assertSame( MyNJILGA_Role_Sync::mapping_signature( $a, 'professional' ), MyNJILGA_Role_Sync::mapping_signature( $b, 'professional' ) );
+    }
+
+    public function test_signature_changes_with_role_tag_order_or_effective_default(): void {
+        $a    = $this->categories();
+        $base = MyNJILGA_Role_Sync::mapping_signature( $a, 'professional' );
+
+        $role = $a;
+        $role[1]['role'] = 'professional';
+        $this->assertTrue( MyNJILGA_Role_Sync::mapping_signature( $role, 'professional' ) !== $base, 'role change' );
+
+        $tag = $a;
+        $tag[1]['tag'] = 'student';
+        $this->assertTrue( MyNJILGA_Role_Sync::mapping_signature( $tag, 'professional' ) !== $base, 'tag change' );
+
+        $order = [ $a[1], $a[0], $a[2], $a[3] ];
+        $this->assertTrue( MyNJILGA_Role_Sync::mapping_signature( $order, 'professional' ) !== $base, 'order change' );
+
+        $this->assertTrue( MyNJILGA_Role_Sync::mapping_signature( $a, 'law_student' ) !== $base, 'default with a different role' );
+    }
+
+    public function test_signature_ignores_a_default_switch_that_keeps_the_same_role(): void {
+        $cats = [
+            [ 'key' => 'a', 'tag' => 'a', 'role' => 'professional' ],
+            [ 'key' => 'b', 'tag' => 'b', 'role' => 'professional' ],
+        ];
+        $this->assertSame( MyNJILGA_Role_Sync::mapping_signature( $cats, 'a' ), MyNJILGA_Role_Sync::mapping_signature( $cats, 'b' ) );
     }
 
     // -------------------------------------------------------------------
-    // Privileged roles
+    // Privileged roles — never granted by a payment, never touched at all
     // -------------------------------------------------------------------
 
     public function test_the_administrator_role_is_refused(): void {
         $adminCaps = [ 'read' => true, 'edit_posts' => true, 'manage_options' => true, 'promote_users' => true, 'install_plugins' => true ];
         $this->assertTrue( MyNJILGA_Role_Sync::is_privileged( $adminCaps ) );
-        $this->assertSame( [ 'status' => 'role_privileged', 'add' => [] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], 'administrator', true, $adminCaps ) );
+        $this->assertSame( [ 'status' => 'role_privileged', 'add' => [], 'remove' => [] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], 'administrator', [ 'professional' ], true, $adminCaps ) );
     }
 
     public function test_the_editor_role_is_allowed(): void {
         $editorCaps = [ 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'publish_posts' => true, 'moderate_comments' => true, 'upload_files' => true, 'manage_categories' => true ];
         $this->assertFalse( MyNJILGA_Role_Sync::is_privileged( $editorCaps ) );
-        $this->assertSame( [ 'status' => 'changed', 'add' => [ 'editor' ] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], 'editor', true, $editorCaps ) );
+        $this->assertSame( [ 'status' => 'changed', 'add' => [ 'editor' ], 'remove' => [] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], 'editor', [ 'professional' ], true, $editorCaps ) );
     }
 
     public function test_a_custom_role_holding_promote_users_is_refused(): void {
-        $this->assertSame( 'role_privileged', MyNJILGA_Role_Sync::plan( [], 'hr_admin', true, [ 'read' => true, 'promote_users' => true ] )['status'] );
+        $this->assertSame( 'role_privileged', MyNJILGA_Role_Sync::plan( [], 'hr_admin', [], true, [ 'read' => true, 'promote_users' => true ] )['status'] );
     }
 
     public function test_every_capability_on_the_deny_list_makes_a_role_privileged(): void {
@@ -270,18 +206,26 @@ class RoleSyncTest extends NJILGA_TestCase {
     public function test_a_privileged_role_is_reported_even_when_the_account_already_holds_it(): void {
         // The mapping is what is dangerous; an admin who also pays dues
         // must not hide it behind "unchanged".
-        $this->assertSame( 'role_privileged', MyNJILGA_Role_Sync::plan( [ 'administrator' ], 'administrator', true, [ 'manage_options' => true ] )['status'] );
+        $this->assertSame( 'role_privileged', MyNJILGA_Role_Sync::plan( [ 'administrator' ], 'administrator', [], true, [ 'manage_options' => true ] )['status'] );
+    }
+
+    /** A privileged mapping is a misconfiguration like an undefined role: nothing is added AND nothing is removed. */
+    public function test_a_privileged_mapping_leaves_the_old_role_in_place(): void {
+        $plan = MyNJILGA_Role_Sync::plan( [ 'student' ], 'administrator', [ 'student', 'professional' ], true, [ 'manage_options' => true ] );
+        $this->assertSame( [ 'status' => 'role_privileged', 'add' => [], 'remove' => [] ], $plan );
     }
 
     public function test_the_lazily_created_role_is_the_one_every_seeded_category_maps_to(): void {
         foreach ( MyNJILGA_Dues_Settings::defaults()['categories'] as $cat ) {
-            $this->assertSame( MyNJILGA_Payment_Listener::WP_ROLE, $cat['role'] );
+            $this->assertSame( MyNJILGA_Role_Sync::LEGACY_ROLE, $cat['role'] );
         }
     }
 
     // -------------------------------------------------------------------
     // aggregate / describe — the numbers and the Company Note
     // -------------------------------------------------------------------
+
+    private const NOW = '2026-09-29 12:00:00';
 
     private function results( array $statuses ): array {
         $out = [];
@@ -293,12 +237,11 @@ class RoleSyncTest extends NJILGA_TestCase {
 
     public function test_aggregate_counts_each_status_in_a_fixed_order(): void {
         $agg = MyNJILGA_Role_Sync::aggregate( $this->results( [
-            'no_account', 'changed', 'error', 'unchanged', 'changed', 'role_undefined', 'no_account', 'changed', 'no_contact', 'no_role_configured', 'role_privileged',
+            'no_account', 'changed', 'failed', 'unchanged', 'changed', 'role_undefined', 'no_account', 'changed', 'no_contact', 'no_role_configured', 'role_privileged',
         ] ) );
         $this->assertSame( [
-            'changed' => 3, 'unchanged' => 1, 'no_account' => 2, 'no_contact' => 1, 'no_role_configured' => 1, 'role_undefined' => 1, 'role_privileged' => 1, 'error' => 1,
+            'changed' => 3, 'unchanged' => 1, 'no_account' => 2, 'no_contact' => 1, 'no_role_configured' => 1, 'role_undefined' => 1, 'role_privileged' => 1, 'failed' => 1,
         ], $agg['counts'] );
-        $this->assertSame( [ 'changed', 'unchanged', 'no_account', 'no_contact', 'no_role_configured', 'role_undefined', 'role_privileged', 'error' ], array_keys( $agg['counts'] ) );
         $this->assertSame( 4, $agg['granted'], 'granted = changed + unchanged' );
     }
 
@@ -333,11 +276,11 @@ class RoleSyncTest extends NJILGA_TestCase {
             [ 'status' => 'changed', 'role' => 'professional', 'created' => true ],
             [ 'status' => 'unchanged', 'role' => 'student' ],
             [ 'status' => 'role_undefined', 'role' => 'alumni' ],
-            [ 'status' => 'error', 'message' => 'hook exploded' ],
-            [ 'status' => 'error', 'message' => 'hook exploded' ],
-            [ 'status' => 'error', 'message' => 'second' ],
-            [ 'status' => 'error', 'message' => 'third' ],
-            [ 'status' => 'error', 'message' => 'fourth' ],
+            [ 'status' => 'failed', 'message' => 'hook exploded' ],
+            [ 'status' => 'failed', 'message' => 'hook exploded' ],
+            [ 'status' => 'failed', 'message' => 'second' ],
+            [ 'status' => 'failed', 'message' => 'third' ],
+            [ 'status' => 'failed', 'message' => 'fourth' ],
         ] ) );
         $this->assertSame( [ 'professional', 'student' ], $agg['ok_roles'], 'alumni was not granted, so it is not ok' );
         $this->assertSame( [ 'professional' ], $agg['created'] );
@@ -358,7 +301,7 @@ class RoleSyncTest extends NJILGA_TestCase {
         $this->assertSame( 'WordPress role: 4 have no role set for their category', MyNJILGA_Role_Sync::describe_outcomes( [ 'no_role_configured' => 4 ] ) );
         $this->assertSame( 'WordPress role: 2 not found in the CRM', MyNJILGA_Role_Sync::describe_outcomes( [ 'no_contact' => 2 ] ) );
         $this->assertSame( 'WordPress role: 1 not granted (role is administrator-level, never granted by a payment)', MyNJILGA_Role_Sync::describe_outcomes( [ 'role_privileged' => 1 ] ) );
-        $this->assertSame( 'WordPress role: 1 failed (see the invoice\'s error note)', MyNJILGA_Role_Sync::describe_outcomes( [ 'error' => 1 ] ) );
+        $this->assertSame( 'WordPress role: 1 failed (see the invoice\'s error note)', MyNJILGA_Role_Sync::describe_outcomes( [ 'failed' => 1 ] ) );
         $this->assertSame( 'WordPress role: no members to update', MyNJILGA_Role_Sync::describe_outcomes( [] ) );
         $this->assertSame( 'WordPress role: no members to update', MyNJILGA_Role_Sync::describe_outcomes( [ 'changed' => 0 ] ), 'zero counts are not listed' );
     }
@@ -381,7 +324,7 @@ class RoleSyncTest extends NJILGA_TestCase {
     }
 
     // -------------------------------------------------------------------
-    // The stored problem callout
+    // The stored problem callout (Dashboard)
     // -------------------------------------------------------------------
 
     public function test_a_first_problem_is_stored_with_its_first_and_last_sighting(): void {
@@ -405,7 +348,6 @@ class RoleSyncTest extends NJILGA_TestCase {
             [ 'status' => 'role_privileged', 'role' => 'administrator', 'count' => 1, 'since' => self::NOW, 'last' => self::NOW ],
             MyNJILGA_Role_Sync::merge_problem( $stored, 'role_privileged', 'administrator', 1, self::NOW )
         );
-        // Same status, different role: also a different problem — the count is not carried over.
         $this->assertSame(
             [ 'status' => 'role_undefined', 'role' => 'alumni', 'count' => 1, 'since' => self::NOW, 'last' => self::NOW ],
             MyNJILGA_Role_Sync::merge_problem( $stored, 'role_undefined', 'alumni', 1, self::NOW )
@@ -453,8 +395,6 @@ class RoleSyncTest extends NJILGA_TestCase {
     }
 
     public function test_fixing_the_mapping_clears_a_problem_that_could_never_resolve_itself(): void {
-        // A privileged role is never granted, so "a payment granted it"
-        // cannot clear its callout; once no category maps to it, it goes.
         $stored = [ 'status' => 'role_privileged', 'role' => 'administrator', 'count' => 3, 'since' => '2026-09-01 08:00:00', 'last' => '2026-09-02 08:00:00' ];
         $this->assertSame( $stored, MyNJILGA_Role_Sync::next_problem( $stored, $this->batch( [] ), [ 'administrator', 'professional' ], self::NOW ), 'still mapped: stays' );
         $this->assertSame( null, MyNJILGA_Role_Sync::next_problem( $stored, $this->batch( [ [ 'status' => 'changed', 'role' => 'professional' ] ] ), [ 'professional' ], self::NOW ), 'no longer mapped: gone' );
@@ -462,8 +402,6 @@ class RoleSyncTest extends NJILGA_TestCase {
 
     public function test_a_problem_seen_again_in_the_batch_that_resolved_the_old_one_is_recorded_afresh(): void {
         $stored = [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 1, 'since' => '2026-09-01 08:00:00', 'last' => '2026-09-01 08:00:00' ];
-        // Contradictory (one member granted 'student', another told it is undefined — say another request
-        // created the role mid-batch), but a reported problem must never be dropped for having a clearing sighting beside it.
         $agg  = $this->batch( [ [ 'status' => 'changed', 'role' => 'student' ], [ 'status' => 'role_undefined', 'role' => 'student' ] ] );
         $next = MyNJILGA_Role_Sync::next_problem( $stored, $agg, [ 'student' ], self::NOW );
         $this->assertSame( 'role_undefined', $next['status'] );
@@ -472,6 +410,6 @@ class RoleSyncTest extends NJILGA_TestCase {
     }
 
     public function test_no_problem_and_a_quiet_batch_stays_no_problem(): void {
-        $this->assertSame( null, MyNJILGA_Role_Sync::next_problem( null, $this->batch( [ 'changed', 'no_account', 'unchanged', 'no_role_configured', 'error' ] ), [ 'professional' ], self::NOW ) );
+        $this->assertSame( null, MyNJILGA_Role_Sync::next_problem( null, $this->batch( [ 'changed', 'no_account', 'unchanged', 'no_role_configured', 'failed' ] ), [ 'professional' ], self::NOW ) );
     }
 }

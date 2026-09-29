@@ -100,7 +100,7 @@ class MyNJILGA_Application_Review {
                     if ( $yearTagId ) {
                         $contact->attachTags( [ $yearTagId ] );
                     }
-                    $granted = $category ? MyNJILGA_Payment_Listener::grant_role( $contact, (string) $category['role'] ) : false;
+                    $granted = MyNJILGA_Role_Sync::holds_role( MyNJILGA_Role_Sync::sync_contact( $contact ) );
                     $outcome = sprintf( 'marked current for %d at no charge%s; first invoice will be the %d batch', $year, $granted ? ', WordPress role granted' : ' (no linked WordPress account yet — role will apply when they have one and pay)', $year + 1 );
                     break;
             }

@@ -9,7 +9,7 @@
  * dinner never lapses a membership): every roster member gets the
  * year-specific unpaid tag ("Unpaid Dues 2027") and the evergreen
  * `unpaid-dues` tag, loses `dues-paid`, and — if Settings say so — loses
- * their category's WordPress role (best-effort, same rules as the grant).
+ * every WordPress membership role (MyNJILGA_Role_Sync::remove_managed()).
  * The row is marked downgraded and a Company Note is left.
  *
  * Only firms that never paid are touched: paid rows are excluded by the
@@ -89,7 +89,9 @@ class MyNJILGA_Downgrade_Sweep {
                 MyNJILGA_Tags::attach_slug( $contact, $unpaidTag );
                 MyNJILGA_Tags::detach_slug( $contact, $paidTag );
 
-                if ( $removeRoles && self::remove_role( $contact, (string) ( $member['role'] ?? '' ) ) ) {
+                // Every membership role, not just the one frozen into this
+                // (possibly old) snapshot — the mapping may have changed since.
+                if ( $removeRoles && MyNJILGA_Role_Sync::remove_managed( $contact, [ (string) ( $member['role'] ?? '' ) ] ) ) {
                     $rolesRemoved++;
                 }
                 $membersDowngraded++;
@@ -140,29 +142,5 @@ class MyNJILGA_Downgrade_Sweep {
             }
         }
         return $ids;
-    }
-
-    /**
-     * @param \FluentCrm\App\Models\Subscriber $contact
-     */
-    private static function remove_role( $contact, string $role ): bool {
-        $role = sanitize_key( $role );
-        if ( $role === '' ) {
-            $role = MyNJILGA_Payment_Listener::WP_ROLE;
-        }
-        $userId = (int) ( $contact->user_id ?? 0 );
-        if ( $userId <= 0 && ! empty( $contact->email ) ) {
-            $user   = get_user_by( 'email', (string) $contact->email );
-            $userId = $user ? (int) $user->ID : 0;
-        }
-        if ( $userId <= 0 ) {
-            return false;
-        }
-        $user = get_user_by( 'id', $userId );
-        if ( ! $user || ! in_array( $role, (array) $user->roles, true ) ) {
-            return false;
-        }
-        $user->remove_role( $role );
-        return true;
     }
 }

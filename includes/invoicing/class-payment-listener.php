@@ -12,14 +12,10 @@
  *     a permanent record of which year they were covered for;
  *   - the evergreen paid tag (`dues-paid`) and loses the evergreen unpaid
  *     tag — this is what every existing report in the plugin reads;
- *   - their category's WordPress role (Settings → category mapping),
- *     decided by MyNJILGA_Role_Sync from the contact's CURRENT CRM tags at
- *     the moment of payment (the frozen snapshot role is only the
- *     fallback), and only ever added. Best-effort per member: a contact
- *     with no WP account is skipped cleanly, and a role that is undefined
- *     or administrator-level is refused — but every outcome is counted,
- *     written into the Company Note and, for the two misconfigurations,
- *     left as a callout (MyNJILGA_Role_Sync::problem()).
+ *   - their category's WordPress role, swapped in by MyNJILGA_Role_Sync
+ *     (any other membership role they held is removed): only where a
+ *     linked WP user exists and the role is defined on the site. A
+ *     contact with no WP account is skipped cleanly, never an error.
  * Assessment-only invoices — each member gets "Assessment Paid {year}";
  * dues tags and roles are untouched (the dinner isn't the membership).
  *
@@ -27,11 +23,7 @@
  */
 class MyNJILGA_Payment_Listener {
 
-    /**
-     * The role the downgrade sweep falls back to for a snapshot with none, and the ONE role
-     * MyNJILGA_Role_Sync creates on demand when a site lacks it. What a member is granted
-     * comes from Settings → category mapping, not from this.
-     */
+    /** Legacy constant kept for anything still referring to it; the role now comes from Settings. */
     const WP_ROLE = 'professional';
 
     public static function register(): void {
@@ -92,26 +84,10 @@ class MyNJILGA_Payment_Listener {
     }
 
     /**
-     * Apply the paid outcome for one invoice row: tag every member of the
-     * frozen snapshot, give them their role, mark the row paid, leave a
-     * Company Note. Public because MyNJILGA_Join_Fulfillment calls it too:
-     * an online join's row is written already paid, so it never passes
-     * through handle_invoice_paid(). There is no in-plugin "mark paid
-     * manually" — an offline cheque is recorded with Stripe's "Mark as
-     * paid", which arrives here as an ordinary paid event.
+     * Apply the paid outcome for one invoice row. Public so an admin
+     * "mark paid manually" path (offline check) can reuse it.
      *
-     * A role problem can never stop the settlement. Each member's role step
-     * runs on its own, so one Throwable (a third-party add_user_role hook,
-     * say) costs that member their role — flagged on the invoice row — and
-     * not the rest of the roster their tags, nor the row its paid status.
-     *
-     * role_outcomes is MyNJILGA_Role_Sync's status => members tally (empty
-     * for an assessment-only invoice, which never touches roles).
-     * roles_granted counts members who now hold their role (added now or
-     * already held), roles_skipped everyone else, contacts missing from the
-     * CRM included.
-     *
-     * @return array{members:int,roles_granted:int,roles_skipped:int,role_outcomes:array<string,int>}
+     * @return array{members:int,roles_granted:int,roles_skipped:int}
      */
     public static function settle( object $invoiceRow, string $source = 'payment' ): array {
         $snapshot   = MyNJILGA_Dues_Snapshot::decode( $invoiceRow );
@@ -150,9 +126,9 @@ class MyNJILGA_Payment_Listener {
             MyNJILGA_Tags::attach_slug( $contact, $paidTag );
             MyNJILGA_Tags::detach_slug( $contact, $unpaidTag );
 
-            $result        = self::role_step( $contact, (string) ( $member['role'] ?? '' ) );
+            $result        = self::role_step( $contact );
             $roleResults[] = $result;
-            if ( $result['status'] === MyNJILGA_Role_Sync::STATUS_CHANGED || $result['status'] === MyNJILGA_Role_Sync::STATUS_UNCHANGED ) {
+            if ( MyNJILGA_Role_Sync::holds_role( $result ) ) {
                 $granted++;
             } else {
                 $skipped++;
@@ -176,7 +152,7 @@ class MyNJILGA_Payment_Listener {
                     (int) $invoiceRow->id,
                     sprintf(
                         'Paid, but the WordPress role step failed for %d member(s): %s',
-                        (int) ( $report['counts'][ MyNJILGA_Role_Sync::STATUS_ERROR ] ?? 0 ),
+                        (int) ( $report['counts'][ MyNJILGA_Role_Sync::STATUS_FAILED ] ?? 0 ),
                         implode( ' | ', $report['errors'] )
                     )
                 );
@@ -215,21 +191,35 @@ class MyNJILGA_Payment_Listener {
     }
 
     /**
-     * One member's role step, isolated: whatever goes wrong inside comes
-     * back as an 'error' result instead of leaving settle() half-done.
+     * One member's role step, isolated: whatever goes wrong inside (a
+     * third-party add_user_role / remove_user_role hook, say) comes back
+     * as a `failed` result instead of leaving settle() half-done — that
+     * member is flagged on the invoice row, the rest of the roster keeps
+     * its tags and the row its paid status.
+     *
+     * The payment is the proof, so the "paid for this or next year" test is
+     * skipped: a late payment of a past year's invoice still grants. The
+     * role comes from the CURRENT mapping and the contact's CURRENT tags,
+     * never the ones frozen into the snapshot; a category mapped to "— no
+     * role —" is reported as such rather than as a grant of nothing.
      *
      * @param \FluentCrm\App\Models\Subscriber $contact
-     * @return array<string,mixed> MyNJILGA_Role_Sync::sync_contact()'s shape, plus `message` on an error.
+     * @return array<string,mixed> MyNJILGA_Role_Sync::sync_contact()'s shape, plus `message` on a failure.
      */
-    private static function role_step( $contact, string $snapshotRole ): array {
+    private static function role_step( $contact ): array {
         try {
-            return MyNJILGA_Role_Sync::sync_contact( $contact, $snapshotRole );
+            $result = MyNJILGA_Role_Sync::sync_contact( $contact, true );
+            if ( $result['role'] === '' && in_array( $result['status'], [ MyNJILGA_Role_Sync::STATUS_CHANGED, MyNJILGA_Role_Sync::STATUS_UNCHANGED ], true ) ) {
+                $result['status'] = MyNJILGA_Role_Sync::STATUS_NO_ROLE;
+            }
+            return $result;
         } catch ( \Throwable $e ) {
             return [
-                'status'  => MyNJILGA_Role_Sync::STATUS_ERROR,
+                'status'  => MyNJILGA_Role_Sync::STATUS_FAILED,
                 'user_id' => 0,
                 'role'    => '',
                 'added'   => [],
+                'removed' => [],
                 'created' => false,
                 'message' => $e->getMessage() !== '' ? $e->getMessage() : get_class( $e ),
             ];
@@ -240,8 +230,9 @@ class MyNJILGA_Payment_Listener {
      * A member paid for before they had a website account — a colleague
      * covered by an online join, someone on a firm invoice — gets their
      * category's role the first time the account appears (registration,
-     * or their next login), rather than only at the next payment. Only
-     * ever grants; never removes. Hooked on user_register and wp_login.
+     * or their next login), rather than only at the next payment — and a
+     * member whose category changed meanwhile gets the swap. Hooked on
+     * user_register and wp_login.
      *
      * "Paid" means paid for THIS dues year or the next one (the batch goes
      * out ahead of the year it covers), not just the evergreen paid tag:
@@ -261,7 +252,7 @@ class MyNJILGA_Payment_Listener {
                 return;
             }
             $contact = self::contact_for_user( $user );
-            if ( ! $contact || ! MyNJILGA_Tags::has_slug( $contact, (string) MyNJILGA_Dues_Settings::general( 'paid_tag', 'dues-paid' ) ) || ! self::paid_for_current_year( $contact ) ) {
+            if ( ! $contact || ! MyNJILGA_Role_Sync::is_paid( $contact ) ) {
                 return;
             }
             // Never re-point a contact another account already owns.
@@ -272,11 +263,7 @@ class MyNJILGA_Payment_Listener {
                 $contact->user_id = (int) $user->ID;
                 $contact->save();
             }
-            // The same category resolver a payment uses, so login and payment
-            // cannot pick different categories for a member (a payment may
-            // additionally fall back to the invoice's frozen role when the
-            // current tags resolve to none).
-            MyNJILGA_Role_Sync::sync_contact( $contact );
+            MyNJILGA_Role_Sync::sync_contact( $contact, true ); // is_paid() checked above.
         } catch ( \Throwable $e ) {
             // Never let a CRM hiccup break a login.
         }
@@ -319,18 +306,5 @@ class MyNJILGA_Payment_Listener {
             }
         }
         return false;
-    }
-
-    /**
-     * Best-effort grant of a role the caller has already chosen (an approved
-     * application's category, a claimed invite's). True when the linked
-     * account ends up holding the role; false when there is no account, no
-     * role, the role is not defined on the site, or it is administrator-
-     * level. A thin wrapper — the rules live in MyNJILGA_Role_Sync::apply_role().
-     *
-     * @param \FluentCrm\App\Models\Subscriber $contact
-     */
-    public static function grant_role( $contact, string $role ): bool {
-        return MyNJILGA_Role_Sync::grant( $contact, $role );
     }
 }

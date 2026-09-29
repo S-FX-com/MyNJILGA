@@ -150,6 +150,10 @@ MyNJILGA_Stripe_Webhook::register();
 // scheduler's worker can find the hook.
 MyNJILGA_Stripe_Reconciler::register();
 
+// Role sync: a paid member's WordPress role follows their category. Hooks
+// FluentCRM's tag events and its Action Scheduler chunk on every request.
+MyNJILGA_Role_Sync::register();
+
 // Payment listener: registered once every plugin has loaded, so a site
 // can swap the invoice gateway via the `my_njilga_invoice_gateway` filter
 // before the "order paid" hook is bound.
@@ -178,6 +182,10 @@ add_action( 'wp_login', static function ( $login, $user ) {
 
 // Setup page: create a missing tag via the FluentCRM Tags API.
 add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_create_tag' ] );
+
+// Setup page: apply a full WordPress role sync after the confirmation screen.
+add_action( 'admin_post_' . MyNJILGA_Page_Setup::ACTION_ROLE_SYNC, [ 'MyNJILGA_Page_Setup', 'handle_role_sync' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Setup::ACTION_ROLE_FORGET, [ 'MyNJILGA_Page_Setup', 'handle_role_forget' ] );
 
 // Dashboard: "Refresh figures" drops the cached membership stats.
 add_action( 'admin_post_' . MyNJILGA_Page_Dashboard::ACTION_REFRESH, [ 'MyNJILGA_Page_Dashboard', 'handle_refresh' ] );

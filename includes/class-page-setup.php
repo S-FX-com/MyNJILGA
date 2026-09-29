@@ -13,9 +13,19 @@ class MyNJILGA_Page_Setup {
     // Nonce action (per mode) for the Online joining table's Re-check link.
     const ACTION_RECHECK_CHECKOUT = 'my_njilga_recheck_checkout';
 
+    // admin-post action (and nonce) for "Apply role changes".
+    const ACTION_ROLE_SYNC = 'my_njilga_role_sync';
+
+    // admin-post action (and nonce) for "Stop managing" a role only the history keeps managed.
+    const ACTION_ROLE_FORGET = 'my_njilga_role_forget';
+
     public static function render(): void {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( 'Access denied.' );
+        }
+        if ( isset( $_GET['view'] ) && sanitize_key( wp_unslash( $_GET['view'] ) ) === 'role-sync' ) {
+            self::render_role_sync_confirm();
+            return;
         }
 
         MyNJILGA_Admin_UI::open(
@@ -35,6 +45,24 @@ class MyNJILGA_Page_Setup {
                 'error'
             );
         }
+        if ( isset( $_GET['role_sync_queued'] ) ) {
+            $n      = (int) $_GET['role_sync_queued'];
+            $inline = isset( $_GET['role_sync_mode'] ) && sanitize_key( wp_unslash( $_GET['role_sync_mode'] ) ) === 'inline';
+            MyNJILGA_Admin_UI::callout(
+                sprintf(
+                    $inline ? 'Role sync ran for %d paid member%s — results are under WordPress role sync below.' : 'Role sync started for %d paid member%s — it runs in the background; results fill in under WordPress role sync below.',
+                    $n,
+                    $n === 1 ? '' : 's'
+                ),
+                'success'
+            );
+        }
+        if ( ! empty( $_GET['role_forgot'] ) ) {
+            MyNJILGA_Admin_UI::callout( sprintf( 'No longer managing <code>%s</code> — role sync won\'t remove it from anyone.', esc_html( sanitize_key( wp_unslash( $_GET['role_forgot'] ) ) ) ), 'success' );
+        }
+        if ( ! empty( $_GET['role_forget_error'] ) ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<code>%s</code> is still in the mapping (or is the legacy role), so it stays managed.', esc_html( sanitize_key( wp_unslash( $_GET['role_forget_error'] ) ) ) ), 'warning' );
+        }
         self::maybe_recheck_checkout();
 
         self::render_environment_section();
@@ -43,6 +71,7 @@ class MyNJILGA_Page_Setup {
             self::render_tag_checklist();
             self::render_settings_tag_audit();
             self::render_all_tags();
+            self::render_role_sync();
         }
 
         self::render_stripe_reconciliation_section();
@@ -99,6 +128,42 @@ class MyNJILGA_Page_Setup {
         }
 
         wp_safe_redirect( add_query_arg( 'create_error', 'unknown tag', $return ) );
+        exit;
+    }
+
+    /**
+     * admin-post handler: "Apply role changes" on the confirmation screen.
+     */
+    public static function handle_role_sync(): void {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Access denied.' );
+        }
+        check_admin_referer( self::ACTION_ROLE_SYNC );
+
+        if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
+            wp_die( 'FluentCRM is not active.' );
+        }
+        $r = MyNJILGA_Role_Sync::queue_full_sync();
+        wp_safe_redirect( add_query_arg( [ 'role_sync_queued' => $r['contacts'], 'role_sync_mode' => $r['mode'] ], MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) ) );
+        exit;
+    }
+
+    /**
+     * admin-post handler: "Stop managing" a role only the history keeps
+     * managed, so a role mapped by mistake stops being removed from members.
+     */
+    public static function handle_role_forget(): void {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Access denied.' );
+        }
+        check_admin_referer( self::ACTION_ROLE_FORGET );
+
+        $role = sanitize_key( wp_unslash( $_POST['role'] ?? '' ) );
+        wp_safe_redirect( add_query_arg(
+            MyNJILGA_Role_Sync::forget_role( $role ) ? 'role_forgot' : 'role_forget_error',
+            $role,
+            MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP )
+        ) );
         exit;
     }
 
@@ -186,26 +251,6 @@ class MyNJILGA_Page_Setup {
                 ? MyNJILGA_Admin_UI::pill( 'Available', 'success' ) . ' <span class="njilga-dim">bundled with FluentCRM</span>'
                 : MyNJILGA_Admin_UI::pill( 'Not available', 'warning' ) . ' <span class="njilga-dim">invoices will be created inline in one request.</span>'
         );
-
-        $roles = [];
-        foreach ( MyNJILGA_Dues_Settings::categories() as $cat ) {
-            if ( $cat['role'] !== '' ) {
-                $roles[ $cat['role'] ] = get_role( $cat['role'] ) ? true : false;
-            }
-        }
-        $roleCells = [];
-        foreach ( $roles as $slug => $exists ) {
-            $roleCells[] = sprintf(
-                '<code>%s</code> %s',
-                esc_html( $slug ),
-                $exists
-                    ? MyNJILGA_Admin_UI::validation( 'defined', true )
-                    : ( $slug === MyNJILGA_Payment_Listener::WP_ROLE
-                        ? MyNJILGA_Admin_UI::validation( 'not created yet — the first payment creates it (read-only capability)', true )
-                        : MyNJILGA_Admin_UI::validation( 'not defined on this site (payment can\'t grant it)', false ) )
-            );
-        }
-        printf( '<tr><th>WordPress roles mapped in Settings</th><td>%s</td></tr>', $roleCells ? implode( '<br>', $roleCells ) : MyNJILGA_Admin_UI::blank() );
 
         echo '</tbody></table></div></div>';
     }
@@ -605,6 +650,167 @@ class MyNJILGA_Page_Setup {
             printf( '<tr><td>%s</td><td><code>%s</code></td><td class="njilga-col-num njilga-dim">%d</td></tr>', esc_html( $t['title'] ), esc_html( $t['slug'] ), $t['id'] );
         }
         echo '</tbody></table></div></div></details>';
+    }
+
+    /**
+     * The category → role map as it stands, which roles a sync may take
+     * away, the last full run, and the way into the confirmation screen.
+     */
+    private static function render_role_sync(): void {
+        MyNJILGA_Admin_UI::section(
+            'WordPress role sync',
+            sprintf(
+                'A paid member\'s WordPress role follows their category (<a href="%s">Settings → Membership categories</a>): granted on payment, swapped when their category tag or this mapping changes, removed by the downgrade sweep. Only the managed roles below are ever removed — WordPress\'s own roles never are.',
+                esc_url( add_query_arg( 'tab', 'dues', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) )
+            )
+        );
+
+        $default = (string) MyNJILGA_Dues_Settings::general( 'default_category', '' );
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th class="njilga-col-num">Order</th><th>Category</th><th>Tag</th><th>WordPress role</th></tr></thead><tbody>';
+        foreach ( MyNJILGA_Dues_Settings::categories() as $i => $cat ) {
+            $role = (string) $cat['role'];
+            if ( $role === '' ) {
+                $roleCell = MyNJILGA_Admin_UI::status( 'No role — members of this category lose every managed role', 'muted' );
+            } elseif ( get_role( $role ) && MyNJILGA_Role_Sync::is_privileged( (array) get_role( $role )->capabilities ) ) {
+                $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( 'administrator-level — never granted by a payment; members of this category are left as they are', false );
+            } elseif ( get_role( $role ) ) {
+                $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( in_array( $role, MyNJILGA_Role_Sync::CORE_ROLES, true ) ? 'defined (WordPress core: granted, never removed)' : 'defined', true );
+            } elseif ( $role === MyNJILGA_Role_Sync::LEGACY_ROLE ) {
+                $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( 'not defined yet — created (capability: read) the first time it is granted', true );
+            } else {
+                $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( 'not defined on this site — members of this category are left as they are', false );
+            }
+            printf(
+                '<tr><td class="njilga-col-num">%d</td><td>%s%s</td><td>%s</td><td>%s</td></tr>',
+                $i + 1,
+                esc_html( (string) $cat['label'] ),
+                (string) $cat['key'] === $default ? ' ' . MyNJILGA_Admin_UI::pill( 'Default', 'outline' ) : '',
+                (string) $cat['tag'] !== '' ? '<code>' . esc_html( (string) $cat['tag'] ) . '</code>' : MyNJILGA_Admin_UI::blank(),
+                $roleCell
+            );
+        }
+        echo '</tbody></table></div></div>';
+
+        $managed = MyNJILGA_Role_Sync::current_managed_roles();
+        $pills   = [];
+        foreach ( $managed as $role ) {
+            $pills[] = MyNJILGA_Admin_UI::pill( $role, 'outline' );
+        }
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table njilga-kv"><tbody>';
+        printf( '<tr><th>Managed roles (a sync may remove these)</th><td>%s</td></tr>', $pills ? implode( ' ', $pills ) : MyNJILGA_Admin_UI::blank() );
+        $forgettable = MyNJILGA_Role_Sync::forgettable_roles( MyNJILGA_Dues_Settings::categories(), MyNJILGA_Role_Sync::history() );
+        if ( $forgettable ) {
+            $cells = [];
+            foreach ( $forgettable as $role ) {
+                $cells[] = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::action_form( self::ACTION_ROLE_FORGET, 'Stop managing', [ 'role' => $role ], 'outline', '', '', 'sm' );
+            }
+            printf(
+                '<tr><th>No longer in the mapping — still removed from members</th><td>%s<p class="njilga-help">A role that was mapped once stays managed so it can be taken back from members who still hold it. Stop managing it once that\'s done, or if it was mapped by mistake.</p></td></tr>',
+                implode( '<br>', $cells )
+            );
+        }
+        printf( '<tr><th>Last full sync</th><td>%s</td></tr>', self::role_sync_last_run_cell( MyNJILGA_Role_Sync::last_run() ) );
+        echo '</tbody></table></div></div>';
+
+        printf(
+            '<div class="njilga-actions"><a class="njilga-btn njilga-btn-outline" href="%s">%s Review role changes</a></div>',
+            esc_url( add_query_arg( 'view', 'role-sync', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) ) ),
+            MyNJILGA_Admin_UI::icon( 'refresh' )
+        );
+    }
+
+    /**
+     * The confirmation screen: exactly what a full sync would change,
+     * before the button — the downgrade sweep's pattern.
+     */
+    private static function render_role_sync_confirm(): void {
+        MyNJILGA_Admin_UI::styles();
+        echo '<div class="wrap njilga-ui">';
+        MyNJILGA_Admin_UI::back_link( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ), 'Back to Setup' );
+        MyNJILGA_Admin_UI::page_header( 'Review role changes', 'What a full role sync would change right now, for every contact carrying the paid tag.' );
+
+        if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
+            MyNJILGA_Admin_UI::callout( 'FluentCRM is not active — there is nothing to sync.', 'warning' );
+            MyNJILGA_Admin_UI::close();
+            return;
+        }
+
+        $p = MyNJILGA_Role_Sync::preview( 50 );
+        $c = $p['counts'];
+        MyNJILGA_Admin_UI::stat_cards( [
+            [ 'label' => 'Will change',           'value' => $c[ MyNJILGA_Role_Sync::STATUS_CHANGED ],        'variant' => $c[ MyNJILGA_Role_Sync::STATUS_CHANGED ] ? 'info' : 'default',           'icon' => 'refresh' ],
+            [ 'label' => 'Already correct',       'value' => $c[ MyNJILGA_Role_Sync::STATUS_UNCHANGED ],      'variant' => 'success',                                                             'icon' => 'check-circle' ],
+            [ 'label' => 'No linked account',     'value' => $c[ MyNJILGA_Role_Sync::STATUS_NO_ACCOUNT ],     'variant' => 'default',                                                             'icon' => 'user' ],
+            [ 'label' => 'Role not defined',      'value' => $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ], 'variant' => $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ] ? 'warning' : 'default', 'icon' => 'alert' ],
+            [ 'label' => 'Administrator-level role', 'value' => $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ], 'variant' => $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ] ? 'destructive' : 'default', 'icon' => 'alert' ],
+            [ 'label' => 'Not current (skipped)', 'value' => $c[ MyNJILGA_Role_Sync::STATUS_NOT_PAID ],       'variant' => 'default',                                                             'icon' => 'calendar' ],
+        ] );
+
+        if ( $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ] > 0 ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>%d member%s</strong> belong to a category whose role this site doesn\'t define. They are left exactly as they are — fix the role in Settings, or create it.', $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ], $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ] === 1 ? '' : 's' ), 'warning' );
+        }
+        if ( $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ] > 0 ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>%d member%s</strong> belong to a category mapped to an administrator-level role. A membership payment never grants one, so they are left exactly as they are — map the category to an ordinary member role in Settings.', $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ], $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ] === 1 ? '' : 's' ), 'error' );
+        }
+
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Member</th><th>Email</th><th>Loses</th><th>Gets</th></tr></thead><tbody>';
+        foreach ( $p['changes'] as $row ) {
+            printf(
+                '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>',
+                $row['name'] !== '' ? esc_html( $row['name'] ) : MyNJILGA_Admin_UI::blank(),
+                esc_html( $row['email'] ),
+                $row['remove'] ? '<code>' . esc_html( implode( ', ', $row['remove'] ) ) . '</code>' : MyNJILGA_Admin_UI::blank(),
+                $row['add'] ? '<code>' . esc_html( implode( ', ', $row['add'] ) ) . '</code>' : MyNJILGA_Admin_UI::blank()
+            );
+        }
+        if ( ! $p['changes'] ) {
+            echo '<tr class="njilga-emptyrow"><td colspan="4">Nothing to change — every current member already holds their category\'s role.</td></tr>';
+        }
+        echo '</tbody></table></div></div>';
+
+        $changed = $c[ MyNJILGA_Role_Sync::STATUS_CHANGED ];
+        if ( $changed > count( $p['changes'] ) ) {
+            printf( '<p class="njilga-help">Showing the first %d of %d changes.</p>', count( $p['changes'] ), $changed );
+        }
+        if ( $changed > 0 ) {
+            echo '<div class="njilga-actions">' . MyNJILGA_Admin_UI::action_form( self::ACTION_ROLE_SYNC, 'Apply role changes', [], 'primary', 'refresh' ) . '</div>';
+        }
+
+        MyNJILGA_Admin_UI::close();
+    }
+
+    /** @param array<string,mixed> $last MyNJILGA_Role_Sync::last_run() */
+    private static function role_sync_last_run_cell( array $last ): string {
+        if ( ! $last ) {
+            return '<span class="njilga-dim">Never run — use Review role changes.</span>';
+        }
+        $labels = [
+            MyNJILGA_Role_Sync::STATUS_CHANGED        => 'changed',
+            MyNJILGA_Role_Sync::STATUS_UNCHANGED      => 'already correct',
+            MyNJILGA_Role_Sync::STATUS_NO_ACCOUNT     => 'no linked account',
+            MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED => 'role not defined',
+            MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED => 'administrator-level role',
+            MyNJILGA_Role_Sync::STATUS_NOT_PAID       => 'not current',
+            MyNJILGA_Role_Sync::STATUS_FAILED         => 'failed',
+        ];
+        $parts = [];
+        foreach ( $labels as $status => $label ) {
+            $n = (int) ( $last['counts'][ $status ] ?? 0 );
+            if ( $n > 0 ) {
+                $parts[] = $n . ' ' . $label;
+            }
+        }
+        $done  = (int) ( $last['done'] ?? 0 );
+        $total = (int) ( $last['contacts'] ?? 0 );
+        return sprintf(
+            '%s %s<span class="njilga-subline">%s · %d of %d processed%s</span>',
+            esc_html( (string) ( $last['started_at'] ?? '' ) ),
+            $done < $total ? MyNJILGA_Admin_UI::pill( 'In progress', 'info' ) : MyNJILGA_Admin_UI::pill( 'Done', 'success' ),
+            ( $last['mode'] ?? '' ) === 'inline' ? 'Ran inline' : 'Background (Action Scheduler)',
+            $done,
+            $total,
+            $parts ? ' — ' . esc_html( implode( ', ', $parts ) ) : ''
+        );
     }
 
     /**
