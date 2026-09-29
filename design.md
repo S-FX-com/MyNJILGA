@@ -155,7 +155,13 @@ MyNJILGA_Admin_UI::stat_cards( [
 ```
 
 Variants: `default`, `success`, `info`, `warning`, `destructive`. Add
-`'url' => …` to make a card a link (it gets a hover state).
+`'url' => …` to make a card a link (it gets a hover state) and `'sub' => …`
+for one line of secondary text under the value — a breakdown, "oldest
+waiting 6 days" (plain text; it is escaped). Amber (`warning`) is for a
+number a person must act on today; keep FYI figures `default`/`info`. A row
+of cards that carry `sub` lines wants room: pass a second argument,
+`stat_cards( $cards, 3 )` (or 4), to fix the row at that many columns
+(collapsing to 2, then 1) instead of the auto-fit default.
 
 ### Badges / pills
 

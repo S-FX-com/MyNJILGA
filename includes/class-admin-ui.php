@@ -96,19 +96,27 @@ class MyNJILGA_Admin_UI {
     }
 
     /**
-     * KPI tiles. Each card: [ label, value, variant?, icon? ].
+     * KPI tiles. Each card: [ label, value, variant?, icon?, url?, sub? ].
+     * `sub` is one line of plain text under the value (a breakdown, "oldest
+     * waiting 6 days") — escaped here, so pass text, not markup.
      *
-     * @param array<int,array{label:string,value:int|string,variant?:string,icon?:string,url?:string}> $cards
+     * $columns fixes the row at 3 or 4 cards (collapsing to 2, then 1, as the
+     * screen narrows) — for a row of cards that carry `sub` lines, which need
+     * more room than the auto-fit default gives them and would otherwise
+     * leave a lone card on a second row. 0 (the default) auto-fits.
+     *
+     * @param array<int,array{label:string,value:int|string,variant?:string,icon?:string,url?:string,sub?:string}> $cards
      */
-    public static function stat_cards( array $cards ): void {
+    public static function stat_cards( array $cards, int $columns = 0 ): void {
         self::styles();
-        echo '<div class="njilga-stats">';
+        printf( '<div class="njilga-stats%s">', in_array( $columns, [ 2, 3, 4 ], true ) ? ' njilga-stats-cols-' . (int) $columns : '' );
         foreach ( $cards as $card ) {
             $inner = sprintf(
-                '<div class="njilga-stat-icon">%s</div><div class="njilga-stat-body"><div class="njilga-stat-label">%s</div><div class="njilga-stat-value">%s</div></div>',
+                '<div class="njilga-stat-icon">%s</div><div class="njilga-stat-body"><div class="njilga-stat-label">%s</div><div class="njilga-stat-value">%s</div>%s</div>',
                 self::icon( (string) ( $card['icon'] ?? 'users' ) ),
                 esc_html( (string) $card['label'] ),
-                esc_html( (string) $card['value'] )
+                esc_html( (string) $card['value'] ),
+                ! empty( $card['sub'] ) ? sprintf( '<div class="njilga-stat-sub">%s</div>', esc_html( (string) $card['sub'] ) ) : ''
             );
             $class = 'njilga-stat njilga-stat-' . esc_attr( (string) ( $card['variant'] ?? 'default' ) );
             if ( ! empty( $card['url'] ) ) {
@@ -314,7 +322,14 @@ class MyNJILGA_Admin_UI {
   border-radius:10px;background:var(--muted);color:var(--muted-fg);flex:0 0 auto}
 .njilga-stat-icon .njilga-icon{width:20px;height:20px}
 .njilga-stat-label{color:var(--muted-fg);font-size:13px;font-weight:500}
-.njilga-stat-value{font-size:26px;font-weight:700;line-height:1.15;margin-top:2px}
+.njilga-stat-value{font-size:26px;font-weight:700;line-height:1.15;margin-top:2px;color:var(--fg)}
+.njilga-stats-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.njilga-stats-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.njilga-stats-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:1180px){.njilga-stats-cols-3,.njilga-stats-cols-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){.njilga-stats-cols-2,.njilga-stats-cols-3,.njilga-stats-cols-4{grid-template-columns:minmax(0,1fr)}}
+.njilga-stat-body{min-width:0}
+.njilga-stat-sub{color:var(--muted-fg);font-size:12.5px;line-height:1.45;margin-top:5px}
 .njilga-stat-success .njilga-stat-icon{background:var(--success-bg);color:var(--success-fg)}
 .njilga-stat-success .njilga-stat-value{color:var(--success-fg)}
 .njilga-stat-info .njilga-stat-icon{background:var(--info-bg);color:var(--info-fg)}

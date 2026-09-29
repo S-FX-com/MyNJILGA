@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and a member-facing dues status and membership overview — driven entirely from FluentCRM tags on the local install.
- * Version:     3.6.0
+ * Version:     3.7.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -37,6 +37,7 @@ if ( class_exists( '\\YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory' ) ) {
 
 // Reports (tag-driven).
 require_once NJILGA_REPORT_DIR . 'includes/class-tags.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-membership-stats.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-members-data.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-csv.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-xls.php';
@@ -59,6 +60,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-client.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-connection.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-pricing-engine.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-ledger-totals.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-stats.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-snapshot.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-invoice-table.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-payments-table.php';
@@ -75,6 +77,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-roster.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-creator.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-role-sync.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
@@ -86,6 +89,7 @@ require_once NJILGA_REPORT_DIR . 'includes/class-page-settings.php';
 require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-applications-table.php';
 require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-form.php';
 require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-review.php';
+require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-stats.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-applications.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-firm-status-page.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-my-membership.php';
@@ -174,6 +178,9 @@ add_action( 'wp_login', static function ( $login, $user ) {
 
 // Setup page: create a missing tag via the FluentCRM Tags API.
 add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_create_tag' ] );
+
+// Dashboard: "Refresh figures" drops the cached membership stats.
+add_action( 'admin_post_' . MyNJILGA_Page_Dashboard::ACTION_REFRESH, [ 'MyNJILGA_Page_Dashboard', 'handle_refresh' ] );
 
 // Per-page CSV exports. ?type=members|trustees|companies determines the report.
 add_action( 'admin_post_my_njilga_export_csv', static function () {

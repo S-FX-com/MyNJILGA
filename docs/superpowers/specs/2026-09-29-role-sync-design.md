@@ -4,6 +4,72 @@
 **Branch:** `feat/role-sync`
 **Version:** 3.5.0 → 3.6.0 (minor: new behaviour, nothing removed)
 
+## Implementation status
+
+**Only the add-only slice is built.** Everything below this section is the
+original design, kept as the reference for the deferred parts. What shipped
+answers one question: when an invoice is paid and the contact is tagged
+Professional in the CRM, does their account get the `professional` role?
+Before, only when every category happened to map to `professional`, the
+role already existed, and the invoice's frozen roster agreed with the
+contact's tags.
+
+**Built** (`includes/invoicing/class-role-sync.php`, `MyNJILGA_Role_Sync`;
+`tests/RoleSyncTest.php`):
+
+- Rule 2 as a pure `resolve_role()`, reusing `MyNJILGA_Pricing_Engine::category_for()`
+  so a member is roled as the category they are billed as. `settle()` reads
+  the contact's **current CRM tags** at payment time; the role frozen in the
+  invoice snapshot is only the fallback when the tags resolve to no role, so
+  the old behaviour is a strict subset of the new.
+- A pure, **add-only** `plan()`: it returns roles to add and has no remove
+  list. Rules 3 and 4 (managed roles, removal, swap) are not implemented.
+- Rule 5, widened: `role_undefined` is reported, not silently skipped, and a
+  role holding an administrator-level capability (`PRIVILEGED_CAPS`) is never
+  granted by a payment (`role_privileged`). The one exception to "undefined is
+  a miss": `professional` is created on demand with the capability `read` only.
+- Rule 6, hardened: a `user_id` pointing at a deleted user falls back to the
+  contact's email; no link is ever written.
+- `settle()` counts outcomes per status, isolates each member's role step,
+  and writes plain English into the Company Note. `role_undefined` and
+  `role_privileged` also leave a callout, option `njilga_role_sync_problem`
+  (`MyNJILGA_Role_Sync::problem()`).
+- `sync_role_for_user()` uses the same resolver; `grant_role()` stays as a thin
+  wrapper for application approval and invite claim, with the same guards.
+
+**Deviations from the design below:** `sync_contact( $contact, string $fallbackRole = '' )`
+replaces `sync_contact( $contact, bool $assumePaid )`: there is no "is the
+contact paid?" test to skip here, since a payment is its own proof and the
+login hook keeps its existing paid gate. Statuses: `changed`, `unchanged`,
+`no_role_configured`, `role_undefined`, `role_privileged`, `no_account`,
+`no_contact` (`error` inside `settle()` only); there is no `not_paid`. One
+behaviour change: a matched category mapped to "— no role —" now gets no role,
+where the login hook's old loop fell through to the default category's role.
+
+**Deferred on purpose:** removal or swapping of roles, the managed-role
+history, `mapping_signature()`, the Settings-save auto-sync, the Action
+Scheduler full sync and preview, the Setup review screen, the FluentCRM
+tag-change hooks (their names could not be verified here), and any change to
+the downgrade sweep. Removal is where the risk lives: an empty desired role
+would strip a paid member, and the plugin swaps category tags as
+detach-then-attach, so a synchronous hook would see a transient "no category"
+state and flap the role.
+
+**Recommended next steps**, in order:
+
+1. **A tag-change trigger, add-only.** Payment covers "tagged, *then* paid".
+   It does not cover "paid, *then* tagged Professional": a contact tagged after
+   their invoice settled, on no firm roster, tagged by hand, or in a firm whose
+   members all owe $0 never passes through `settle()`. Their only safety net is
+   the next login or registration, and `wp_login` does not fire for a
+   remember-me cookie session.
+2. **An add-only backfill** (the Setup preview/apply, restricted to add) for
+   members who are already paid and lack the role today.
+
+Verify on staging first: the FluentCRM hook names and argument order, whether
+they fire for bulk and automation tag changes, and that
+`Subscriber::hasAnyTagId()` does not read a stale cached tag list.
+
 ## Problem
 
 Settings → Membership categories already maps each category tag to a

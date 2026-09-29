@@ -32,6 +32,11 @@ class MyNJILGA_Report_Summary {
     }
 
     private static function stream(): void {
+        // The Overview's KPIs come from the cached snapshot and every list below
+        // is read live: refresh the snapshot first so one file can never quote
+        // two different numbers for the same thing.
+        MyNJILGA_Membership_Stats::snapshot( true );
+
         $filename = sprintf( 'MyNJILGA_executive-summary_%s.xls', date( 'Y-m-d' ) );
 
         nocache_headers();
@@ -115,8 +120,8 @@ class MyNJILGA_Report_Summary {
 
     /**
      * Active Paid Members section — mirrors the on-screen report's columns,
-     * including the green PAID column (every row here carries the Dues
-     * Paid tag by definition).
+     * including the green PAID column (every row here is an active member
+     * by definition: paid through this year or later).
      */
     private static function render_members(): void {
         $rows = MyNJILGA_Members_Data::get_active_members();

@@ -30,6 +30,14 @@ class MyNJILGA_Page_Firms {
             return;
         }
 
+        // The list below is always read live; refresh the cached figures first
+        // so the tiles above it are computed from the very same contacts.
+        $stats = MyNJILGA_Membership_Stats::snapshot( true );
+        if ( empty( $stats['available'] ) ) {
+            MyNJILGA_Admin_UI::callout( esc_html( implode( ' ', array_map( 'strval', (array) $stats['warnings'] ) ) ), 'error' );
+            MyNJILGA_Admin_UI::close();
+            return;
+        }
         MyNJILGA_Admin_Menu::render_firm_overview_panel();
 
         $scope = ( ( $_GET['scope'] ?? '' ) === 'active' ) ? 'active' : 'all';
@@ -40,7 +48,7 @@ class MyNJILGA_Page_Firms {
         printf(
             '<p class="njilga-section-desc">%s</p>',
             $scope === 'active'
-                ? sprintf( '%d firm%s with at least one active (Dues Paid) member — only active members are shown.', count( $firms ), count( $firms ) === 1 ? '' : 's' )
+                ? sprintf( '%d firm%s with at least one active member (paid through this year or later) — only active members are shown.', count( $firms ), count( $firms ) === 1 ? '' : 's' )
                 : sprintf( '%d firm%s with at least one attached FluentCRM contact, listed alphabetically.', count( $firms ), count( $firms ) === 1 ? '' : 's' )
         );
 
