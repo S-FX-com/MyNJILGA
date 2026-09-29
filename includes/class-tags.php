@@ -487,20 +487,31 @@ class MyNJILGA_Tags {
     }
 
     /**
-     * Whether the subscriber carries the tag with this exact title (or its
-     * slug) — WITHOUT creating it. For the year tags ("Dues Paid 2026"):
-     * asking whether someone is current must never mint a tag as a side
-     * effect.
+     * The id of the tag with this exact title (or its slug) — WITHOUT
+     * creating it. For the year tags ("Dues Paid 2026"): asking whether
+     * someone is current must never mint a tag as a side effect.
      */
-    public static function has_title( $subscriber, string $title ): bool {
-        if ( ! $subscriber || ! class_exists( '\\FluentCrm\\App\\Models\\Tag' ) ) {
-            return false;
+    public static function find_title_id( string $title ): ?int {
+        if ( ! class_exists( '\\FluentCrm\\App\\Models\\Tag' ) ) {
+            return null;
         }
         $tag = \FluentCrm\App\Models\Tag::where( 'slug', sanitize_title( $title ) )->first();
         if ( ! $tag ) {
             $tag = \FluentCrm\App\Models\Tag::where( 'title', $title )->first();
         }
-        return $tag ? (bool) $subscriber->hasAnyTagId( [ (int) $tag->id ] ) : false;
+        return $tag ? (int) $tag->id : null;
+    }
+
+    /**
+     * Whether the subscriber carries the tag with this exact title (or its
+     * slug) — without creating it (see find_title_id()).
+     */
+    public static function has_title( $subscriber, string $title ): bool {
+        if ( ! $subscriber ) {
+            return false;
+        }
+        $id = self::find_title_id( $title );
+        return $id ? (bool) $subscriber->hasAnyTagId( [ $id ] ) : false;
     }
 
     /**

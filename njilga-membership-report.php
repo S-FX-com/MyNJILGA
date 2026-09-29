@@ -76,6 +76,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-creator.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-role-sync.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-payments.php';
@@ -144,6 +145,10 @@ MyNJILGA_Stripe_Webhook::register();
 // Action Scheduler job (and schedules it, once) on every request so the
 // scheduler's worker can find the hook.
 MyNJILGA_Stripe_Reconciler::register();
+
+// Role sync: a paid member's WordPress role follows their category. Hooks
+// FluentCRM's tag events and its Action Scheduler chunk on every request.
+MyNJILGA_Role_Sync::register();
 
 // Payment listener: registered once every plugin has loaded, so a site
 // can swap the invoice gateway via the `my_njilga_invoice_gateway` filter
