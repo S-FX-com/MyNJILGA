@@ -4,6 +4,44 @@
 **Branch:** `feat/role-sync`
 **Version:** 3.5.0 → 3.6.0 (minor: new behaviour, nothing removed)
 
+## Implementation status
+
+**Fully built.** `feat/role-sync` (v3.6.0) shipped everything below —
+`MyNJILGA_Role_Sync` with the pure `resolve_role()` / `managed_roles()` /
+`plan()` / `mapping_signature()`, removal and swapping, the managed-role
+history (with a Setup **Stop managing** action for a role no longer in the
+map), the FluentCRM tag-change hooks, the Settings-save resync, the Action
+Scheduler full sync with the Setup review-and-apply screen, and the
+downgrade sweep removing every managed role. Its implementation plan is
+`docs/superpowers/plans/2026-09-29-role-sync.md`.
+
+`sfx/gallant-edison` (v3.7.0) had built an add-only slice of the same
+design in parallel; what it added beyond the design was folded in on merge:
+
+- **Privileged roles are never granted by a payment** — a role holding any
+  capability in `PRIVILEGED_CAPS` (`manage_options`, `promote_users`,
+  `edit_users`, …) is refused and reported as `role_privileged`, and like an
+  undefined role it leaves the member's existing roles untouched (Rule 5,
+  widened).
+- **The legacy `professional` role is created on demand** (capability
+  `read` only) when a category maps to it and the site lacks it — nothing
+  else in the plugin ever creates it.
+- **`settle()` isolates each member's role step** (a Throwable costs that
+  member their role and is flagged on the invoice row, never the roster
+  its tags), tallies outcomes per status (`aggregate()`), and writes them
+  into the Company Note in plain English (`describe_outcomes()` /
+  `describe_problems()`).
+- **A stored role problem** (`njilga_role_sync_problem`, `problem()`):
+  `role_undefined` / `role_privileged` met by a payment surface as a
+  Dashboard callout that keeps counting while the problem recurs and
+  clears once a payment grants that role or no category maps to it.
+
+Not adopted from that branch: its add-only `plan()` (superseded by
+removal/swap), the snapshot role as a fallback when the current tags
+resolve to no role ("— no role —" means no role — Rule 2), and its
+email fallback for a `user_id` pointing at a deleted user (a linked
+contact whose account is gone gets nothing rather than another account's
+roles).
 ## Problem
 
 Settings → Membership categories already maps each category tag to a

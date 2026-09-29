@@ -97,6 +97,51 @@ class MyNJILGA_Applications_Table {
     }
 
     /**
+     * Applications per status. No mode filter: an application is a form
+     * submission, not a Stripe object, so there is no Test/Live split.
+     *
+     * @return array<string,int> status => count (only statuses present)
+     */
+    public static function counts_by_status(): array {
+        global $wpdb;
+        $table = self::table_name();
+        $out   = [];
+        foreach ( (array) $wpdb->get_results( "SELECT status, COUNT(*) AS c FROM $table GROUP BY status" ) as $r ) { // phpcs:ignore
+            $out[ (string) $r->status ] = (int) $r->c;
+        }
+        return $out;
+    }
+
+    /**
+     * When the oldest still-pending application was submitted (site-local
+     * DATETIME), or null when none is waiting.
+     *
+     * "Oldest waiting" is only as old as the last submission: a re-submission
+     * by the same email while pending rewrites created_at (update_pending()),
+     * and there is no separate first-submitted column, so an applicant who
+     * keeps re-submitting looks newer than they are.
+     */
+    public static function oldest_pending_created(): ?string {
+        global $wpdb;
+        $table  = self::table_name();
+        $oldest = $wpdb->get_var( $wpdb->prepare( "SELECT MIN(created_at) FROM $table WHERE status = %s", self::STATUS_PENDING ) ); // phpcs:ignore
+        return is_string( $oldest ) && $oldest !== '' ? $oldest : null;
+    }
+
+    /**
+     * Applications approved on or after a site-local DATETIME (decided_at
+     * is written with current_time( 'mysql' )). Approved only — rejected and
+     * superseded ("Joined online") are different outcomes. There is no
+     * index on decided_at; the table is one row per applicant, so the scan
+     * is small.
+     */
+    public static function approved_since( string $datetime ): int {
+        global $wpdb;
+        $table = self::table_name();
+        return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $table WHERE status = %s AND decided_at >= %s", self::STATUS_APPROVED, $datetime ) ); // phpcs:ignore
+    }
+
+    /**
      * @param array<string,mixed> $data
      */
     public static function insert( array $data ): int {

@@ -149,6 +149,16 @@ class MyNJILGA_Admin_Menu {
             [ 'label' => 'Unpaid Trustees',          'value' => $s['unpaid_trustees'],    'variant' => 'destructive', 'icon' => 'award' ],
             [ 'label' => 'Exempt',                   'value' => $s['exempt'],             'variant' => 'info',        'icon' => 'user' ],
         ] );
+        self::render_definition_note();
+    }
+
+    /**
+     * One line saying what the KPI tiles count, so a number that differs from
+     * an old export can be explained from the page itself. The same
+     * definition — MyNJILGA_Membership_Stats — feeds the Dashboard.
+     */
+    private static function render_definition_note(): void {
+        echo '<p class="njilga-dim">Paid = paid through this year or later, whatever the contact\'s email-subscription status. Unpaid = lapsed. Past Presidents and Senior Trustees owe no dues and are counted as Exempt. These are the same figures as the Dashboard.</p>';
     }
 
     /**
@@ -171,6 +181,7 @@ class MyNJILGA_Admin_Menu {
             [ 'label' => 'Paid Trustees',  'value' => $s['paid_trustees'],  'variant' => 'success',     'icon' => 'award' ],
             [ 'label' => 'Exempt',         'value' => $s['exempt'],         'variant' => 'info',        'icon' => 'user' ],
         ] );
+        self::render_definition_note();
     }
 
     /**

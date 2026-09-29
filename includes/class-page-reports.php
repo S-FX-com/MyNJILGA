@@ -34,19 +34,19 @@ class MyNJILGA_Page_Reports {
         $cards = [
             [
                 'title' => 'Active Paid Members',
-                'desc'  => 'Every contact carrying the Dues Paid tag, with firm, email, trustee role, and payment method.',
+                'desc'  => 'Every contact paid through this year or later — independent of email-subscription status — with firm, email, trustee role, and payment method.',
                 'icon'  => 'check-circle',
                 'url'   => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_MEMBERS ),
             ],
             [
                 'title' => 'Trustees',
-                'desc'  => 'Trustees, Senior Trustees, and Past Presidents, with dues status and payment method.',
+                'desc'  => 'Trustees, Senior Trustees, and Past Presidents, with dues status (paid, unpaid or exempt) and payment method.',
                 'icon'  => 'award',
                 'url'   => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_TRUSTEES ),
             ],
             [
                 'title' => 'Companies',
-                'desc'  => 'Firms bucketed by how many paid members they have (1 / 2–5 / 6+ / none).',
+                'desc'  => 'Firms bucketed by how many active members (paid through this year or later) they have — 1 / 2–5 / 6+ / none.',
                 'icon'  => 'building',
                 'url'   => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_COMPANIES ),
             ],
@@ -58,7 +58,7 @@ class MyNJILGA_Page_Reports {
             ],
             [
                 'title' => 'Membership by Firm — Active Membership Only',
-                'desc'  => 'Only firms that have active (Dues Paid) members, showing just those active members. Exports to Excel.',
+                'desc'  => 'Only firms that have active members (paid through this year or later), showing just those active members. Exports to Excel.',
                 'icon'  => 'users',
                 'url'   => add_query_arg( 'scope', 'active', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_FIRMS ) ),
             ],

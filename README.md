@@ -30,7 +30,7 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for member stat
 | **Applications** | Enrollment review queue — see [Enrollment gate](#enrollment-gate) — and the **Online joins** tab — see [Online joining](#online-joining). |
 | **Settings** | **Dues & Billing** — category mapping, assessment, per-firm billing mode, all switches. **Payments** tab — Stripe connection, mode, and payment settings. |
 | **Setup** | Environment checks, tag checklist, **tag-slug audit** and **product-mapping audit** for the settings, plus Stripe connection health and a recent-API-activity log. |
-| **Shortcodes** | Every shortcode the plugin provides — a ready-to-paste `[njilga_join]` line per membership category, `[njilga_firm_dues_status]`, `[njilga_membership_application]` — with copy buttons and the pages that use each one now. |
+| **Shortcodes** | Every shortcode the plugin provides — a ready-to-paste `[njilga_join]` line per membership category, `[njilga_firm_dues_status]`, `[njilga_my_membership]`, `[njilga_membership_application]` — with copy buttons and the pages that use each one now. |
 
 ---
 
@@ -259,7 +259,7 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 **Mailing address.** Without JavaScript every address field shows, labelled for US or overseas addresses, and the server checks them by the "outside the United States" box; with JavaScript only the fields that apply show and are sent. The postcode field is shared: a 5-digit ZIP for US addresses, optional free text for others, saved either way.
 
-**Look.** The public forms — the join wizard, the invite form, `[njilga_firm_dues_status]` and `[njilga_membership_application]` — follow the NJILGA site's stylesheet: **Playfair Display** headings, **Helvetica** body text, and **Inter** for eyebrows ("Step 2 of 4", "NJILGA Membership"), labels and buttons; colours come from the site's Automatic.css tokens (`--secondary` navy buttons, `--primary` blue, `--accent` gold, `--btn-radius`), each with the site's own value as the fallback on a site without Automatic.css. Sizes are in px because Automatic.css sets the root font size to 62.5%. Playfair Display comes from the theme; Inter isn't on the site, so the plugin loads it from Google Fonts on pages that show a form — return `''` from the `my_njilga_front_font_url` filter to leave font loading to the theme.
+**Look.** The public forms — the join wizard, the invite form, `[njilga_firm_dues_status]`, `[njilga_my_membership]` and `[njilga_membership_application]` — follow the NJILGA site's stylesheet: **Playfair Display** headings, **Helvetica** body text, and **Inter** for eyebrows ("Step 2 of 4", "NJILGA Membership"), labels and buttons; colours come from the site's Automatic.css tokens (`--secondary` navy buttons, `--primary` blue, `--accent` gold, `--btn-radius`), each with the site's own value as the fallback on a site without Automatic.css. Sizes are in px because Automatic.css sets the root font size to 62.5%. Playfair Display comes from the theme; Inter isn't on the site, so the plugin loads it from Google Fonts on pages that show a form — return `''` from the `my_njilga_front_font_url` filter to leave font loading to the theme.
 
 **Shortcodes.** My NJILGA → **Shortcodes** lists a ready-to-paste `[njilga_join category="…"]` line for every category an applicant may pick (with its price), the `category`/`form` attributes, whether joining is open right now, and every page that carries each shortcode — with a warning when a category has no page.
 
@@ -295,6 +295,22 @@ Stripe is the commerce backend for dues invoicing — invoices are created, fina
 
 ---
 
+## My Membership page
+
+`[njilga_my_membership]` — the complete picture of a member **and** their firm, for the page you'd call "My Membership". Signed-in members only; a visitor is asked to log in. For the viewer it shows:
+
+1. **Active or expired** — a pill, plus the **next expiration date** (`12/31/YYYY`).
+2. **Their firm(s)** and whether the firm **manages their membership** — *Managed by your firm* (one invoice to the Owner covers everyone), *You manage this firm's membership* (the viewer is the Owner), or *You manage your own membership* (the firm is in Individual billing mode). Split-assessment firms manage dues but bill each assessment to the member.
+3. **Every member of the firm**: category, active/expired/exempt/inactive standing and expiration.
+4. **Fees by member** — every fee ever invoiced to each person (membership dues with their tier, Trustee Dinner assessments, $0 lines with the reason), per year, with each invoice's status.
+5. **Invoices** — year, what it covers, who it was **billed to**, total, status, and the **Pay now** / PDF links while it's awaiting payment, so a payment traces to the people it covers.
+
+**There is no stored expiration date, so it is derived:** a member is paid through the highest `Dues Paid {year}` tag they carry (Settings → year tag pattern), and memberships end 12/31 of that year. Paid through this year or later = **active**; paid through an earlier year, or carrying only the `unpaid-dues` tag = **expired** (the date wins over a lingering `dues-paid` tag). A contact with the evergreen `dues-paid` tag and *no* year tag (paid before invoicing existed) reads as active through the end of this year. Dues-exempt (Past President / Senior Trustee) and Inactive contacts owe nothing, so they're never shown as expired.
+
+Like the firm dues status page, it shows every member of the firm the same thing (not just the Owner), always uses **Live**-mode invoices (whatever the admin Test/Live toggle says), and never shows staff-only **draft** invoices. Unlike it, the payment link is offered only while an invoice is *awaiting payment* — never while an ACH transfer is clearing. Invoices that list the viewer but sit outside a firm they belong to now (an old online join, a former firm) appear under **Other invoices**, restricted to the viewer's own lines unless the invoice was billed to them. The page sets `DONOTCACHEPAGE` — it lists other people's names and fees, so keep it out of any page or CDN cache.
+
+---
+
 ## CSV / Excel exports
 
 Each list page has a **Download CSV** button; **Membership by Firm** and the **Payments** ledger export a formatted `.xls`; **Reports** offers the **Executive Summary** `.xls` combining every report. No third-party libraries. Names and firm names can come from the public join form, so a CSV cell that would start a spreadsheet formula (`=`, `+`, `-`, `@`) is written as text; the `.xls` exports already mark data cells as text.
@@ -317,6 +333,7 @@ my-njilga/
 │   ├── class-page-applications.php       ← Enrollment review queue
 │   ├── class-page-setup.php              ← Environment, tag/product audit, Stripe health + API log
 │   ├── class-firm-status-page.php        ← [njilga_firm_dues_status]
+│   ├── class-my-membership.php           ← [njilga_my_membership]: standing, firm, members, fees (pure half unit-tested)
 │   ├── class-phone.php                   ← PURE: phone numbers in FluentCRM's shape (+1 ###-###-####) — unit-tested
 │   ├── class-front-style.php             ← Shared look of the public forms: site fonts + Automatic.css colour tokens
 │   ├── join/                             ← [njilga_join] — online joining (Stripe Checkout)

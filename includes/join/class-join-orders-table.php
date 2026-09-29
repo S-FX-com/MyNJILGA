@@ -175,16 +175,107 @@ class MyNJILGA_Join_Orders_Table {
     }
 
     /**
-     * @return array<string,int> status => count
+     * Joins per status.
+     *
+     * $livemode null reads every row, Test-mode rehearsals included — the
+     * zero-argument call the Online joins tab has always made, and its SQL
+     * is unchanged. true / false reads only that Stripe mode's rows, for
+     * callers that must not show a rehearsal as real (the Dashboard).
+     *
+     * @return array<string,int> status => count (only statuses present)
      */
-    public static function counts_by_status(): array {
+    public static function counts_by_status( ?bool $livemode = null ): array {
         global $wpdb;
         $table = self::table_name();
         $out   = [];
-        foreach ( (array) $wpdb->get_results( "SELECT status, COUNT(*) AS c FROM $table GROUP BY status" ) as $r ) { // phpcs:ignore
+        $sql   = $livemode === null
+            ? "SELECT status, COUNT(*) AS c FROM $table GROUP BY status"
+            : $wpdb->prepare( "SELECT status, COUNT(*) AS c FROM $table WHERE livemode = %d GROUP BY status", $livemode ? 1 : 0 ); // phpcs:ignore
+        foreach ( (array) $wpdb->get_results( $sql ) as $r ) { // phpcs:ignore
             $out[ (string) $r->status ] = (int) $r->c;
         }
         return $out;
+    }
+
+    /**
+     * When the oldest join in a status was started (site-local DATETIME),
+     * or null when there is none — the clock behind "oldest waiting N days".
+     *
+     * created_at, deliberately, and for every status: updated_at is NOT
+     * time-in-status, because the daily sweep touch()es every pending,
+     * processing, paid and fulfilling row it visits. A 'review' join is
+     * never swept, so for it created_at is exactly how long it has waited.
+     * For 'processing' it is a proxy — the move to processing writes no
+     * timestamp of its own, and created_at precedes it by up to the
+     * checkout's life — so it reads a little old, never young.
+     *
+     * $livemode as in counts_by_status().
+     */
+    public static function oldest_created( string $status, ?bool $livemode = null ): ?string {
+        global $wpdb;
+        $table  = self::table_name();
+        $where  = 'status = %s';
+        $params = [ $status ];
+        if ( $livemode !== null ) {
+            $where   .= ' AND livemode = %d';
+            $params[] = $livemode ? 1 : 0;
+        }
+        $oldest = $wpdb->get_var( $wpdb->prepare( "SELECT MIN(created_at) FROM $table WHERE $where", $params ) ); // phpcs:ignore
+        return is_string( $oldest ) && $oldest !== '' ? $oldest : null;
+    }
+
+    /**
+     * Joins completed in a CALENDAR year: status fulfilled (the membership
+     * is applied — a fulfilled join that still carries a review flag is
+     * still a join that happened) and fulfilled_at inside Jan 1 – Dec 31 of
+     * $year on the site clock, the clock fulfilled_at is written in.
+     *
+     * Calendar year of WHEN it was applied, not the dues year it paid for:
+     * a join after the cutover date (MyNJILGA_Join_Form::dues_year()) pays
+     * for NEXT year, so counting dues_year = this year would silently drop
+     * exactly those joins from "joined this year". And a real COUNT — the
+     * Online joins tab's own "Joined for {year}" counts the newest 300 rows
+     * only, and every mode.
+     *
+     * Counts joins, not people: each one covers its payer plus the
+     * colleagues named on it.
+     *
+     * $livemode as in counts_by_status(). No default: the caller says which
+     * mode it means.
+     */
+    public static function joined_count( int $year, ?bool $livemode ): int {
+        global $wpdb;
+        $table  = self::table_name();
+        $where  = 'status = %s AND fulfilled_at >= %s AND fulfilled_at < %s';
+        $params = [ self::STATUS_FULFILLED, sprintf( '%04d-01-01 00:00:00', $year ), sprintf( '%04d-01-01 00:00:00', $year + 1 ) ];
+        if ( $livemode !== null ) {
+            $where   .= ' AND livemode = %d';
+            $params[] = $livemode ? 1 : 0;
+        }
+        return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $table WHERE $where", $params ) ); // phpcs:ignore
+    }
+
+    /**
+     * The paid joins, as just enough of each row for payment_settled() to
+     * judge — id, status, progress; nothing else is read. A join sits in
+     * 'paid' only while it is waiting on a person or a retry (the daily
+     * sweep and Retry applying clear the rest), so the set is small, and
+     * it is read by the status key.
+     *
+     * $livemode as in counts_by_status().
+     *
+     * @return array<int,object>
+     */
+    public static function get_paid_progress( ?bool $livemode = null ): array {
+        global $wpdb;
+        $table  = self::table_name();
+        $where  = 'status = %s';
+        $params = [ self::STATUS_PAID ];
+        if ( $livemode !== null ) {
+            $where   .= ' AND livemode = %d';
+            $params[] = $livemode ? 1 : 0;
+        }
+        return (array) $wpdb->get_results( $wpdb->prepare( "SELECT id, status, progress FROM $table WHERE $where ORDER BY id ASC", $params ) ); // phpcs:ignore
     }
 
     /**
@@ -287,24 +378,53 @@ class MyNJILGA_Join_Orders_Table {
         return ! empty( $p['held'] ) || ! empty( $p['already_current'] ) || ! empty( $p['checks'] ) || ! empty( $p['document_unverified'] ) || (string) ( $join->last_error ?? '' ) !== '';
     }
 
-    public static function needs_attention_count(): int {
+    /**
+     * How many joins needs_attention() would say yes to, in one COUNT.
+     *
+     * $livemode null counts every row, Test-mode rehearsals included — the
+     * zero-argument call behind the menu bubble and the Online joins tab,
+     * whose SQL is unchanged. true / false counts only that mode's rows.
+     * Every review and every paid row counts unconditionally, so `review +
+     * paid` from counts_by_status() for the same mode is always part of
+     * this figure.
+     */
+    public static function needs_attention_count( ?bool $livemode = null ): int {
+        global $wpdb;
+        return (int) $wpdb->get_var( self::needs_attention_sql( $livemode, (int) current_time( 'timestamp' ) ) ); // phpcs:ignore
+    }
+
+    /**
+     * The statement behind needs_attention_count(), with the site clock
+     * handed in (current_time( 'timestamp' ), as needs_attention() reads
+     * it) so it can be built — and its text checked — without WordPress.
+     *
+     * With a mode, the whole attention predicate is wrapped in parentheses
+     * behind `livemode = %d AND`; without one it is exactly the bare
+     * predicate, as before.
+     */
+    public static function needs_attention_sql( ?bool $livemode, int $localNow ): string {
         global $wpdb;
         $table = self::table_name();
         // progress is wp_json_encode() output: a non-empty `held` map
         // encodes as an object, a non-empty `already_current` list as an
         // array of strings.
-        return (int) $wpdb->get_var( $wpdb->prepare( // phpcs:ignore
-            "SELECT COUNT(*) FROM $table WHERE status IN (%s, %s) OR ( status = %s AND updated_at < %s ) OR ( status = %s AND ( progress LIKE %s OR progress LIKE %s OR progress LIKE %s OR progress LIKE %s OR ( last_error IS NOT NULL AND last_error <> '' ) ) )",
+        $attention = "status IN (%s, %s) OR ( status = %s AND updated_at < %s ) OR ( status = %s AND ( progress LIKE %s OR progress LIKE %s OR progress LIKE %s OR progress LIKE %s OR ( last_error IS NOT NULL AND last_error <> '' ) ) )";
+        $params    = [
             self::STATUS_REVIEW,
             self::STATUS_PAID,
             self::STATUS_FULFILLING,
-            gmdate( 'Y-m-d H:i:s', (int) current_time( 'timestamp' ) - self::CLAIM_STALE_SECONDS ),
+            gmdate( 'Y-m-d H:i:s', $localNow - self::CLAIM_STALE_SECONDS ),
             self::STATUS_FULFILLED,
             '%' . $wpdb->esc_like( '"held":{' ) . '%',
             '%' . $wpdb->esc_like( '"already_current":["' ) . '%',
             '%' . $wpdb->esc_like( '"checks":["' ) . '%',
-            '%' . $wpdb->esc_like( '"document_unverified":true' ) . '%'
-        ) );
+            '%' . $wpdb->esc_like( '"document_unverified":true' ) . '%',
+        ];
+        if ( $livemode !== null ) {
+            $attention = "livemode = %d AND ( $attention )";
+            array_unshift( $params, $livemode ? 1 : 0 );
+        }
+        return (string) $wpdb->prepare( "SELECT COUNT(*) FROM $table WHERE $attention", $params ); // phpcs:ignore
     }
 
     /**

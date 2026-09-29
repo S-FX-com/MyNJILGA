@@ -671,8 +671,12 @@ class MyNJILGA_Page_Setup {
             $role = (string) $cat['role'];
             if ( $role === '' ) {
                 $roleCell = MyNJILGA_Admin_UI::status( 'No role — members of this category lose every managed role', 'muted' );
+            } elseif ( get_role( $role ) && MyNJILGA_Role_Sync::is_privileged( (array) get_role( $role )->capabilities ) ) {
+                $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( 'administrator-level — never granted by a payment; members of this category are left as they are', false );
             } elseif ( get_role( $role ) ) {
-                $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( 'defined', true );
+                $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( in_array( $role, MyNJILGA_Role_Sync::CORE_ROLES, true ) ? 'defined (WordPress core: granted, never removed)' : 'defined', true );
+            } elseif ( $role === MyNJILGA_Role_Sync::LEGACY_ROLE ) {
+                $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( 'not defined yet — created (capability: read) the first time it is granted', true );
             } else {
                 $roleCell = '<code>' . esc_html( $role ) . '</code> ' . MyNJILGA_Admin_UI::validation( 'not defined on this site — members of this category are left as they are', false );
             }
@@ -738,11 +742,15 @@ class MyNJILGA_Page_Setup {
             [ 'label' => 'Already correct',       'value' => $c[ MyNJILGA_Role_Sync::STATUS_UNCHANGED ],      'variant' => 'success',                                                             'icon' => 'check-circle' ],
             [ 'label' => 'No linked account',     'value' => $c[ MyNJILGA_Role_Sync::STATUS_NO_ACCOUNT ],     'variant' => 'default',                                                             'icon' => 'user' ],
             [ 'label' => 'Role not defined',      'value' => $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ], 'variant' => $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ] ? 'warning' : 'default', 'icon' => 'alert' ],
+            [ 'label' => 'Administrator-level role', 'value' => $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ], 'variant' => $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ] ? 'destructive' : 'default', 'icon' => 'alert' ],
             [ 'label' => 'Not current (skipped)', 'value' => $c[ MyNJILGA_Role_Sync::STATUS_NOT_PAID ],       'variant' => 'default',                                                             'icon' => 'calendar' ],
         ] );
 
         if ( $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ] > 0 ) {
             MyNJILGA_Admin_UI::callout( sprintf( '<strong>%d member%s</strong> belong to a category whose role this site doesn\'t define. They are left exactly as they are — fix the role in Settings, or create it.', $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ], $c[ MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED ] === 1 ? '' : 's' ), 'warning' );
+        }
+        if ( $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ] > 0 ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>%d member%s</strong> belong to a category mapped to an administrator-level role. A membership payment never grants one, so they are left exactly as they are — map the category to an ordinary member role in Settings.', $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ], $c[ MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED ] === 1 ? '' : 's' ), 'error' );
         }
 
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Member</th><th>Email</th><th>Loses</th><th>Gets</th></tr></thead><tbody>';
@@ -781,6 +789,7 @@ class MyNJILGA_Page_Setup {
             MyNJILGA_Role_Sync::STATUS_UNCHANGED      => 'already correct',
             MyNJILGA_Role_Sync::STATUS_NO_ACCOUNT     => 'no linked account',
             MyNJILGA_Role_Sync::STATUS_ROLE_UNDEFINED => 'role not defined',
+            MyNJILGA_Role_Sync::STATUS_ROLE_PRIVILEGED => 'administrator-level role',
             MyNJILGA_Role_Sync::STATUS_NOT_PAID       => 'not current',
             MyNJILGA_Role_Sync::STATUS_FAILED         => 'failed',
         ];
@@ -896,7 +905,7 @@ class MyNJILGA_Page_Setup {
     private static function render_shortcodes(): void {
         MyNJILGA_Admin_UI::section( 'Shortcodes' );
         printf(
-            '<div class="njilga-banner"><div><div class="njilga-banner-title">Shortcodes for the public pages</div><div class="njilga-banner-desc">Ready-to-paste lines for <code>[njilga_join]</code> (one per category an applicant may pick), <code>[njilga_membership_application]</code> and <code>[njilga_firm_dues_status]</code>: what each does, which to use, and the pages that carry them now.</div></div><a class="njilga-btn njilga-btn-outline" href="%s">Open Shortcodes</a></div>',
+            '<div class="njilga-banner"><div><div class="njilga-banner-title">Shortcodes for the public pages</div><div class="njilga-banner-desc">Ready-to-paste lines for <code>[njilga_join]</code> (one per category an applicant may pick), <code>[njilga_membership_application]</code>, <code>[njilga_firm_dues_status]</code> and <code>[njilga_my_membership]</code>: what each does, which to use, and the pages that carry them now.</div></div><a class="njilga-btn njilga-btn-outline" href="%s">Open Shortcodes</a></div>',
             esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SHORTCODES ) )
         );
     }

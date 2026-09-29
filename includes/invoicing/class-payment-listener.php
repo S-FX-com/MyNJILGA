@@ -104,10 +104,14 @@ class MyNJILGA_Payment_Listener {
         $yearTagId = $crmActive ? MyNJILGA_Tags::get_or_create_by_title( $yearTitle ) : null;
 
         $granted = 0; $skipped = 0; $touched = 0;
+        $roleResults = [];
         foreach ( $members as $member ) {
             $contact = $crmActive ? \FluentCrm\App\Models\Subscriber::find( (int) ( $member['contact_id'] ?? 0 ) ) : null;
             if ( ! $contact ) {
                 $skipped++;
+                if ( $settles ) {
+                    $roleResults[] = [ 'status' => MyNJILGA_Role_Sync::STATUS_NO_CONTACT ];
+                }
                 continue;
             }
             $touched++;
@@ -122,11 +126,9 @@ class MyNJILGA_Payment_Listener {
             MyNJILGA_Tags::attach_slug( $contact, $paidTag );
             MyNJILGA_Tags::detach_slug( $contact, $unpaidTag );
 
-            // The payment is the proof, so the "paid for this or next year"
-            // test is skipped: a late payment of a past year's invoice still
-            // grants. The role comes from the CURRENT mapping, not the one
-            // frozen into the snapshot.
-            if ( MyNJILGA_Role_Sync::holds_role( MyNJILGA_Role_Sync::sync_contact( $contact, true ) ) ) {
+            $result        = self::role_step( $contact );
+            $roleResults[] = $result;
+            if ( MyNJILGA_Role_Sync::holds_role( $result ) ) {
                 $granted++;
             } else {
                 $skipped++;
@@ -136,22 +138,92 @@ class MyNJILGA_Payment_Listener {
         MyNJILGA_Dues_Invoice_Table::mark_paid( (int) $invoiceRow->id );
         MyNJILGA_Dues_Invoice_Table::clear_error( (int) $invoiceRow->id );
 
+        // Reporting comes after the row is paid and can only ever add to
+        // what staff see: a failure here must not undo the settlement.
+        $report = MyNJILGA_Role_Sync::aggregate( $roleResults );
+        if ( $settles ) {
+            try {
+                MyNJILGA_Role_Sync::record_report( $report );
+            } catch ( \Throwable $e ) {
+                // The Company Note below still carries the outcome.
+            }
+            if ( $report['errors'] ) {
+                MyNJILGA_Dues_Invoice_Table::set_error(
+                    (int) $invoiceRow->id,
+                    sprintf(
+                        'Paid, but the WordPress role step failed for %d member(s): %s',
+                        (int) ( $report['counts'][ MyNJILGA_Role_Sync::STATUS_FAILED ] ?? 0 ),
+                        implode( ' | ', $report['errors'] )
+                    )
+                );
+            }
+        }
+
+        // Tags just changed for the whole roster: the dashboard's cached
+        // membership figures are now wrong. Guarded, and before the note so
+        // a note that fails to save cannot leave them stale.
+        if ( class_exists( 'MyNJILGA_Membership_Stats' ) && method_exists( 'MyNJILGA_Membership_Stats', 'flush' ) ) {
+            try {
+                MyNJILGA_Membership_Stats::flush();
+            } catch ( \Throwable $e ) {
+                // A cache that will expire on its own.
+            }
+        }
+
+        $roleText = $settles
+            ? trim( MyNJILGA_Role_Sync::describe_outcomes( $report['counts'] ) . '. ' . MyNJILGA_Role_Sync::describe_problems( $report['problems'], $report['created'] ) )
+            : 'WordPress roles untouched (assessment only).';
         MyNJILGA_Invoicing_Notes::log(
             (int) $invoiceRow->fluentcrm_company_id,
             $settles ? 'Dues invoice paid' : 'Assessment invoice paid',
             sprintf(
-                '%d %s invoice paid in full (%s) — %d member(s) %s; WordPress role granted to %d, %d had no linked account/role.',
+                '%d %s invoice paid in full (%s) — %d member(s) %s; %s',
                 $duesYear,
                 $settles ? 'dues' : 'assessment',
                 $source,
                 count( $members ),
                 $settles ? 'marked current' : 'marked assessment paid',
-                $granted,
-                $skipped
+                $roleText
             )
         );
 
-        return [ 'members' => $touched, 'roles_granted' => $granted, 'roles_skipped' => $skipped ];
+        return [ 'members' => $touched, 'roles_granted' => $granted, 'roles_skipped' => $skipped, 'role_outcomes' => $report['counts'] ];
+    }
+
+    /**
+     * One member's role step, isolated: whatever goes wrong inside (a
+     * third-party add_user_role / remove_user_role hook, say) comes back
+     * as a `failed` result instead of leaving settle() half-done — that
+     * member is flagged on the invoice row, the rest of the roster keeps
+     * its tags and the row its paid status.
+     *
+     * The payment is the proof, so the "paid for this or next year" test is
+     * skipped: a late payment of a past year's invoice still grants. The
+     * role comes from the CURRENT mapping and the contact's CURRENT tags,
+     * never the ones frozen into the snapshot; a category mapped to "— no
+     * role —" is reported as such rather than as a grant of nothing.
+     *
+     * @param \FluentCrm\App\Models\Subscriber $contact
+     * @return array<string,mixed> MyNJILGA_Role_Sync::sync_contact()'s shape, plus `message` on a failure.
+     */
+    private static function role_step( $contact ): array {
+        try {
+            $result = MyNJILGA_Role_Sync::sync_contact( $contact, true );
+            if ( $result['role'] === '' && in_array( $result['status'], [ MyNJILGA_Role_Sync::STATUS_CHANGED, MyNJILGA_Role_Sync::STATUS_UNCHANGED ], true ) ) {
+                $result['status'] = MyNJILGA_Role_Sync::STATUS_NO_ROLE;
+            }
+            return $result;
+        } catch ( \Throwable $e ) {
+            return [
+                'status'  => MyNJILGA_Role_Sync::STATUS_FAILED,
+                'user_id' => 0,
+                'role'    => '',
+                'added'   => [],
+                'removed' => [],
+                'created' => false,
+                'message' => $e->getMessage() !== '' ? $e->getMessage() : get_class( $e ),
+            ];
+        }
     }
 
     /**

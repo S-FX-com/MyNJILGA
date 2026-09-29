@@ -142,4 +142,249 @@ class RoleSyncTest extends NJILGA_TestCase {
         ];
         $this->assertSame( MyNJILGA_Role_Sync::mapping_signature( $cats, 'a' ), MyNJILGA_Role_Sync::mapping_signature( $cats, 'b' ) );
     }
+
+    // -------------------------------------------------------------------
+    // Privileged roles — never granted by a payment, never touched at all
+    // -------------------------------------------------------------------
+
+    public function test_the_administrator_role_is_refused(): void {
+        $adminCaps = [ 'read' => true, 'edit_posts' => true, 'manage_options' => true, 'promote_users' => true, 'install_plugins' => true ];
+        $this->assertTrue( MyNJILGA_Role_Sync::is_privileged( $adminCaps ) );
+        $this->assertSame( [ 'status' => 'role_privileged', 'add' => [], 'remove' => [] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], 'administrator', [ 'professional' ], true, $adminCaps ) );
+    }
+
+    public function test_the_editor_role_is_allowed(): void {
+        $editorCaps = [ 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'publish_posts' => true, 'moderate_comments' => true, 'upload_files' => true, 'manage_categories' => true ];
+        $this->assertFalse( MyNJILGA_Role_Sync::is_privileged( $editorCaps ) );
+        $this->assertSame( [ 'status' => 'changed', 'add' => [ 'editor' ], 'remove' => [] ], MyNJILGA_Role_Sync::plan( [ 'subscriber' ], 'editor', [ 'professional' ], true, $editorCaps ) );
+    }
+
+    public function test_a_custom_role_holding_promote_users_is_refused(): void {
+        $this->assertSame( 'role_privileged', MyNJILGA_Role_Sync::plan( [], 'hr_admin', [], true, [ 'read' => true, 'promote_users' => true ] )['status'] );
+    }
+
+    public function test_every_capability_on_the_deny_list_makes_a_role_privileged(): void {
+        $deny = [ 'manage_options', 'promote_users', 'edit_users', 'create_users', 'delete_users', 'install_plugins', 'activate_plugins', 'edit_plugins', 'edit_themes', 'switch_themes', 'update_core', 'manage_network' ];
+        $this->assertSame( $deny, MyNJILGA_Role_Sync::PRIVILEGED_CAPS );
+        foreach ( $deny as $cap ) {
+            $this->assertTrue( MyNJILGA_Role_Sync::is_privileged( [ 'read' => true, $cap => true ] ), "$cap as cap => true" );
+            $this->assertTrue( MyNJILGA_Role_Sync::is_privileged( [ 'read', $cap ] ), "$cap in a plain list" );
+        }
+    }
+
+    public function test_a_denied_capability_does_not_count_and_ordinary_ones_are_fine(): void {
+        $this->assertFalse( MyNJILGA_Role_Sync::is_privileged( [ 'manage_options' => false, 'promote_users' => 0, 'read' => true ] ) );
+        $this->assertFalse( MyNJILGA_Role_Sync::is_privileged( [] ) );
+        $this->assertFalse( MyNJILGA_Role_Sync::is_privileged( [ 'read' => true, 'edit_posts' => true, 'edit_published_posts' => true, 'delete_posts' => true, 'list_users' => true ] ) );
+    }
+
+    public function test_a_privileged_role_is_reported_even_when_the_account_already_holds_it(): void {
+        // The mapping is what is dangerous; an admin who also pays dues
+        // must not hide it behind "unchanged".
+        $this->assertSame( 'role_privileged', MyNJILGA_Role_Sync::plan( [ 'administrator' ], 'administrator', [], true, [ 'manage_options' => true ] )['status'] );
+    }
+
+    /** A privileged mapping is a misconfiguration like an undefined role: nothing is added AND nothing is removed. */
+    public function test_a_privileged_mapping_leaves_the_old_role_in_place(): void {
+        $plan = MyNJILGA_Role_Sync::plan( [ 'student' ], 'administrator', [ 'student', 'professional' ], true, [ 'manage_options' => true ] );
+        $this->assertSame( [ 'status' => 'role_privileged', 'add' => [], 'remove' => [] ], $plan );
+    }
+
+    public function test_the_lazily_created_role_is_the_one_every_seeded_category_maps_to(): void {
+        foreach ( MyNJILGA_Dues_Settings::defaults()['categories'] as $cat ) {
+            $this->assertSame( MyNJILGA_Role_Sync::LEGACY_ROLE, $cat['role'] );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // aggregate / describe — the numbers and the Company Note
+    // -------------------------------------------------------------------
+
+    private const NOW = '2026-09-29 12:00:00';
+
+    private function results( array $statuses ): array {
+        $out = [];
+        foreach ( $statuses as $s ) {
+            $out[] = is_array( $s ) ? $s : [ 'status' => $s ];
+        }
+        return $out;
+    }
+
+    public function test_aggregate_counts_each_status_in_a_fixed_order(): void {
+        $agg = MyNJILGA_Role_Sync::aggregate( $this->results( [
+            'no_account', 'changed', 'failed', 'unchanged', 'changed', 'role_undefined', 'no_account', 'changed', 'no_contact', 'no_role_configured', 'role_privileged',
+        ] ) );
+        $this->assertSame( [
+            'changed' => 3, 'unchanged' => 1, 'no_account' => 2, 'no_contact' => 1, 'no_role_configured' => 1, 'role_undefined' => 1, 'role_privileged' => 1, 'failed' => 1,
+        ], $agg['counts'] );
+        $this->assertSame( 4, $agg['granted'], 'granted = changed + unchanged' );
+    }
+
+    public function test_aggregate_of_nothing_is_empty(): void {
+        $agg = MyNJILGA_Role_Sync::aggregate( [] );
+        $this->assertSame( [], $agg['counts'] );
+        $this->assertSame( 0, $agg['granted'] );
+        $this->assertSame( [], $agg['problems'] );
+        $this->assertSame( [], $agg['ok_roles'] );
+    }
+
+    public function test_aggregate_groups_problems_by_status_and_role_most_serious_first(): void {
+        $agg = MyNJILGA_Role_Sync::aggregate( $this->results( [
+            [ 'status' => 'role_undefined', 'role' => 'student' ],
+            [ 'status' => 'role_undefined', 'role' => 'student' ],
+            [ 'status' => 'role_undefined', 'role' => 'student' ],
+            [ 'status' => 'role_undefined', 'role' => 'alumni' ],
+            [ 'status' => 'role_privileged', 'role' => 'administrator' ],
+            [ 'status' => 'no_account', 'role' => 'professional' ],
+            [ 'status' => 'no_role_configured' ],
+        ] ) );
+        $this->assertSame( [
+            [ 'status' => 'role_privileged', 'role' => 'administrator', 'count' => 1 ],
+            [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 3 ],
+            [ 'status' => 'role_undefined', 'role' => 'alumni', 'count' => 1 ],
+        ], $agg['problems'], 'privileged outranks undefined, then most members' );
+    }
+
+    public function test_aggregate_collects_ok_roles_created_roles_and_error_messages(): void {
+        $agg = MyNJILGA_Role_Sync::aggregate( $this->results( [
+            [ 'status' => 'changed', 'role' => 'professional', 'created' => true ],
+            [ 'status' => 'changed', 'role' => 'professional', 'created' => true ],
+            [ 'status' => 'unchanged', 'role' => 'student' ],
+            [ 'status' => 'role_undefined', 'role' => 'alumni' ],
+            [ 'status' => 'failed', 'message' => 'hook exploded' ],
+            [ 'status' => 'failed', 'message' => 'hook exploded' ],
+            [ 'status' => 'failed', 'message' => 'second' ],
+            [ 'status' => 'failed', 'message' => 'third' ],
+            [ 'status' => 'failed', 'message' => 'fourth' ],
+        ] ) );
+        $this->assertSame( [ 'professional', 'student' ], $agg['ok_roles'], 'alumni was not granted, so it is not ok' );
+        $this->assertSame( [ 'professional' ], $agg['created'] );
+        $this->assertSame( [ 'hook exploded', 'second', 'third' ], $agg['errors'], 'distinct, first three' );
+    }
+
+    public function test_the_company_note_says_plainly_what_happened(): void {
+        $counts = [ 'changed' => 3, 'unchanged' => 1, 'no_account' => 2, 'role_undefined' => 1 ];
+        $this->assertSame(
+            'WordPress role: 3 granted, 1 already had it, 2 have no website account, 1 not granted (role not defined on this site)',
+            MyNJILGA_Role_Sync::describe_outcomes( $counts )
+        );
+    }
+
+    public function test_the_company_note_wording_agrees_in_number_and_covers_every_status(): void {
+        $this->assertSame( 'WordPress role: 1 has no website account', MyNJILGA_Role_Sync::describe_outcomes( [ 'no_account' => 1 ] ) );
+        $this->assertSame( 'WordPress role: 1 has no role set for their category', MyNJILGA_Role_Sync::describe_outcomes( [ 'no_role_configured' => 1 ] ) );
+        $this->assertSame( 'WordPress role: 4 have no role set for their category', MyNJILGA_Role_Sync::describe_outcomes( [ 'no_role_configured' => 4 ] ) );
+        $this->assertSame( 'WordPress role: 2 not found in the CRM', MyNJILGA_Role_Sync::describe_outcomes( [ 'no_contact' => 2 ] ) );
+        $this->assertSame( 'WordPress role: 1 not granted (role is administrator-level, never granted by a payment)', MyNJILGA_Role_Sync::describe_outcomes( [ 'role_privileged' => 1 ] ) );
+        $this->assertSame( 'WordPress role: 1 failed (see the invoice\'s error note)', MyNJILGA_Role_Sync::describe_outcomes( [ 'failed' => 1 ] ) );
+        $this->assertSame( 'WordPress role: no members to update', MyNJILGA_Role_Sync::describe_outcomes( [] ) );
+        $this->assertSame( 'WordPress role: no members to update', MyNJILGA_Role_Sync::describe_outcomes( [ 'changed' => 0 ] ), 'zero counts are not listed' );
+    }
+
+    public function test_the_problem_sentences_name_the_role_and_where_to_fix_it(): void {
+        $text = MyNJILGA_Role_Sync::describe_problems(
+            [
+                [ 'status' => 'role_privileged', 'role' => 'administrator', 'count' => 2 ],
+                [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 1 ],
+            ],
+            [ 'professional' ]
+        );
+        $this->assertSame(
+            "Role 'administrator' has administrator-level capabilities, so a payment never grants it — check Settings → Membership categories."
+            . " Role 'student' is mapped in Settings → Membership categories but is not defined on this site."
+            . " The 'professional' role did not exist on this site, so it was created (capability: read only).",
+            $text
+        );
+        $this->assertSame( '', MyNJILGA_Role_Sync::describe_problems( [], [] ) );
+    }
+
+    // -------------------------------------------------------------------
+    // The stored problem callout (Dashboard)
+    // -------------------------------------------------------------------
+
+    public function test_a_first_problem_is_stored_with_its_first_and_last_sighting(): void {
+        $this->assertSame(
+            [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 2, 'since' => self::NOW, 'last' => self::NOW ],
+            MyNJILGA_Role_Sync::merge_problem( null, 'role_undefined', 'student', 2, self::NOW )
+        );
+    }
+
+    public function test_the_same_problem_accumulates_and_keeps_its_since(): void {
+        $stored = [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 2, 'since' => '2026-09-01 08:00:00', 'last' => '2026-09-02 08:00:00' ];
+        $this->assertSame(
+            [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 5, 'since' => '2026-09-01 08:00:00', 'last' => self::NOW ],
+            MyNJILGA_Role_Sync::merge_problem( $stored, 'role_undefined', 'student', 3, self::NOW )
+        );
+    }
+
+    public function test_a_different_problem_replaces_the_stored_one(): void {
+        $stored = [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 9, 'since' => '2026-09-01 08:00:00', 'last' => '2026-09-02 08:00:00' ];
+        $this->assertSame(
+            [ 'status' => 'role_privileged', 'role' => 'administrator', 'count' => 1, 'since' => self::NOW, 'last' => self::NOW ],
+            MyNJILGA_Role_Sync::merge_problem( $stored, 'role_privileged', 'administrator', 1, self::NOW )
+        );
+        $this->assertSame(
+            [ 'status' => 'role_undefined', 'role' => 'alumni', 'count' => 1, 'since' => self::NOW, 'last' => self::NOW ],
+            MyNJILGA_Role_Sync::merge_problem( $stored, 'role_undefined', 'alumni', 1, self::NOW )
+        );
+    }
+
+    public function test_a_count_below_one_still_records_one_sighting(): void {
+        $this->assertSame( 1, MyNJILGA_Role_Sync::merge_problem( null, 'role_undefined', 'student', 0, self::NOW )['count'] );
+    }
+
+    private function batch( array $results ): array {
+        return MyNJILGA_Role_Sync::aggregate( $this->results( $results ) );
+    }
+
+    public function test_a_batch_that_meets_a_problem_records_its_worst_one(): void {
+        $next = MyNJILGA_Role_Sync::next_problem(
+            null,
+            $this->batch( [ [ 'status' => 'role_undefined', 'role' => 'student' ], [ 'status' => 'role_privileged', 'role' => 'administrator' ] ] ),
+            [ 'student', 'administrator', 'professional' ],
+            self::NOW
+        );
+        $this->assertSame( 'role_privileged', $next['status'] );
+        $this->assertSame( 'administrator', $next['role'] );
+    }
+
+    public function test_a_recurring_problem_keeps_counting_across_payments(): void {
+        $agg    = $this->batch( [ [ 'status' => 'role_undefined', 'role' => 'student' ], [ 'status' => 'role_undefined', 'role' => 'student' ] ] );
+        $mapped = [ 'student', 'professional' ];
+        $first  = MyNJILGA_Role_Sync::next_problem( null, $agg, $mapped, '2026-09-01 08:00:00' );
+        $second = MyNJILGA_Role_Sync::next_problem( $first, $agg, $mapped, self::NOW );
+        $this->assertSame( 4, $second['count'] );
+        $this->assertSame( '2026-09-01 08:00:00', $second['since'] );
+        $this->assertSame( self::NOW, $second['last'] );
+    }
+
+    public function test_a_payment_that_grants_the_role_clears_the_problem(): void {
+        $stored = [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 4, 'since' => '2026-09-01 08:00:00', 'last' => '2026-09-02 08:00:00' ];
+        $this->assertSame( null, MyNJILGA_Role_Sync::next_problem( $stored, $this->batch( [ [ 'status' => 'changed', 'role' => 'student' ] ] ), [ 'student' ], self::NOW ) );
+        $this->assertSame( null, MyNJILGA_Role_Sync::next_problem( $stored, $this->batch( [ [ 'status' => 'unchanged', 'role' => 'student' ] ] ), [ 'student' ], self::NOW ), 'finding it already held counts too' );
+    }
+
+    public function test_a_payment_of_some_other_role_does_not_clear_the_problem(): void {
+        $stored = [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 4, 'since' => '2026-09-01 08:00:00', 'last' => '2026-09-02 08:00:00' ];
+        $this->assertSame( $stored, MyNJILGA_Role_Sync::next_problem( $stored, $this->batch( [ [ 'status' => 'changed', 'role' => 'professional' ], [ 'status' => 'no_account', 'role' => 'student' ] ] ), [ 'student', 'professional' ], self::NOW ) );
+    }
+
+    public function test_fixing_the_mapping_clears_a_problem_that_could_never_resolve_itself(): void {
+        $stored = [ 'status' => 'role_privileged', 'role' => 'administrator', 'count' => 3, 'since' => '2026-09-01 08:00:00', 'last' => '2026-09-02 08:00:00' ];
+        $this->assertSame( $stored, MyNJILGA_Role_Sync::next_problem( $stored, $this->batch( [] ), [ 'administrator', 'professional' ], self::NOW ), 'still mapped: stays' );
+        $this->assertSame( null, MyNJILGA_Role_Sync::next_problem( $stored, $this->batch( [ [ 'status' => 'changed', 'role' => 'professional' ] ] ), [ 'professional' ], self::NOW ), 'no longer mapped: gone' );
+    }
+
+    public function test_a_problem_seen_again_in_the_batch_that_resolved_the_old_one_is_recorded_afresh(): void {
+        $stored = [ 'status' => 'role_undefined', 'role' => 'student', 'count' => 1, 'since' => '2026-09-01 08:00:00', 'last' => '2026-09-01 08:00:00' ];
+        $agg  = $this->batch( [ [ 'status' => 'changed', 'role' => 'student' ], [ 'status' => 'role_undefined', 'role' => 'student' ] ] );
+        $next = MyNJILGA_Role_Sync::next_problem( $stored, $agg, [ 'student' ], self::NOW );
+        $this->assertSame( 'role_undefined', $next['status'] );
+        $this->assertSame( 1, $next['count'], 'counted from what this batch saw, not stacked on the problem it just cleared' );
+        $this->assertSame( self::NOW, $next['since'] );
+    }
+
+    public function test_no_problem_and_a_quiet_batch_stays_no_problem(): void {
+        $this->assertSame( null, MyNJILGA_Role_Sync::next_problem( null, $this->batch( [ 'changed', 'no_account', 'unchanged', 'no_role_configured', 'failed' ] ), [ 'professional' ], self::NOW ) );
+    }
 }

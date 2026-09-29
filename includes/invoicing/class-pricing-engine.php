@@ -202,12 +202,14 @@ class MyNJILGA_Pricing_Engine {
 
     /**
      * First category (configured order) whose tag the contact carries;
-     * else the default; else null.
+     * else the default; else null. Public so a read-only view (My
+     * Membership) names a contact's category by the very rule pricing
+     * uses, rather than a second copy of it.
      *
      * @param array<int,string>              $tags
      * @param array<int,array<string,mixed>> $categories
      */
-    private static function category_for( array $tags, array $categories, string $defaultKey ): ?string {
+    public static function category_for( array $tags, array $categories, string $defaultKey ): ?string {
         foreach ( $categories as $cat ) {
             $tag = (string) ( $cat['tag'] ?? '' );
             if ( $tag !== '' && in_array( $tag, $tags, true ) ) {

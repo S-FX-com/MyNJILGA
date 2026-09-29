@@ -2,8 +2,8 @@
 /**
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
- * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
- * Version:     3.6.0
+ * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and a member-facing dues status and membership overview — driven entirely from FluentCRM tags on the local install.
+ * Version:     3.7.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -37,6 +37,7 @@ if ( class_exists( '\\YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory' ) ) {
 
 // Reports (tag-driven).
 require_once NJILGA_REPORT_DIR . 'includes/class-tags.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-membership-stats.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-members-data.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-csv.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-xls.php';
@@ -59,6 +60,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-client.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-stripe-connection.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-pricing-engine.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-ledger-totals.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-stats.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-snapshot.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-invoice-table.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-payments-table.php';
@@ -75,8 +77,8 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-roster.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-creator.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
-require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-role-sync.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-payments.php';
@@ -87,8 +89,10 @@ require_once NJILGA_REPORT_DIR . 'includes/class-page-settings.php';
 require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-applications-table.php';
 require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-form.php';
 require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-review.php';
+require_once NJILGA_REPORT_DIR . 'includes/enrollment/class-application-stats.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-applications.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-firm-status-page.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-my-membership.php';
 
 // Online joining — [njilga_join]: join and pay through Stripe Checkout,
 // with the firm upsell and colleague invitations. See includes/join/.
@@ -156,11 +160,12 @@ MyNJILGA_Role_Sync::register();
 add_action( 'plugins_loaded', [ 'MyNJILGA_Payment_Listener', 'register' ], 20 );
 
 // Public shortcodes: [njilga_membership_application], [njilga_firm_dues_status],
-// [njilga_join] (online joining; its tables are created on first use as
-// well as on admin_init, since a public page can be the first request
-// after an update).
+// [njilga_my_membership] (a member's standing, firm and fees), [njilga_join]
+// (online joining; its tables are created on first use as well as on
+// admin_init, since a public page can be the first request after an update).
 MyNJILGA_Application_Form::register();
 MyNJILGA_Firm_Status_Page::register();
+MyNJILGA_My_Membership::register();
 MyNJILGA_Join_Form::register();
 MyNJILGA_Join_Documents::register();
 add_action( 'init', static function () {
@@ -181,6 +186,9 @@ add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_
 // Setup page: apply a full WordPress role sync after the confirmation screen.
 add_action( 'admin_post_' . MyNJILGA_Page_Setup::ACTION_ROLE_SYNC, [ 'MyNJILGA_Page_Setup', 'handle_role_sync' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Setup::ACTION_ROLE_FORGET, [ 'MyNJILGA_Page_Setup', 'handle_role_forget' ] );
+
+// Dashboard: "Refresh figures" drops the cached membership stats.
+add_action( 'admin_post_' . MyNJILGA_Page_Dashboard::ACTION_REFRESH, [ 'MyNJILGA_Page_Dashboard', 'handle_refresh' ] );
 
 // Per-page CSV exports. ?type=members|trustees|companies determines the report.
 add_action( 'admin_post_my_njilga_export_csv', static function () {

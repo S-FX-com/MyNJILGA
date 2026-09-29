@@ -25,18 +25,61 @@ class MyNJILGA_Role_Sync {
     /** The role every category used before roles were configurable — always managed. */
     const LEGACY_ROLE = 'professional';
 
-    const STATUS_CHANGED        = 'changed';
-    const STATUS_UNCHANGED      = 'unchanged';
-    const STATUS_ROLE_UNDEFINED = 'role_undefined';
-    const STATUS_NOT_PAID       = 'not_paid';
-    const STATUS_NO_ACCOUNT     = 'no_account';
-    const STATUS_FAILED         = 'failed';
-    const STATUSES              = [ self::STATUS_CHANGED, self::STATUS_UNCHANGED, self::STATUS_ROLE_UNDEFINED, self::STATUS_NOT_PAID, self::STATUS_NO_ACCOUNT, self::STATUS_FAILED ];
+    const STATUS_CHANGED         = 'changed';
+    const STATUS_UNCHANGED       = 'unchanged';
+    const STATUS_ROLE_UNDEFINED  = 'role_undefined';
+    const STATUS_ROLE_PRIVILEGED = 'role_privileged';
+    const STATUS_NOT_PAID        = 'not_paid';
+    const STATUS_NO_ACCOUNT      = 'no_account';
+    const STATUS_FAILED          = 'failed';
+    /** What sync_contact() can return — the keys of every per-status count. */
+    const STATUSES = [ self::STATUS_CHANGED, self::STATUS_UNCHANGED, self::STATUS_ROLE_UNDEFINED, self::STATUS_ROLE_PRIVILEGED, self::STATUS_NOT_PAID, self::STATUS_NO_ACCOUNT, self::STATUS_FAILED ];
+
+    /** settle()-only outcomes: a snapshot member with no CRM contact, and a category mapped to no role. */
+    const STATUS_NO_CONTACT = 'no_contact';
+    const STATUS_NO_ROLE    = 'no_role_configured';
+
+    /** Misconfigurations the admin has to fix — the ones problem() reports. */
+    const PROBLEM_STATUSES = [ self::STATUS_ROLE_PRIVILEGED, self::STATUS_ROLE_UNDEFINED ];
+
+    /** The order outcomes are listed in, in counts and in the Company Note. */
+    const OUTCOME_ORDER = [
+        self::STATUS_CHANGED,
+        self::STATUS_UNCHANGED,
+        self::STATUS_NO_ACCOUNT,
+        self::STATUS_NO_CONTACT,
+        self::STATUS_NO_ROLE,
+        self::STATUS_ROLE_UNDEFINED,
+        self::STATUS_ROLE_PRIVILEGED,
+        self::STATUS_FAILED,
+    ];
+
+    /**
+     * A role holding ANY of these is administrator-level and never granted
+     * by a payment: the ones that manage the site, its users, its code or
+     * (on multisite) the network. A deny-list, not an allow-list, because
+     * sites legitimately map categories to custom roles we cannot enumerate.
+     */
+    const PRIVILEGED_CAPS = [
+        'manage_options',
+        'promote_users',
+        'edit_users',
+        'create_users',
+        'delete_users',
+        'install_plugins',
+        'activate_plugins',
+        'edit_plugins',
+        'edit_themes',
+        'switch_themes',
+        'update_core',
+        'manage_network',
+    ];
 
     const HOOK_CHUNK     = 'njilga_role_sync_chunk';
     const AS_GROUP       = 'njilga-roles';
     const OPTION_HISTORY = 'njilga_role_sync_history';
     const OPTION_LAST    = 'njilga_role_sync_last';
+    const OPTION_PROBLEM = 'njilga_role_sync_problem';
 
     // -------------------------------------------------------------------------
     // Pure
@@ -99,16 +142,26 @@ class MyNJILGA_Role_Sync {
 
     /**
      * What a sync would do to one account. A desired role the site
-     * doesn't define changes nothing at all — never strip a member's old
-     * role and leave them with none over a typo in Settings.
+     * doesn't define — or one that is administrator-level — changes
+     * nothing at all: never strip a member's old role and leave them with
+     * none over a typo in Settings, and never hand out `administrator`
+     * because a category was mapped to it.
      *
-     * @param array<int|string,string> $userRoles WP_User::$roles (keys may be sparse).
-     * @param array<int,string>        $managed
+     * @param array<int|string,string>      $userRoles    WP_User::$roles (keys may be sparse).
+     * @param array<int,string>             $managed
+     * @param array<int|string,bool|string> $capabilities The desired role's capabilities:
+     *   WP_Role::$capabilities (cap => bool) or a plain list of capability names.
      * @return array{status:string,add:array<int,string>,remove:array<int,string>}
      */
-    public static function plan( array $userRoles, string $desired, array $managed, bool $desiredDefined ): array {
+    public static function plan( array $userRoles, string $desired, array $managed, bool $desiredDefined, array $capabilities = [] ): array {
         if ( $desired !== '' && ! $desiredDefined ) {
             return [ 'status' => self::STATUS_ROLE_UNDEFINED, 'add' => [], 'remove' => [] ];
+        }
+        // Reported even when the account already holds it: the mapping is
+        // what is dangerous, and an admin who also pays dues must not hide
+        // it behind "unchanged".
+        if ( $desired !== '' && self::is_privileged( $capabilities ) ) {
+            return [ 'status' => self::STATUS_ROLE_PRIVILEGED, 'add' => [], 'remove' => [] ];
         }
         $userRoles = array_values( array_map( 'strval', $userRoles ) );
         $remove    = array_values( array_diff( array_intersect( $userRoles, $managed ), [ $desired ] ) );
@@ -135,6 +188,212 @@ class MyNJILGA_Role_Sync {
         return md5( (string) json_encode( [ $pairs, self::resolve_role( $categories, [], $defaultKey ) ] ) );
     }
 
+    /**
+     * Whether a role holding these capabilities is administrator-level
+     * (PRIVILEGED_CAPS). A capability set to false is a denial, not a
+     * grant, and does not count.
+     *
+     * @param array<int|string,bool|string> $capabilities cap => bool, or a list of names.
+     */
+    public static function is_privileged( array $capabilities ): bool {
+        foreach ( $capabilities as $key => $value ) {
+            if ( is_int( $key ) ) {
+                $cap = (string) $value; // A plain list: the value is the name.
+            } elseif ( $value ) {
+                $cap = (string) $key;   // cap => granted.
+            } else {
+                continue;
+            }
+            if ( in_array( $cap, self::PRIVILEGED_CAPS, true ) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Roll a batch of results up for reporting and the problem callout.
+     * Each result needs a `status`; `role`, `created` and `message` are
+     * read when present.
+     *
+     *   counts    status => number of results, nonzero ones only, in OUTCOME_ORDER
+     *   granted   changed + unchanged: members who now hold their role
+     *   problems  [ [status, role, count] ] for role_privileged / role_undefined,
+     *             most serious first (privileged before undefined, then most
+     *             members, then role name) so the callout is deterministic
+     *   ok_roles  roles at least one member was granted or already held
+     *   created   roles this batch created on the site
+     *   errors    distinct error messages, first 3
+     *
+     * @param array<int,array<string,mixed>> $results
+     * @return array{counts:array<string,int>,granted:int,problems:array<int,array{status:string,role:string,count:int}>,ok_roles:array<int,string>,created:array<int,string>,errors:array<int,string>}
+     */
+    public static function aggregate( array $results ): array {
+        $tally   = [];
+        $groups  = [];
+        $ok      = [];
+        $created = [];
+        $errors  = [];
+        foreach ( $results as $r ) {
+            $status = (string) ( $r['status'] ?? '' );
+            if ( $status === '' ) {
+                continue;
+            }
+            $role             = (string) ( $r['role'] ?? '' );
+            $tally[ $status ] = ( $tally[ $status ] ?? 0 ) + 1;
+
+            if ( ( $status === self::STATUS_CHANGED || $status === self::STATUS_UNCHANGED ) && $role !== '' ) {
+                $ok[ $role ] = true;
+            }
+            if ( in_array( $status, self::PROBLEM_STATUSES, true ) ) {
+                $groupKey = $status . '|' . $role;
+                if ( ! isset( $groups[ $groupKey ] ) ) {
+                    $groups[ $groupKey ] = [ 'status' => $status, 'role' => $role, 'count' => 0 ];
+                }
+                $groups[ $groupKey ]['count']++;
+            }
+            if ( ! empty( $r['created'] ) && $role !== '' ) {
+                $created[ $role ] = true;
+            }
+            if ( $status === self::STATUS_FAILED && (string) ( $r['message'] ?? '' ) !== '' ) {
+                $errors[ (string) $r['message'] ] = true;
+            }
+        }
+
+        $counts = [];
+        foreach ( self::OUTCOME_ORDER as $status ) {
+            if ( isset( $tally[ $status ] ) ) {
+                $counts[ $status ] = $tally[ $status ];
+                unset( $tally[ $status ] );
+            }
+        }
+        foreach ( $tally as $status => $n ) { // A status this class does not know: keep it, last.
+            $counts[ (string) $status ] = $n;
+        }
+
+        $problems = array_values( $groups );
+        $rank     = array_flip( self::PROBLEM_STATUSES );
+        usort( $problems, static function ( $a, $b ) use ( $rank ) {
+            return [ $rank[ $a['status'] ], -$a['count'], $a['role'] ] <=> [ $rank[ $b['status'] ], -$b['count'], $b['role'] ];
+        } );
+
+        return [
+            'counts'   => $counts,
+            'granted'  => ( $counts[ self::STATUS_CHANGED ] ?? 0 ) + ( $counts[ self::STATUS_UNCHANGED ] ?? 0 ),
+            'problems' => $problems,
+            'ok_roles' => array_map( 'strval', array_keys( $ok ) ),
+            'created'  => array_map( 'strval', array_keys( $created ) ),
+            'errors'   => array_slice( array_map( 'strval', array_keys( $errors ) ), 0, 3 ),
+        ];
+    }
+
+    /**
+     * The plain-English role line for a Company Note, from aggregate()'s
+     * counts: "WordPress role: 3 granted, 1 already had it, 2 have no
+     * website account, 1 not granted (role not defined on this site)".
+     *
+     * @param array<string,int> $counts
+     */
+    public static function describe_outcomes( array $counts ): string {
+        $phrase = [
+            self::STATUS_CHANGED         => static function ( $n ) { return $n . ' granted'; },
+            self::STATUS_UNCHANGED       => static function ( $n ) { return $n . ' already had it'; },
+            self::STATUS_NO_ACCOUNT      => static function ( $n ) { return $n . ( $n === 1 ? ' has' : ' have' ) . ' no website account'; },
+            self::STATUS_NO_CONTACT      => static function ( $n ) { return $n . ' not found in the CRM'; },
+            self::STATUS_NO_ROLE         => static function ( $n ) { return $n . ( $n === 1 ? ' has' : ' have' ) . ' no role set for their category'; },
+            self::STATUS_ROLE_UNDEFINED  => static function ( $n ) { return $n . ' not granted (role not defined on this site)'; },
+            self::STATUS_ROLE_PRIVILEGED => static function ( $n ) { return $n . ' not granted (role is administrator-level, never granted by a payment)'; },
+            self::STATUS_FAILED          => static function ( $n ) { return $n . ' failed (see the invoice\'s error note)'; },
+        ];
+
+        $parts = [];
+        foreach ( $counts as $status => $n ) {
+            $n = (int) $n;
+            if ( $n <= 0 ) {
+                continue;
+            }
+            $parts[] = isset( $phrase[ $status ] ) ? $phrase[ $status ]( $n ) : $n . ' ' . $status;
+        }
+        return $parts ? 'WordPress role: ' . implode( ', ', $parts ) : 'WordPress role: no members to update';
+    }
+
+    /**
+     * The what-to-do sentences for a batch's problems and created roles —
+     * the part of the Company Note that tells staff how to fix it.
+     *
+     * @param array<int,array{status:string,role:string,count:int}> $problems aggregate()['problems']
+     * @param array<int,string>                                     $created  aggregate()['created']
+     */
+    public static function describe_problems( array $problems, array $created ): string {
+        $out = [];
+        foreach ( $problems as $p ) {
+            $role = "'" . $p['role'] . "'";
+            if ( $p['status'] === self::STATUS_ROLE_PRIVILEGED ) {
+                $out[] = "Role $role has administrator-level capabilities, so a payment never grants it — check Settings → Membership categories.";
+            } elseif ( $p['status'] === self::STATUS_ROLE_UNDEFINED ) {
+                $out[] = "Role $role is mapped in Settings → Membership categories but is not defined on this site.";
+            }
+        }
+        foreach ( $created as $role ) {
+            $out[] = "The '$role' role did not exist on this site, so it was created (capability: read only).";
+        }
+        return implode( ' ', $out );
+    }
+
+    /**
+     * Fold one more sighting of a problem into the stored one: the same
+     * status + role keeps counting from the original `since`; a different
+     * one replaces it and starts again.
+     *
+     * @param array<string,mixed>|null $stored
+     * @return array{status:string,role:string,count:int,since:string,last:string}
+     */
+    public static function merge_problem( ?array $stored, string $status, string $role, int $count, string $now ): array {
+        $count = max( 1, $count );
+        if ( $stored && (string) ( $stored['status'] ?? '' ) === $status && (string) ( $stored['role'] ?? '' ) === $role ) {
+            $since = (string) ( $stored['since'] ?? '' );
+            return [
+                'status' => $status,
+                'role'   => $role,
+                'count'  => max( 0, (int) ( $stored['count'] ?? 0 ) ) + $count,
+                'since'  => $since !== '' ? $since : $now,
+                'last'   => $now,
+            ];
+        }
+        return [ 'status' => $status, 'role' => $role, 'count' => $count, 'since' => $now, 'last' => $now ];
+    }
+
+    /**
+     * The problem to store after a batch, or null for none.
+     *
+     *   1. Resolved  — a member was granted, or already held, the very role
+     *                  the stored problem is about.
+     *   2. Fixed     — no category maps to that role any more (the mapping
+     *                  was corrected; a privileged role never gets granted,
+     *                  so rule 1 alone would leave that callout up forever).
+     *   3. Recorded  — this batch's most serious problem, merged into what
+     *                  survived 1 and 2.
+     *
+     * @param array<string,mixed>|null $stored      problem() as stored.
+     * @param array<string,mixed>      $agg         aggregate()'s return.
+     * @param array<int,string>        $mappedRoles Every role a category maps to right now.
+     * @return array{status:string,role:string,count:int,since:string,last:string}|null
+     */
+    public static function next_problem( ?array $stored, array $agg, array $mappedRoles, string $now ): ?array {
+        $problem = $stored;
+        if ( $problem && in_array( (string) $problem['role'], (array) ( $agg['ok_roles'] ?? [] ), true ) ) {
+            $problem = null;
+        }
+        if ( $problem && ! in_array( (string) $problem['role'], $mappedRoles, true ) ) {
+            $problem = null;
+        }
+        $worst = ( (array) ( $agg['problems'] ?? [] ) )[0] ?? null;
+        if ( $worst ) {
+            $problem = self::merge_problem( $problem, (string) $worst['status'], (string) $worst['role'], (int) $worst['count'], $now );
+        }
+        return $problem;
+    }
+
     // -------------------------------------------------------------------------
     // WordPress + FluentCRM
     // -------------------------------------------------------------------------
@@ -155,10 +414,10 @@ class MyNJILGA_Role_Sync {
      * @param object $contact    A FluentCRM Subscriber.
      * @param bool   $assumePaid Skip the paid test — for a caller that just
      *                           settled a payment, or checked is_paid() itself.
-     * @return array{status:string,role:string,user_id:int,added:array<int,string>,removed:array<int,string>}
+     * @return array{status:string,role:string,user_id:int,added:array<int,string>,removed:array<int,string>,created:bool}
      */
     public static function sync_contact( $contact, bool $assumePaid = false ): array {
-        $e    = self::evaluate( $contact, $assumePaid, self::current_managed_roles() );
+        $e    = self::evaluate( $contact, $assumePaid, self::current_managed_roles(), true );
         $user = $e['user'];
         if ( $user ) {
             // Add before removing, so the account is never left role-less mid-swap.
@@ -175,6 +434,7 @@ class MyNJILGA_Role_Sync {
             'user_id' => $user ? (int) $user->ID : 0,
             'added'   => $e['add'],
             'removed' => $e['remove'],
+            'created' => $e['created'],
         ];
     }
 
@@ -381,12 +641,63 @@ class MyNJILGA_Role_Sync {
     }
 
     /**
+     * The stored role problem, or null when there is none.
+     *
+     * @return array{status:string,role:string,count:int,since:string,last:string}|null
+     */
+    public static function problem(): ?array {
+        $p = get_option( self::OPTION_PROBLEM, [] );
+        if ( ! is_array( $p ) || (string) ( $p['status'] ?? '' ) === '' ) {
+            return null;
+        }
+        return [
+            'status' => (string) $p['status'],
+            'role'   => (string) ( $p['role'] ?? '' ),
+            'count'  => max( 0, (int) ( $p['count'] ?? 0 ) ),
+            'since'  => (string) ( $p['since'] ?? '' ),
+            'last'   => (string) ( $p['last'] ?? '' ),
+        ];
+    }
+
+    public static function clear_problem(): void {
+        delete_option( self::OPTION_PROBLEM );
+    }
+
+    /**
+     * Update the stored problem from one batch's aggregate() — record what
+     * it met, clear what it resolved or what no longer applies
+     * (next_problem() has the rules). Writes only when something changed.
+     * Not autoloaded: one admin screen reads it, not every request.
+     *
+     * @param array<string,mixed> $agg aggregate()'s return.
+     */
+    public static function record_report( array $agg ): void {
+        $stored = self::problem();
+        $mapped = [];
+        foreach ( MyNJILGA_Dues_Settings::categories() as $cat ) {
+            if ( (string) ( $cat['role'] ?? '' ) !== '' ) {
+                $mapped[] = (string) $cat['role'];
+            }
+        }
+        $next = self::next_problem( $stored, $agg, $mapped, current_time( 'mysql' ) );
+        if ( $next === null ) {
+            if ( $stored !== null ) {
+                self::clear_problem();
+            }
+        } elseif ( $next !== $stored ) {
+            update_option( self::OPTION_PROBLEM, $next, false );
+        }
+    }
+
+    /**
      * @param object            $contact
      * @param array<int,string> $managed
-     * @return array{status:string,role:string,user:?\WP_User,add:array<int,string>,remove:array<int,string>}
+     * @param bool              $apply   False for a dry run (preview): the
+     *   legacy role is then reported as it would be created, not created.
+     * @return array{status:string,role:string,user:?\WP_User,add:array<int,string>,remove:array<int,string>,created:bool}
      */
-    private static function evaluate( $contact, bool $assumePaid, array $managed ): array {
-        $out = [ 'status' => self::STATUS_NOT_PAID, 'role' => '', 'user' => null, 'add' => [], 'remove' => [] ];
+    private static function evaluate( $contact, bool $assumePaid, array $managed, bool $apply = false ): array {
+        $out = [ 'status' => self::STATUS_NOT_PAID, 'role' => '', 'user' => null, 'add' => [], 'remove' => [], 'created' => false ];
         if ( ! $contact || ( ! $assumePaid && ! self::is_paid( $contact ) ) ) {
             return $out;
         }
@@ -396,8 +707,27 @@ class MyNJILGA_Role_Sync {
             return $out;
         }
         $desired = self::desired_role( $contact );
-        $plan    = self::plan( (array) $user->roles, $desired, $managed, $desired === '' || get_role( $desired ) !== null );
-        return array_merge( $plan, [ 'role' => $desired, 'user' => $user ] );
+        $wpRole  = $desired !== '' ? get_role( $desired ) : null;
+        $created = false;
+        $caps    = $wpRole ? (array) $wpRole->capabilities : [];
+        if ( ! $wpRole && $desired === self::LEGACY_ROLE ) {
+            // The role every seeded category maps to, and nothing else in
+            // the plugin ever creates it: a site without it would never
+            // grant anything. `read` and nothing else — what a member may
+            // DO with it is the site owner's call to widen. Every other
+            // undefined role is a decision for the site owner, not for a
+            // payment.
+            $caps = [ 'read' => true ];
+            if ( $apply ) {
+                $created = (bool) add_role( $desired, 'Professional', $caps );
+                $wpRole  = get_role( $desired ); // Also covers another request creating it first.
+            }
+            $defined = $apply ? $wpRole !== null : true;
+        } else {
+            $defined = $desired === '' || $wpRole !== null;
+        }
+        $plan = self::plan( (array) $user->roles, $desired, $managed, $defined, $caps );
+        return array_merge( $plan, [ 'role' => $desired, 'user' => $user, 'created' => $created ] );
     }
 
     /** @param object $contact A FluentCRM Subscriber. */
