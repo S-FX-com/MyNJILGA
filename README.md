@@ -147,7 +147,7 @@ Each invoice row is built through Stripe's own three-step sequence — `create` 
 
 ### On payment
 
-Settlement — granting tags and WordPress roles — is driven **only** by Stripe's `invoice.paid` webhook (`includes/invoicing/class-stripe-webhook.php`, its own REST route registered at `njilga/v1/stripe-webhook`, signature-verified against the mode's webhook secret). Every member of a paid dues invoice gets the year tag (`Dues Paid 2027`), the evergreen `dues-paid` tag (losing `unpaid-dues`), and their **category's WordPress role** — best-effort: only where a linked WP user exists and the role is defined; contacts with no account are skipped cleanly, never an error. A Company Note records it. Idempotent on duplicate webhook deliveries: a re-delivered event is acknowledged quietly, while a database failure while recording one is answered with a 503 so Stripe retries it (an acknowledged delivery is never resent).
+Settlement — granting tags and WordPress roles — is driven **only** by Stripe's `invoice.paid` webhook (`includes/invoicing/class-stripe-webhook.php`, its own REST route registered at `njilga/v1/stripe-webhook`, signature-verified against the mode's webhook secret). Every member of a paid dues invoice gets the year tag (`Dues Paid 2027`), the evergreen `dues-paid` tag (losing `unpaid-dues`), and their **category's WordPress role**, swapped in by the role sync (any other membership role they held is removed) — only where a linked WP user exists and the role is defined; contacts with no account are skipped cleanly, never an error. A Company Note records it. Idempotent on duplicate webhook deliveries: a re-delivered event is acknowledged quietly, while a database failure while recording one is answered with a 503 so Stripe retries it (an acknowledged delivery is never resent).
 
 A **daily reconciler** (`class-stripe-reconciler.php`) is the webhook's safety net, not a second source of truth — it never calls Stripe directly, only through the same gateway seam every other class uses. It re-fetches every `created`/`sent`/`processing` invoice in the active mode and brings the local row's status/amounts up to date with whatever Stripe actually shows, firing the same "paid" event the webhook does if a delivery was missed, delayed, or arrived before this migration's webhook auto-provisioning was in place. Staff can also trigger it on demand from the Invoicing page's **Sync with Stripe** button or a single row's **Refresh** action.
 
@@ -161,7 +161,15 @@ Note the one thing this costs: **Stripe's "Mark as paid" settles the whole invoi
 
 ### Downgrade sweep
 
-Manual, from the Invoicing page, via a **confirmation screen** showing the exact invoices, firms, and members it will touch (and how many are protected by a paid invoice elsewhere). Applies `Unpaid Dues {year}` + `unpaid-dues`, removes `dues-paid`, removes the role if the setting says so, marks rows downgraded, leaves a Company Note.
+Manual, from the Invoicing page, via a **confirmation screen** showing the exact invoices, firms, and members it will touch (and how many are protected by a paid invoice elsewhere). Applies `Unpaid Dues {year}` + `unpaid-dues`, removes `dues-paid`, removes every WordPress membership role if the setting says so, marks rows downgraded, leaves a Company Note.
+
+### WordPress role sync
+
+A paid member's WordPress role follows their category (Settings → Membership categories), through `MyNJILGA_Role_Sync`. It's granted on payment and on login/registration, and **swapped** — the new category's role added, every other membership role removed — when a paid member's category tag changes in FluentCRM (instantly, via FluentCRM's tag hooks) or when staff change the mapping in Settings (a background resync of everyone carrying the paid tag). Setup → **WordPress role sync** shows the mapping, the managed roles, the last run, and a **Review role changes** screen that lists what a full sync would change before applying it.
+
+Only *managed* roles are ever removed — every role the category map uses or has used, plus the legacy `professional` — never WordPress's own `administrator`, `editor`, `author`, `contributor` or `subscriber`. Contacts not paid for the current or next dues year are left alone (non-payment is the downgrade sweep's job), and a category mapped to a role the site doesn't define leaves its members untouched.
+
+**Upgrading from 3.5.x:** a category set to *— no membership role —* now means exactly that — its paid members lose every managed role at their next login, payment or category change (3.5.x quietly gave them the default category's role at login instead). If a category was set that way to mean "no *extra* role", map it to the role it should carry. A role that was mapped once stays managed after it's taken out of the map, so it can still be removed from members who hold it; Setup → WordPress role sync lists those with a **Stop managing** button for each.
 
 ### Company Notes (spec §8)
 
@@ -341,7 +349,8 @@ my-njilga/
 │   │   ├── class-dues-roster.php         ← Line labels / line items / email summary
 │   │   ├── class-invoice-creator.php     ← Action Scheduler batches, per-row isolation
 │   │   ├── class-invoice-sender.php      ← Email + CC policy + Company Note
-│   │   ├── class-payment-listener.php    ← Paid → tags + roles (best-effort)
+│   │   ├── class-payment-listener.php    ← Paid → tags + role (via role sync)
+│   │   ├── class-role-sync.php           ← Paid member's WP role follows their category
 │   │   ├── class-downgrade-sweep.php     ← preview() + run()
 │   │   └── class-invoicing-notes.php     ← FluentCRM Company Note helper
 │   └── enrollment/

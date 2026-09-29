@@ -932,7 +932,7 @@ class MyNJILGA_Page_Invoicing {
             '<p>For every %d dues invoice still not paid, this tags every roster member <strong>%s</strong>%s. Right now that would affect <strong>%d invoice%s</strong> across <strong>%d firm%s</strong> — <strong>%d member%s</strong>. Grace periods and reminders are handled outside this plugin; run this only after that process has closed out the cycle.</p>',
             $duesYear,
             esc_html( MyNJILGA_Dues_Settings::year_tag( 'year_unpaid_tag_pattern', $duesYear ) ),
-            $p['remove_roles'] ? ' and removes their WordPress membership role' : '',
+            $p['remove_roles'] ? ' and removes their WordPress membership roles' : '',
             $p['invoices'], $p['invoices'] === 1 ? '' : 's',
             $p['firms'], $p['firms'] === 1 ? '' : 's',
             $p['members'], $p['members'] === 1 ? '' : 's'
@@ -965,7 +965,7 @@ class MyNJILGA_Page_Invoicing {
         echo '<div class="njilga-danger-card"><p><strong>What will happen to each member listed below:</strong></p><ul class="njilga-list">';
         printf( '<li>Tagged <code>%s</code> and <code>%s</code>; <code>%s</code> removed.</li>', esc_html( MyNJILGA_Dues_Settings::year_tag( 'year_unpaid_tag_pattern', $duesYear ) ), esc_html( (string) MyNJILGA_Dues_Settings::general( 'unpaid_tag' ) ), esc_html( (string) MyNJILGA_Dues_Settings::general( 'paid_tag' ) ) );
         echo $p['remove_roles']
-            ? '<li>Their category\'s WordPress role is removed where they have a linked account (setting: <em>Remove roles on downgrade</em> is on).</li>'
+            ? '<li>Every WordPress membership role (each role mapped in Settings, now or before) is removed where they have a linked account (setting: <em>Remove roles on downgrade</em> is on).</li>'
             : '<li>WordPress roles are <em>not</em> touched (setting: <em>Remove roles on downgrade</em> is off).</li>';
         echo '<li>Each invoice is marked <code>downgraded</code> and a note is left on the firm\'s FluentCRM Company record.</li>';
         echo '<li>Members also covered by a <em>paid</em> invoice for this year are skipped.</li>';

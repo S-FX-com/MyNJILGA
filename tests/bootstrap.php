@@ -35,6 +35,9 @@ require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-invoice-table.
 // that implements it (tests/StripeGatewayTest.php requires that class).
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-roster.php';
 require_once dirname( __DIR__ ) . '/includes/join/class-join-pricing.php';
+// Role sync: resolve/managed/plan/signature are pure; the rest of the
+// class talks to WordPress and FluentCRM and isn't called from tests.
+require_once dirname( __DIR__ ) . '/includes/invoicing/class-role-sync.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/interface-checkout-gateway.php';
 
 class NJILGA_Assertion_Failed extends Exception {}

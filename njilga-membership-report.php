@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and member-facing dues status — driven entirely from FluentCRM tags on the local install.
- * Version:     3.5.0
+ * Version:     3.6.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -76,6 +76,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-dues-preview.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-creator.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-role-sync.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-payments.php';
@@ -145,6 +146,10 @@ MyNJILGA_Stripe_Webhook::register();
 // scheduler's worker can find the hook.
 MyNJILGA_Stripe_Reconciler::register();
 
+// Role sync: a paid member's WordPress role follows their category. Hooks
+// FluentCRM's tag events and its Action Scheduler chunk on every request.
+MyNJILGA_Role_Sync::register();
+
 // Payment listener: registered once every plugin has loaded, so a site
 // can swap the invoice gateway via the `my_njilga_invoice_gateway` filter
 // before the "order paid" hook is bound.
@@ -172,6 +177,10 @@ add_action( 'wp_login', static function ( $login, $user ) {
 
 // Setup page: create a missing tag via the FluentCRM Tags API.
 add_action( 'admin_post_my_njilga_create_tag', [ 'MyNJILGA_Page_Setup', 'handle_create_tag' ] );
+
+// Setup page: apply a full WordPress role sync after the confirmation screen.
+add_action( 'admin_post_' . MyNJILGA_Page_Setup::ACTION_ROLE_SYNC, [ 'MyNJILGA_Page_Setup', 'handle_role_sync' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Setup::ACTION_ROLE_FORGET, [ 'MyNJILGA_Page_Setup', 'handle_role_forget' ] );
 
 // Per-page CSV exports. ?type=members|trustees|companies determines the report.
 add_action( 'admin_post_my_njilga_export_csv', static function () {
