@@ -924,6 +924,10 @@ class MyNJILGA_Page_Settings {
             'firm_overrides' => $overrides,
         ] );
 
+        // Which tags mean paid / unpaid / inactive, the year-tag pattern and the
+        // categories all feed the cached membership figures.
+        MyNJILGA_Membership_Stats::flush();
+
         $args   = [ 'saved' => '1' ];
         $queued = MyNJILGA_Role_Sync::after_settings_change( $current['categories'], $roleSignature );
         if ( $queued !== null ) {
@@ -941,6 +945,7 @@ class MyNJILGA_Page_Settings {
         $oldCategories = MyNJILGA_Dues_Settings::categories();
         $roleSignature = MyNJILGA_Role_Sync::current_signature();
         MyNJILGA_Dues_Settings::reset_to_defaults();
+        MyNJILGA_Membership_Stats::flush();
         $args   = [ 'reset' => '1' ];
         $queued = MyNJILGA_Role_Sync::after_settings_change( $oldCategories, $roleSignature );
         if ( $queued !== null ) {

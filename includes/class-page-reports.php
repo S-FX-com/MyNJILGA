@@ -22,6 +22,13 @@ class MyNJILGA_Page_Reports {
             return;
         }
 
+        $why = MyNJILGA_Members_Data::unavailable_reason();
+        if ( $why !== '' ) {
+            MyNJILGA_Admin_UI::callout( esc_html( $why ), 'error' );
+            MyNJILGA_Admin_UI::close();
+            return;
+        }
+
         MyNJILGA_Admin_Menu::render_stats_panel();
 
         echo '<div class="njilga-banner"><div>

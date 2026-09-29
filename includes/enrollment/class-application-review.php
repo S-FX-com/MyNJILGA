@@ -105,6 +105,10 @@ class MyNJILGA_Application_Review {
                     break;
             }
 
+            // The approved applicant now carries a category tag (and, under
+            // one policy, the paid tags): the cached membership figures lag.
+            MyNJILGA_Membership_Stats::flush();
+
             // 5. Record + note + email.
             MyNJILGA_Applications_Table::set_decision( $appId, MyNJILGA_Applications_Table::STATUS_APPROVED, $byUserId, $note, $companyId, $contactId );
 

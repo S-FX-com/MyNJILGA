@@ -26,6 +26,11 @@ class MyNJILGA_Report_Xls {
             wp_die( 'FluentCRM is not active.' );
         }
 
+        $why = MyNJILGA_Members_Data::unavailable_reason( true );
+        if ( $why !== '' ) {
+            wp_die( esc_html( $why ) );
+        }
+
         $scope = ( sanitize_key( $_REQUEST['scope'] ?? '' ) === 'active' ) ? 'active' : 'all';
         self::stream_firms( $scope );
     }

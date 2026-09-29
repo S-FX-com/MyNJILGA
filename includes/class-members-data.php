@@ -426,6 +426,36 @@ class MyNJILGA_Members_Data {
     }
 
     /**
+     * '' when the membership figures can be read, otherwise why not, as plain
+     * text. Every export and the Reports landing page ask this before they
+     * write a byte: a failed read must stop with a message, not stream an
+     * empty file or a row of zero tiles that look like a valid report.
+     * $refresh recomputes instead of trusting the 10-minute cache (exports).
+     */
+    public static function unavailable_reason( bool $refresh = false ): string {
+        $s = MyNJILGA_Membership_Stats::snapshot( $refresh );
+        if ( ! empty( $s['available'] ) ) {
+            return '';
+        }
+        $why = trim( implode( ' ', array_map( 'strval', (array) ( $s['warnings'] ?? [] ) ) ) );
+        return $why !== '' ? $why : 'Membership figures are temporarily unavailable.';
+    }
+
+    /**
+     * The same label as dues_pill(), with the hex colour an Excel cell needs
+     * (Excel only understands literal styling, so the exporters can't use the
+     * pill's CSS variant). Keeps the Executive Summary and the Companies CSV
+     * saying what the screens and the KPI tiles say for the same person.
+     *
+     * @return array{0:string,1:string} [ label, hex colour ]
+     */
+    public static function dues_export( string $state, bool $exempt = false ): array {
+        [ $label, $variant ] = self::dues_pill( $state, $exempt );
+        $colours = [ 'success' => '#1d6f42', 'destructive' => '#d63638', 'info' => '#2271b1' ];
+        return [ $label, $colours[ $variant ] ?? '#999999' ];
+    }
+
+    /**
      * The Firm column: the rosters the contact is on (primary company first,
      * "; " between two), or — only for a contact on no roster — whatever the
      * fallback finds (the company_name custom field).
