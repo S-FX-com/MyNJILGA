@@ -455,7 +455,7 @@ class MyNJILGA_Page_Settings {
 
         // Downgrade.
         echo '<tr><th scope="row">Downgrade sweep</th><td>';
-        printf( '<label class="njilga-check-label"><input type="checkbox" name="general[downgrade_remove_roles]" value="1"%s> <span>Remove the category\'s WordPress role from members of invoices that were never paid</span></label>', checked( ! empty( $g['downgrade_remove_roles'] ), true, false ) );
+        printf( '<label class="njilga-check-label"><input type="checkbox" name="general[downgrade_remove_roles]" value="1"%s> <span>Remove WordPress membership roles (every role mapped below, now or before) from members of invoices that were never paid</span></label>', checked( ! empty( $g['downgrade_remove_roles'] ), true, false ) );
         echo '<p class="njilga-help">Tags are always applied; this only controls the role. Runs manually, behind a confirmation screen, from the Invoicing page.</p></td></tr>';
 
         // Mid-year join policy.
