@@ -3,10 +3,12 @@
  * The pure parts of the join form's controller and its upload limits:
  * the next-year cutover test, spotting a POST whose body PHP threw away
  * for being over post_max_size, how an upload limit is stated to people,
- * and which nonces are bound to the visitor's cookie.
+ * which nonces are bound to the visitor's cookie, and which Stripe mode a
+ * join runs in.
  */
 require_once dirname( __DIR__ ) . '/includes/join/class-join-form.php';
 require_once dirname( __DIR__ ) . '/includes/join/class-join-documents.php';
+require_once dirname( __DIR__ ) . '/includes/invoicing/class-stripe-connection.php';
 
 class JoinFormTest extends NJILGA_TestCase {
 
@@ -58,5 +60,18 @@ class JoinFormTest extends NJILGA_TestCase {
         $this->assertSame( 0, MyNJILGA_Join_Form::visitor_nonce_uid( 0, MyNJILGA_Join_Form::NONCE_ACTION ) );
         $this->assertSame( 0, MyNJILGA_Join_Form::visitor_nonce_uid( 0, -1 ) );
         $this->assertSame( 0, MyNJILGA_Join_Form::visitor_nonce_uid( 0, MyNJILGA_Join_Form::NONCE_ACTION . '_resume' ), 'signed-in only; its nonce is per-user anyway' );
+    }
+
+    public function test_joins_follow_the_mode_active_in_settings(): void {
+        $test = MyNJILGA_Stripe_Connection::MODE_TEST;
+        $live = MyNJILGA_Stripe_Connection::MODE_LIVE;
+        $this->assertSame( $test, MyNJILGA_Join_Form::mode_for( $test, false ), 'a site switched to Test takes every join in Test' );
+        $this->assertSame( $live, MyNJILGA_Join_Form::mode_for( $live, false ) );
+    }
+
+    public function test_staff_can_still_rehearse_in_test_while_the_site_is_live(): void {
+        $test = MyNJILGA_Stripe_Connection::MODE_TEST;
+        $this->assertSame( $test, MyNJILGA_Join_Form::mode_for( MyNJILGA_Stripe_Connection::MODE_LIVE, true ) );
+        $this->assertSame( $test, MyNJILGA_Join_Form::mode_for( $test, true ) );
     }
 }

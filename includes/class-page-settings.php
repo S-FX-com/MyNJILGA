@@ -147,6 +147,10 @@ class MyNJILGA_Page_Settings {
             self::render_encryption_warning();
         }
 
+        if ( $activeMode === MyNJILGA_Stripe_Connection::MODE_TEST ) {
+            MyNJILGA_Admin_UI::callout( '<strong>Test mode takes online joins too.</strong> Anyone joining on a Membership page pays with a Stripe test card and no real money moves — but their membership, account, FluentCRM tags and firm changes are real. Right for a staging copy; on the live site, switch back to Live as soon as you\'re done trying something.', 'warning' );
+        }
+
         echo '<div class="njilga-cols-2">';
         self::render_stripe_mode_card( MyNJILGA_Stripe_Connection::MODE_TEST, $s, $activeMode );
         self::render_stripe_mode_card( MyNJILGA_Stripe_Connection::MODE_LIVE, $s, $activeMode );
@@ -307,7 +311,7 @@ class MyNJILGA_Page_Settings {
         echo '<div class="njilga-banner">';
         echo '<div>';
         printf( '<div class="njilga-banner-title">Active mode: %s</div>', esc_html( ucfirst( $activeMode ) ) );
-        echo '<div class="njilga-banner-desc">Every new invoice bills through this mode&rsquo;s Stripe account. Switching modes never moves existing invoice rows or Stripe objects between modes.</div>';
+        echo '<div class="njilga-banner-desc">Every new invoice and online join bills through this mode&rsquo;s Stripe account. Switching modes never moves existing invoice rows or Stripe objects between modes.</div>';
         echo '</div>';
         printf(
             '<a class="njilga-btn njilga-btn-outline" href="%s">Switch to %s mode</a>',
@@ -342,6 +346,11 @@ class MyNJILGA_Page_Settings {
 
         echo '<div class="njilga-danger-card"><p><strong>What switching modes means:</strong></p><ul class="njilga-list">';
         printf( '<li>Every new dues invoice bills through the %s Stripe account from now on.</li>', esc_html( ucfirst( $target ) ) );
+        if ( $target === MyNJILGA_Stripe_Connection::MODE_TEST ) {
+            echo '<li><strong>Online joins switch too:</strong> visitors on a Membership page pay with a Stripe test card and no real money moves, but their membership, account and FluentCRM tags are real.</li>';
+        } else {
+            echo '<li><strong>Online joins switch too:</strong> visitors on a Membership page pay real money again. A join already started in Test finishes in Test.</li>';
+        }
         printf( '<li>Invoice rows created while in %s mode will be hidden from the Invoicing and Payments workspaces until you switch back to %s mode.</li>', esc_html( ucfirst( $current ) ), esc_html( ucfirst( $current ) ) );
         printf(
             '<li>Stripe objects — customers, invoices, payment intents — do <strong>not</strong> carry over between Test and Live. Nothing already created in %s mode exists in %s mode.</li>',
@@ -479,7 +488,7 @@ class MyNJILGA_Page_Settings {
 
         echo '<tr><th scope="row">Online joining</th><td>';
         printf( '<label class="njilga-check-label"><input type="checkbox" name="general[join_enabled]" value="1"%s> <span>Accept online joins</span></label>', checked( ! empty( $g['join_enabled'] ), true, false ) );
-        echo '<p class="njilga-help">A paid join is a membership as soon as Stripe confirms the payment — no review. A join that comes to $0 (a free category) waits for staff on Online joins. The public always joins in Stripe <strong>Live</strong> mode, whichever mode is active here; staff can rehearse in Test by adding <code>?njilga_test=1</code> to a Membership page\'s address.</p></td></tr>';
+        echo '<p class="njilga-help">A paid join is a membership as soon as Stripe confirms the payment — no review. A join that comes to $0 (a free category) waits for staff on Online joins. Joins pay in the Stripe mode active under Payments, the same one invoices use; while that\'s Live, staff can rehearse in Test by adding <code>?njilga_test=1</code> to a Membership page\'s address.</p></td></tr>';
 
         self::text_row( 'general[join_notify_email]', 'Notify staff of online joins', $g['join_notify_email'], 'Comma-separated. Blank = the application notification address above, then the site admin email.' );
         self::text_row( 'general[join_max_colleagues]', 'Most colleagues per join', (string) (int) $g['join_max_colleagues'], 'The firm upsell (tier-eligible categories only): how many colleagues one payer can add. Seats beyond the free tier cost nothing, so keep this modest; 0 turns the upsell off.' );

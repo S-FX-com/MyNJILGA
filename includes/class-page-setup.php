@@ -616,7 +616,7 @@ class MyNJILGA_Page_Setup {
         MyNJILGA_Admin_UI::section(
             'Online joining',
             sprintf(
-                'The <code>[njilga_join]</code> shortcode takes payment through Stripe Checkout. The public always joins in <strong>Live</strong> mode; staff rehearse in Test with <code>?njilga_test=1</code>. <a href="%s">Shortcodes</a> has the line to paste for each category and the pages that carry one; <a href="%s">Online joins</a> lists every attempt.',
+                'The <code>[njilga_join]</code> shortcode takes payment through Stripe Checkout, in the mode active under Settings → Payments — the same one invoices use. While that\'s Live, staff rehearse in Test with <code>?njilga_test=1</code>. <a href="%s">Shortcodes</a> has the line to paste for each category and the pages that carry one; <a href="%s">Online joins</a> lists every attempt.',
                 esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SHORTCODES ) ),
                 esc_url( add_query_arg( 'tab', 'joins', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) ) )
             )

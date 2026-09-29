@@ -96,21 +96,23 @@ class MyNJILGA_Page_Applications {
             [ 'label' => 'Needs attention', 'value' => count( $attention ), 'variant' => $attention ? 'warning' : 'default', 'icon' => 'alert' ],
         ] );
 
-        // The public form always takes payment in Live mode, whichever way
-        // the admin Test/Live toggle is set (MyNJILGA_Join_Form::join_mode()),
-        // so what matters here is whether Live can take a checkout at all.
-        $live = MyNJILGA_Stripe_Connection::MODE_LIVE;
+        // The public form takes payment in the mode active under Settings →
+        // Payments (MyNJILGA_Join_Form::join_mode()), so what matters here
+        // is whether that mode can take a checkout at all.
+        $mode  = MyNJILGA_Stripe_Connection::active_mode();
+        $label = $mode === MyNJILGA_Stripe_Connection::MODE_LIVE ? 'Live' : 'Test';
         // The lines to paste live on the Shortcodes page, built from the
         // current categories — naming keys here went stale on a rename.
         printf(
-            '<p class="njilga-section-desc">Paste a <code>[njilga_join category="…"]</code> line on each Membership page — <a href="%s">Shortcodes</a> has one ready to copy for every category an applicant may pick in <a href="%s">Settings</a>, and shows which pages already carry one. A paid join becomes a membership the moment Stripe confirms the payment; a join that comes to $0 waits here for a decision. Visitors always pay in Stripe Live mode, whichever mode the admin toggle is on; staff can rehearse in Test by adding <code>?njilga_test=1</code> to the page\'s address.</p>',
+            '<p class="njilga-section-desc">Paste a <code>[njilga_join category="…"]</code> line on each Membership page — <a href="%s">Shortcodes</a> has one ready to copy for every category an applicant may pick in <a href="%s">Settings</a>, and shows which pages already carry one. A paid join becomes a membership the moment Stripe confirms the payment; a join that comes to $0 waits here for a decision. Visitors pay in the Stripe mode active under Settings → Payments — <strong>%s</strong> right now; while it\'s Live, staff can rehearse in Test by adding <code>?njilga_test=1</code> to the page\'s address.</p>',
             esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SHORTCODES ) ),
-            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) )
+            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ),
+            esc_html( $label )
         );
-        if ( ! MyNJILGA_Stripe_Connection::is_connected( $live ) ) {
-            MyNJILGA_Admin_UI::callout( sprintf( '<strong>Stripe Live mode isn\'t connected</strong>, so the form tells visitors joining online is unavailable. Connect it under <a href="%s">Settings → Payments</a>.', esc_url( add_query_arg( 'tab', 'payments', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) ) ), 'warning' );
-        } elseif ( MyNJILGA_Stripe_Connection::checkout_access( $live ) === false ) {
-            MyNJILGA_Admin_UI::callout( sprintf( '<strong>The Live Stripe key can\'t create Checkout Sessions</strong>, so the form tells visitors joining online is unavailable. Give the key "Checkout Sessions: Write", then re-check it on <a href="%s">Setup</a>.', esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) ) ), 'warning' );
+        if ( ! MyNJILGA_Stripe_Connection::is_connected( $mode ) ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>Stripe %s mode isn\'t connected</strong>, so the form tells visitors joining online is unavailable. Connect it under <a href="%s">Settings → Payments</a>.', esc_html( $label ), esc_url( add_query_arg( 'tab', 'payments', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) ) ), 'warning' );
+        } elseif ( MyNJILGA_Stripe_Connection::checkout_access( $mode ) === false ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>The %s Stripe key can\'t create Checkout Sessions</strong>, so the form tells visitors joining online is unavailable. Give the key "Checkout Sessions: Write", then re-check it on <a href="%s">Setup</a>.', esc_html( $label ), esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ) ) ), 'warning' );
         }
 
         // Everything the rows need, loaded once for both tables below —
