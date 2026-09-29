@@ -221,11 +221,10 @@ class MyNJILGA_Join_Invites {
 
                 // Their membership was paid before the account existed, so
                 // the role settle() couldn't grant then is granted now —
-                // but only while they are still current.
-                $contact  = \FluentCrm\App\Models\Subscriber::find( $contactId );
-                $category = MyNJILGA_Dues_Settings::category( (string) MyNJILGA_Join_Orders_Table::get( (int) $invite->join_id )->category_key );
-                if ( $contact && $category && MyNJILGA_Tags::has_slug( $contact, (string) MyNJILGA_Dues_Settings::general( 'paid_tag', 'dues-paid' ) ) && MyNJILGA_Payment_Listener::paid_for_current_year( $contact ) ) {
-                    MyNJILGA_Payment_Listener::grant_role( $contact, (string) $category['role'] );
+                // sync_contact() only acts while they are still current.
+                $contact = \FluentCrm\App\Models\Subscriber::find( $contactId );
+                if ( $contact ) {
+                    MyNJILGA_Role_Sync::sync_contact( $contact );
                 }
             } catch ( \Throwable $e ) {
                 // The account exists and the invite is spent; a CRM hiccup

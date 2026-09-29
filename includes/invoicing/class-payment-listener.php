@@ -12,10 +12,10 @@
  *     a permanent record of which year they were covered for;
  *   - the evergreen paid tag (`dues-paid`) and loses the evergreen unpaid
  *     tag — this is what every existing report in the plugin reads;
- *   - their category's WordPress role (Settings → category mapping),
- *     best-effort: only where a linked WP user exists and the role is
- *     defined on the site. A contact with no WP account is skipped
- *     cleanly, never an error.
+ *   - their category's WordPress role, swapped in by MyNJILGA_Role_Sync
+ *     (any other membership role they held is removed): only where a
+ *     linked WP user exists and the role is defined on the site. A
+ *     contact with no WP account is skipped cleanly, never an error.
  * Assessment-only invoices — each member gets "Assessment Paid {year}";
  * dues tags and roles are untouched (the dinner isn't the membership).
  *
@@ -122,7 +122,11 @@ class MyNJILGA_Payment_Listener {
             MyNJILGA_Tags::attach_slug( $contact, $paidTag );
             MyNJILGA_Tags::detach_slug( $contact, $unpaidTag );
 
-            if ( self::grant_role( $contact, (string) ( $member['role'] ?? '' ) ) ) {
+            // The payment is the proof, so the "paid for this or next year"
+            // test is skipped: a late payment of a past year's invoice still
+            // grants. The role comes from the CURRENT mapping, not the one
+            // frozen into the snapshot.
+            if ( MyNJILGA_Role_Sync::holds_role( MyNJILGA_Role_Sync::sync_contact( $contact, true ) ) ) {
                 $granted++;
             } else {
                 $skipped++;
@@ -154,8 +158,9 @@ class MyNJILGA_Payment_Listener {
      * A member paid for before they had a website account — a colleague
      * covered by an online join, someone on a firm invoice — gets their
      * category's role the first time the account appears (registration,
-     * or their next login), rather than only at the next payment. Only
-     * ever grants; never removes. Hooked on user_register and wp_login.
+     * or their next login), rather than only at the next payment — and a
+     * member whose category changed meanwhile gets the swap. Hooked on
+     * user_register and wp_login.
      *
      * "Paid" means paid for THIS dues year or the next one (the batch goes
      * out ahead of the year it covers), not just the evergreen paid tag:
@@ -175,7 +180,7 @@ class MyNJILGA_Payment_Listener {
                 return;
             }
             $contact = self::contact_for_user( $user );
-            if ( ! $contact || ! MyNJILGA_Tags::has_slug( $contact, (string) MyNJILGA_Dues_Settings::general( 'paid_tag', 'dues-paid' ) ) || ! self::paid_for_current_year( $contact ) ) {
+            if ( ! $contact || ! MyNJILGA_Role_Sync::is_paid( $contact ) ) {
                 return;
             }
             // Never re-point a contact another account already owns.
@@ -186,18 +191,7 @@ class MyNJILGA_Payment_Listener {
                 $contact->user_id = (int) $user->ID;
                 $contact->save();
             }
-            $role = '';
-            foreach ( MyNJILGA_Dues_Settings::categories() as $cat ) {
-                if ( (string) $cat['tag'] !== '' && MyNJILGA_Tags::has_slug( $contact, (string) $cat['tag'] ) ) {
-                    $role = (string) $cat['role'];
-                    break;
-                }
-            }
-            if ( $role === '' ) {
-                $default = MyNJILGA_Dues_Settings::category( (string) MyNJILGA_Dues_Settings::general( 'default_category', '' ) );
-                $role    = $default ? (string) $default['role'] : '';
-            }
-            self::grant_role( $contact, $role );
+            MyNJILGA_Role_Sync::sync_contact( $contact, true ); // is_paid() checked above.
         } catch ( \Throwable $e ) {
             // Never let a CRM hiccup break a login.
         }
@@ -240,34 +234,5 @@ class MyNJILGA_Payment_Listener {
             }
         }
         return false;
-    }
-
-    /**
-     * Best-effort role grant. False when there's no linked WP user, no
-     * role configured, or the role isn't defined on this site.
-     *
-     * @param \FluentCrm\App\Models\Subscriber $contact
-     */
-    public static function grant_role( $contact, string $role ): bool {
-        $role = sanitize_key( $role );
-        if ( $role === '' || ! get_role( $role ) ) {
-            return false;
-        }
-        $userId = (int) ( $contact->user_id ?? 0 );
-        if ( $userId <= 0 && ! empty( $contact->email ) ) {
-            $user   = get_user_by( 'email', (string) $contact->email );
-            $userId = $user ? (int) $user->ID : 0;
-        }
-        if ( $userId <= 0 ) {
-            return false;
-        }
-        $user = get_user_by( 'id', $userId );
-        if ( ! $user ) {
-            return false;
-        }
-        if ( ! in_array( $role, (array) $user->roles, true ) ) {
-            $user->add_role( $role );
-        }
-        return true;
     }
 }
