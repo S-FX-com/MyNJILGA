@@ -911,6 +911,10 @@ class MyNJILGA_Page_Settings {
             'firm_overrides' => $overrides,
         ] );
 
+        // Which tags mean paid / unpaid / inactive, the year-tag pattern and the
+        // categories all feed the cached membership figures.
+        MyNJILGA_Membership_Stats::flush();
+
         wp_safe_redirect( add_query_arg( 'saved', '1', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) );
         exit;
     }
@@ -921,6 +925,7 @@ class MyNJILGA_Page_Settings {
         }
         check_admin_referer( self::ACTION_RESET );
         MyNJILGA_Dues_Settings::reset_to_defaults();
+        MyNJILGA_Membership_Stats::flush();
         wp_safe_redirect( add_query_arg( 'reset', '1', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) );
         exit;
     }

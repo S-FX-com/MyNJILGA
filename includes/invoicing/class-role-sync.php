@@ -26,8 +26,9 @@
  *     member tagged (or re-tagged) afterwards.
  *   Snapshot fallback
  *     Only when the current tags resolve to '' does the role frozen in the
- *     snapshot member apply, so what settle() did before this class is a
- *     strict subset of what it does now.
+ *     snapshot member apply. (That includes a category deliberately mapped
+ *     to "no role": the member is then granted the role they were billed
+ *     for, as settle() always did.)
  *   Add-only
  *     plan() returns roles to ADD and nothing else: no removal, no swap. A
  *     member who changes category ends up holding both roles until the
@@ -117,7 +118,13 @@ class MyNJILGA_Role_Sync {
         'edit_themes',
         'switch_themes',
         'update_core',
+        'update_plugins',
+        'update_themes',
+        'delete_plugins',
+        'delete_themes',
+        'edit_files',
         'manage_network',
+        'manage_sites',
     ];
 
     // =========================================================================
@@ -392,6 +399,37 @@ class MyNJILGA_Role_Sync {
         return $problem;
     }
 
+    /**
+     * Whether a stored problem still describes the site as it is NOW. The
+     * stored problem is a sighting from the last payment that met it; once
+     * the admin has fixed the cause it must stop being shown, not wait for
+     * the next paid batch to clear it (next_problem() only runs then).
+     *
+     *   - Nothing maps to its role any more            -> fixed.
+     *   - role_undefined, and the role now exists      -> fixed.
+     *   - role_privileged, and the role is gone or no  -> fixed. (A role that
+     *     longer holds an administrator-level cap         still holds one is
+     *                                                     NOT fixed by existing.)
+     *
+     * @param array<string,mixed> $problem      problem() as stored.
+     * @param array<int,string>   $mappedRoles  Every role a category maps to right now.
+     * @param array<int|string,bool|string> $capabilities The role's capabilities now ([] when undefined).
+     */
+    public static function problem_still_applies( array $problem, array $mappedRoles, bool $roleDefined, array $capabilities = [] ): bool {
+        $role = (string) ( $problem['role'] ?? '' );
+        if ( $role === '' || ! in_array( $role, $mappedRoles, true ) ) {
+            return false;
+        }
+        switch ( (string) ( $problem['status'] ?? '' ) ) {
+            case self::STATUS_UNDEFINED:
+                return ! $roleDefined;
+            case self::STATUS_PRIVILEGED:
+                return $roleDefined && self::is_privileged( $capabilities );
+            default:
+                return false;
+        }
+    }
+
     // =========================================================================
     // WordPress + FluentCRM glue
     // =========================================================================
@@ -536,6 +574,23 @@ class MyNJILGA_Role_Sync {
             'since'  => (string) ( $p['since'] ?? '' ),
             'last'   => (string) ( $p['last'] ?? '' ),
         ];
+    }
+
+    /**
+     * problem_still_applies() against the live Settings and roles — what the
+     * Dashboard asks before it shows the callout.
+     *
+     * @param array<string,mixed> $problem problem() as stored.
+     */
+    public static function problem_is_current( array $problem ): bool {
+        $mapped = [];
+        foreach ( MyNJILGA_Dues_Settings::categories() as $cat ) {
+            if ( (string) ( $cat['role'] ?? '' ) !== '' ) {
+                $mapped[] = (string) $cat['role'];
+            }
+        }
+        $wpRole = get_role( (string) ( $problem['role'] ?? '' ) );
+        return self::problem_still_applies( $problem, $mapped, (bool) $wpRole, $wpRole ? (array) $wpRole->capabilities : [] );
     }
 
     /**

@@ -1061,4 +1061,28 @@ class MembershipStatsTest extends NJILGA_TestCase {
         $b27 = MyNJILGA_Members_Data::bucket_companies( $d27, $this->url() );
         $this->assertSame( $s27['firms']['without_active'], count( $b27['buckets']['0'] ) );
     }
+
+    // -------------------------------------------------------------------
+    // Exports say what the screens say (Executive Summary, Companies CSV)
+    // -------------------------------------------------------------------
+
+    public function test_export_labels_match_the_on_screen_pills_for_every_state(): void {
+        $expect = [
+            'active'   => [ 'Paid',     '#1d6f42' ],
+            'expired'  => [ 'Unpaid',   '#d63638' ],
+            'exempt'   => [ 'Exempt',   '#2271b1' ],
+            'inactive' => [ 'Inactive', '#999999' ],
+            'none'     => [ 'None',     '#999999' ],
+        ];
+        foreach ( $expect as $state => $want ) {
+            $this->assertSame( $want, MyNJILGA_Members_Data::dues_export( $state ), $state );
+            $this->assertSame( $want[0], MyNJILGA_Members_Data::dues_pill( $state )[0], $state . ' label is the pill label' );
+        }
+    }
+
+    public function test_an_exempt_trustee_reads_exempt_even_when_paid(): void {
+        // The Trustees page and the Exempt tile call a paid Past President "Exempt", so must the export.
+        $this->assertSame( [ 'Exempt', '#2271b1' ], MyNJILGA_Members_Data::dues_export( 'active', true ) );
+        $this->assertSame( [ 'Exempt', '#2271b1' ], MyNJILGA_Members_Data::dues_export( 'expired', true ) );
+    }
 }

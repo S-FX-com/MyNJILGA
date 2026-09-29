@@ -200,7 +200,9 @@ class MyNJILGA_Page_Setup {
                 esc_html( $slug ),
                 $exists
                     ? MyNJILGA_Admin_UI::validation( 'defined', true )
-                    : MyNJILGA_Admin_UI::validation( 'not defined on this site (payment can\'t grant it)', false )
+                    : ( $slug === MyNJILGA_Payment_Listener::WP_ROLE
+                        ? MyNJILGA_Admin_UI::validation( 'not created yet — the first payment creates it (read-only capability)', true )
+                        : MyNJILGA_Admin_UI::validation( 'not defined on this site (payment can\'t grant it)', false ) )
             );
         }
         printf( '<tr><th>WordPress roles mapped in Settings</th><td>%s</td></tr>', $roleCells ? implode( '<br>', $roleCells ) : MyNJILGA_Admin_UI::blank() );

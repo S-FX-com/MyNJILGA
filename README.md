@@ -1,6 +1,6 @@
 # My NJILGA
 
-A WordPress plugin that gives NJILGA admins a one-stop dashboard for member status, trustees, and company rollups — plus the annual **dues invoicing** process (Stripe + FluentCRM), **online joining** with a firm upsell (Stripe Checkout), a **membership application gate**, and a **member-facing dues status page**. Everything is driven by FluentCRM tags on the local WordPress install; billing is driven by Stripe. No subscriptions anywhere — every dues cycle is its own one-time invoice.
+A WordPress plugin that gives NJILGA admins a one-stop dashboard for the whole association — membership, invoices and applications — with reports for trustees and firms — plus the annual **dues invoicing** process (Stripe + FluentCRM), **online joining** with a firm upsell (Stripe Checkout), a **membership application gate**, a **member-facing dues status page**, and a **My Membership page** for the member and their firm. Everything is driven by FluentCRM tags on the local WordPress install; billing is driven by Stripe. No subscriptions anywhere — every dues cycle is its own one-time invoice.
 
 ---
 
@@ -19,11 +19,11 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for member stat
 
 | Page | What it shows |
 |---|---|
-| **Dashboard** | Summary counts (paid members, trustees, companies with paid members), bucket distribution. |
+| **Dashboard** | The association at a glance, in three rows of cards that link to where the work happens. **Membership** — active members, paid ahead for next year, expired, firms with an active member, trustees, members without a firm, and a per-category table. **Invoices** — invoiced / collected for the dues year, outstanding and past due across all years, drafts to review, blocked (no Owner), flagged; scoped to the active Stripe mode. **Applications** — the application queue and online joins that need a person. Plus a **Refresh figures** button (membership figures are cached ten minutes and flushed after each payment, sweep, approval and settings save) and alerts (Stripe Test mode; a role a payment could not grant). See [One definition of "active"](#one-definition-of-active). |
 | **Reports** | Landing page for every report below, plus the Executive Summary export. |
-| **Active Paid Members** | Every contact carrying the **Dues Paid** tag, with firm, email, trustee flag, payment method. |
-| **Trustees** | Every contact carrying a trustee-family tag, plus whether they've paid dues. |
-| **Companies** | All FluentCRM Companies, grouped into **1 / 2–5 / 6+ Paid Members** buckets. |
+| **Active Paid Members** | Every *active* member — paid through this year or later — whatever their email-subscription status, with firm, email, trustee flag, payment method. |
+| **Trustees** | Every contact carrying a trustee-family tag, labelled Paid, Unpaid, Exempt (Past Presidents and Senior Trustees owe no dues), Inactive or None. |
+| **Companies** | FluentCRM Companies that have at least one contact, grouped into **1 / 2–5 / 6+ Active Members** buckets and a **No Active Members** bucket. Companies with no contacts at all are not listed, only counted in a note. |
 | **Membership by Firm** | Every FluentCRM Company with ≥1 contact, listed with its contacts. Exports to formatted Excel. |
 | **Invoicing** | Annual dues invoicing — see [Dues Invoicing](#dues-invoicing) below. |
 | **Payments** | Cross-year Stripe payments ledger — see [The Payments ledger](#the-payments-ledger) below. |
@@ -38,8 +38,8 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for member stat
 
 | Concept | Source |
 |---|---|
-| Paid / Active member | Contact has the **Dues Paid** tag |
-| Trustee | Contact has the **Trustees** tag |
+| Active member | Paid through **this year or later**: the highest `Dues Paid {year}` tag the contact carries (see [One definition of "active"](#one-definition-of-active)) |
+| Trustee | Contact has a trustee-family tag (**Trustees**, **Senior Trustee**, **Past President**) |
 | Payment method = Check / Invoice | **Paid by Check** / **Paid by Invoice** tags (default: Credit Card) |
 | Firm | The FluentCRM **Company** entity linked to the contact |
 
@@ -59,6 +59,18 @@ Tags are looked up by **slug** first, then by exact **title** as a fallback.
 | `inactive` | Inactive | Optional — "don't bill this record" override |
 
 The **Setup** page can create any of these in one click, plus any slug the Dues & Billing settings refer to (`professional`, `law-student`, `emerging-professional`, `pending-approval`, …).
+
+### One definition of "active"
+
+Every membership number — the Dashboard, the Reports KPI tiles, the Members / Trustees / Companies / Membership-by-Firm lists, their CSV and Excel exports and the Executive Summary — comes from one class, `MyNJILGA_Membership_Stats`, which classifies each contact with `MyNJILGA_My_Membership::standing()`, the same rule the member-facing [My Membership](#my-membership-page) page uses:
+
+- **Active** — paid through this year or later. There is no stored expiration date: a member is paid through the highest `Dues Paid {year}` tag they carry (Settings → year-tag pattern), and a membership ends 12/31 of that year. A contact with the evergreen `dues-paid` tag and **no** year tag (paid before invoicing existed) counts as active through the end of this year — the Dashboard shows them separately as "on the older tag, no date".
+- **Expired** — paid through an earlier year, or carrying only the `unpaid-dues` tag. The date wins over a lingering `dues-paid` tag.
+- **Exempt** (Past Presidents, Senior Trustees) and **Inactive** contacts owe no dues, so they are never "expired". The Trustees tiles partition the whole trustee family: Exempt / Paid / Unpaid / other.
+- It ignores the FluentCRM **contact status** (subscribed, transactional, pending, unsubscribed…): colleagues added by an online join are `transactional` and are paid members. A FluentCRM contact with no dues tag and on no firm roster (a newsletter subscriber) is not a member and is never counted.
+- **Firms** come from the FluentCRM Company roster. Companies with no contacts are reported separately, never as "no active member".
+
+The configured **paid / unpaid / inactive** tags and year-tag pattern in Settings are what is read — not fixed slugs. The provider reads FluentCRM with a constant number of queries (about 18, however many contacts) and caches the result for ten minutes.
 
 ---
 
@@ -147,7 +159,7 @@ Each invoice row is built through Stripe's own three-step sequence — `create` 
 
 ### On payment
 
-Settlement — granting tags and WordPress roles — is driven **only** by Stripe's `invoice.paid` webhook (`includes/invoicing/class-stripe-webhook.php`, its own REST route registered at `njilga/v1/stripe-webhook`, signature-verified against the mode's webhook secret). Every member of a paid dues invoice gets the year tag (`Dues Paid 2027`), the evergreen `dues-paid` tag (losing `unpaid-dues`), and their **category's WordPress role** — best-effort: only where a linked WP user exists and the role is defined; contacts with no account are skipped cleanly, never an error. A Company Note records it. Idempotent on duplicate webhook deliveries: a re-delivered event is acknowledged quietly, while a database failure while recording one is answered with a 503 so Stripe retries it (an acknowledged delivery is never resent).
+Settlement — granting tags and WordPress roles — is driven **only** by Stripe's `invoice.paid` webhook (`includes/invoicing/class-stripe-webhook.php`, its own REST route registered at `njilga/v1/stripe-webhook`, signature-verified against the mode's webhook secret). Every member of a paid dues invoice gets the year tag (`Dues Paid 2027`), the evergreen `dues-paid` tag (losing `unpaid-dues`), and their **category's WordPress role**. The role is decided by `MyNJILGA_Role_Sync` from the contact's **current CRM tags** at the moment of payment (the category whose tag they hold, in Settings order, else the default category); the role frozen in the invoice is only the fallback when the tags resolve to none. So a contact tagged **Professional** in the CRM who pays gets the `professional` role. It is **add-only** (a payment never removes a role), refuses any role holding administrator-level capabilities, and creates the `professional` role (capability `read` only) if the site lacks it — every other undefined role is reported, not created. A stale `user_id` on the contact falls back to the account with the contact's email. Each member's role step is isolated, so a problem there can never stop the rest of the roster or leave the invoice unmarked. The outcome is counted in the Company Note ("WordPress role: 3 granted, 1 already had it, 2 have no website account…"), and an undefined or privileged role also raises a Dashboard callout until it is fixed. **Not covered:** a contact tagged Professional *after* they paid, on no firm roster, or in a firm whose invoice is all $0 only gets the role at their next payment or login (no tag-change hook or bulk backfill yet — see the role-sync spec's implementation status). Idempotent on duplicate webhook deliveries: a re-delivered event is acknowledged quietly, while a database failure while recording one is answered with a 503 so Stripe retries it (an acknowledged delivery is never resent).
 
 A **daily reconciler** (`class-stripe-reconciler.php`) is the webhook's safety net, not a second source of truth — it never calls Stripe directly, only through the same gateway seam every other class uses. It re-fetches every `created`/`sent`/`processing` invoice in the active mode and brings the local row's status/amounts up to date with whatever Stripe actually shows, firing the same "paid" event the webhook does if a delivery was missed, delayed, or arrived before this migration's webhook auto-provisioning was in place. Staff can also trigger it on demand from the Invoicing page's **Sync with Stripe** button or a single row's **Refresh** action.
 
@@ -317,7 +329,8 @@ my-njilga/
 ├── includes/
 │   ├── class-admin-menu.php
 │   ├── class-tags.php                    ← Tag resolution (core + settings-driven slugs)
-│   ├── class-members-data.php
+│   ├── class-membership-stats.php        ← ONE definition of active/expired/exempt + firm/trustee/category counts (pure half unit-tested), 10-min cache
+│   ├── class-members-data.php            ← Report row/list shaping on top of the stats provider
 │   ├── class-page-*.php                  ← Dashboard, Reports, Members, Trustees, Companies, Firms
 │   ├── class-page-invoicing.php          ← Invoicing dashboard + admin-post handlers
 │   ├── class-page-payments.php           ← Payments ledger (by invoice / firm / member / aging)
@@ -358,11 +371,14 @@ my-njilga/
 │   │   ├── class-dues-roster.php         ← Line labels / line items / email summary
 │   │   ├── class-invoice-creator.php     ← Action Scheduler batches, per-row isolation
 │   │   ├── class-invoice-sender.php      ← Email + CC policy + Company Note
-│   │   ├── class-payment-listener.php    ← Paid → tags + roles (best-effort)
+│   │   ├── class-payment-listener.php    ← Paid → tags + roles
+│   │   ├── class-role-sync.php           ← Which WP role a paying member gets, add-only (pure half unit-tested)
+│   │   ├── class-invoice-stats.php       ← Dashboard invoice figures: one GROUP BY, mode-scoped, parity-tested against the Payments ledger
 │   │   ├── class-downgrade-sweep.php     ← preview() + run()
 │   │   └── class-invoicing-notes.php     ← FluentCRM Company Note helper
 │   └── enrollment/
 │       ├── class-applications-table.php  ← njilga_membership_applications
+│       ├── class-application-stats.php   ← Dashboard application + online-join figures
 │       ├── class-application-form.php    ← [njilga_membership_application] + AJAX + submit
 │       └── class-application-review.php  ← approve() / reject() + join policy
 ├── tests/                                ← php tests/run.php

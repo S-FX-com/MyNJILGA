@@ -110,6 +110,10 @@ class MyNJILGA_Downgrade_Sweep {
             );
         }
 
+        // Every swept member just changed tag: the dashboard's cached
+        // membership figures are now wrong.
+        MyNJILGA_Membership_Stats::flush();
+
         return [
             'firms_swept'        => count( $firms ),
             'invoices_swept'     => count( $rows ),

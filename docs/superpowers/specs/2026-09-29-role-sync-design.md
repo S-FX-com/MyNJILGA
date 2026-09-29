@@ -20,8 +20,9 @@ contact's tags.
 - Rule 2 as a pure `resolve_role()`, reusing `MyNJILGA_Pricing_Engine::category_for()`
   so a member is roled as the category they are billed as. `settle()` reads
   the contact's **current CRM tags** at payment time; the role frozen in the
-  invoice snapshot is only the fallback when the tags resolve to no role, so
-  the old behaviour is a strict subset of the new.
+  invoice snapshot is only the fallback when the tags resolve to no role
+  (including a category deliberately mapped to "no role" — the member gets
+  the role they were billed for, as before).
 - A pure, **add-only** `plan()`: it returns roles to add and has no remove
   list. Rules 3 and 4 (managed roles, removal, swap) are not implemented.
 - Rule 5, widened: `role_undefined` is reported, not silently skipped, and a

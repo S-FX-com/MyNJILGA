@@ -272,8 +272,10 @@ class MyNJILGA_Payment_Listener {
                 $contact->user_id = (int) $user->ID;
                 $contact->save();
             }
-            // The same resolver a payment uses, so login and payment can
-            // never disagree about which category's role a member gets.
+            // The same category resolver a payment uses, so login and payment
+            // cannot pick different categories for a member (a payment may
+            // additionally fall back to the invoice's frozen role when the
+            // current tags resolve to none).
             MyNJILGA_Role_Sync::sync_contact( $contact );
         } catch ( \Throwable $e ) {
             // Never let a CRM hiccup break a login.

@@ -641,7 +641,7 @@ class MyNJILGA_Membership_Stats {
         if ( strpos( $pattern, '{year}' ) === false ) {
             $warnings[] = sprintf( 'The year paid-tag pattern "%s" has no {year} in it, so dated payments cannot be read and only the evergreen paid tag counts.', $pattern );
         } elseif ( empty( $ctx['year_ids'][ $year ] ) ) {
-            $warnings[] = sprintf( 'No "%s" tag exists yet, so nobody can be counted as paid through %d until an invoice for that year is paid.', str_replace( '{year}', (string) $year, $pattern ), $year );
+            $warnings[] = sprintf( 'No "%s" tag exists yet, so no member has a dated payment for %d. Members still count as active from a later year\'s Dues Paid tag or, with no date, from the older Dues Paid tag.', str_replace( '{year}', (string) $year, $pattern ), $year );
         }
 
         if ( empty( $ctx['companies_active'] ) ) {

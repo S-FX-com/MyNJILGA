@@ -228,7 +228,7 @@ class RoleSyncTest extends NJILGA_TestCase {
     }
 
     public function test_every_capability_on_the_deny_list_makes_a_role_privileged(): void {
-        $deny = [ 'manage_options', 'promote_users', 'edit_users', 'create_users', 'delete_users', 'install_plugins', 'activate_plugins', 'edit_plugins', 'edit_themes', 'switch_themes', 'update_core', 'manage_network' ];
+        $deny = [ 'manage_options', 'promote_users', 'edit_users', 'create_users', 'delete_users', 'install_plugins', 'activate_plugins', 'edit_plugins', 'edit_themes', 'switch_themes', 'update_core', 'update_plugins', 'update_themes', 'delete_plugins', 'delete_themes', 'edit_files', 'manage_network', 'manage_sites' ];
         $this->assertSame( $deny, MyNJILGA_Role_Sync::PRIVILEGED_CAPS );
         foreach ( $deny as $cap ) {
             $this->assertTrue( MyNJILGA_Role_Sync::is_privileged( [ 'read' => true, $cap => true ] ), "$cap as cap => true" );
@@ -240,6 +240,31 @@ class RoleSyncTest extends NJILGA_TestCase {
         $this->assertFalse( MyNJILGA_Role_Sync::is_privileged( [ 'manage_options' => false, 'promote_users' => 0, 'read' => true ] ) );
         $this->assertFalse( MyNJILGA_Role_Sync::is_privileged( [] ) );
         $this->assertFalse( MyNJILGA_Role_Sync::is_privileged( [ 'read' => true, 'edit_posts' => true, 'edit_published_posts' => true, 'delete_posts' => true, 'list_users' => true ] ) );
+    }
+
+    // -------------------------------------------------------------------
+    // A stored problem stops showing once the cause is fixed
+    // -------------------------------------------------------------------
+
+    public function test_an_undefined_role_problem_ends_when_the_role_appears_or_stops_being_mapped(): void {
+        $p = [ 'status' => 'role_undefined', 'role' => 'member_plus', 'count' => 3 ];
+        $this->assertTrue( MyNJILGA_Role_Sync::problem_still_applies( $p, [ 'member_plus' ], false ), 'still mapped, still missing' );
+        $this->assertFalse( MyNJILGA_Role_Sync::problem_still_applies( $p, [ 'member_plus' ], true ), 'the role now exists' );
+        $this->assertFalse( MyNJILGA_Role_Sync::problem_still_applies( $p, [ 'professional' ], false ), 'no category maps to it any more' );
+    }
+
+    public function test_a_privileged_role_problem_is_not_fixed_by_the_role_existing(): void {
+        $p = [ 'status' => 'role_privileged', 'role' => 'administrator', 'count' => 1 ];
+        $admin = [ 'read' => true, 'manage_options' => true ];
+        $this->assertTrue( MyNJILGA_Role_Sync::problem_still_applies( $p, [ 'administrator' ], true, $admin ), 'still dangerous' );
+        $this->assertFalse( MyNJILGA_Role_Sync::problem_still_applies( $p, [ 'professional' ], true, $admin ), 'the mapping was corrected' );
+        $this->assertFalse( MyNJILGA_Role_Sync::problem_still_applies( $p, [ 'administrator' ], true, [ 'read' => true ] ), 'the role was defanged' );
+        $this->assertFalse( MyNJILGA_Role_Sync::problem_still_applies( $p, [ 'administrator' ], false, [] ), 'the role is gone' );
+    }
+
+    public function test_an_unknown_or_empty_problem_never_applies(): void {
+        $this->assertFalse( MyNJILGA_Role_Sync::problem_still_applies( [ 'status' => 'role_undefined', 'role' => '' ], [ '' ], false ) );
+        $this->assertFalse( MyNJILGA_Role_Sync::problem_still_applies( [ 'status' => 'something_else', 'role' => 'x' ], [ 'x' ], false ) );
     }
 
     public function test_a_privileged_role_is_reported_even_when_the_account_already_holds_it(): void {

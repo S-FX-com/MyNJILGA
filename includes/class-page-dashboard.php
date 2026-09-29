@@ -10,8 +10,12 @@
  *   Membership    MyNJILGA_Membership_Stats  (also feeds the Reports KPI tiles
  *                 and lists — "active" is defined once, in
  *                 MyNJILGA_My_Membership::standing())
- *   Invoices      MyNJILGA_Invoice_Stats     (agrees with Payments' Outstanding
- *                 and Invoicing's cards where they show the same figure)
+ *   Invoices      MyNJILGA_Invoice_Stats     (follows Payments' ledger rules, so
+ *                 Outstanding, Collected and Past due agree with Payments.
+ *                 Invoicing's own summary line is an older per-status total
+ *                 that leaves out ACH-in-flight and uncollectible rows and
+ *                 partial payments, so its Batch and Collected differ from
+ *                 these whenever such rows exist)
  *   Applications  MyNJILGA_Application_Stats (applications + online joins)
  *
  * Each section is loaded on its own and fails on its own: a problem reading
@@ -106,6 +110,12 @@ class MyNJILGA_Page_Dashboard {
         // MyNJILGA_Role_Sync when a payment hit a role that isn't defined on
         // the site or that carries administrator-level capabilities.
         $problem = class_exists( 'MyNJILGA_Role_Sync' ) ? MyNJILGA_Role_Sync::problem() : null;
+        // It is a stored sighting, not a live check: once the admin has fixed
+        // the mapping (or created the role) the callout must go, not wait for
+        // the next paid batch to clear it.
+        if ( $problem && ! MyNJILGA_Role_Sync::problem_is_current( $problem ) ) {
+            $problem = null;
+        }
         if ( $problem ) {
             $role  = esc_html( (string) ( $problem['role'] ?? '' ) );
             $count = (int) ( $problem['count'] ?? 0 );
@@ -114,7 +124,7 @@ class MyNJILGA_Page_Dashboard {
             if ( ( $problem['status'] ?? '' ) === 'role_privileged' ) {
                 MyNJILGA_Admin_UI::callout(
                     sprintf(
-                        '<strong>Payments won\'t grant the WordPress role “%s”.</strong> It carries administrator-level capabilities, so a membership payment must never give it (%d payment%s%s). Map the membership category to an ordinary member role in <a href="%s">Settings</a>.',
+                        '<strong>Payments won\'t grant the WordPress role “%s”.</strong> It carries administrator-level capabilities, so a membership payment must never give it (%d member%s%s). Map the membership category to an ordinary member role in <a href="%s">Settings</a>.',
                         $role,
                         $count,
                         $count === 1 ? '' : 's',
@@ -126,7 +136,7 @@ class MyNJILGA_Page_Dashboard {
             } else {
                 MyNJILGA_Admin_UI::callout(
                     sprintf(
-                        '<strong>A paid member couldn\'t be given the WordPress role “%s”.</strong> That role isn\'t defined on this site (%d payment%s%s). Create the role, or map the membership category to an existing role in <a href="%s">Settings</a>.',
+                        '<strong>A paid member couldn\'t be given the WordPress role “%s”.</strong> That role isn\'t defined on this site (%d member%s%s). Create the role, or map the membership category to an existing role in <a href="%s">Settings</a>.',
                         $role,
                         $count,
                         $count === 1 ? '' : 's',
@@ -157,7 +167,7 @@ class MyNJILGA_Page_Dashboard {
      * @param array<string,mixed>|null $m MyNJILGA_Membership_Stats::snapshot()
      */
     private static function render_membership( ?array $m ): void {
-        $desc = 'Active means paid through this year or later, whatever the member\'s email-subscription status. Members still on the older Dues Paid tag with no payment date count as active until the year-end downgrade sweep removes it.';
+        $desc = 'Active means paid through this year or later, whatever the member\'s email-subscription status. Members still on the older Dues Paid tag with no payment date count as active until that tag is removed.';
         if ( $m && ! empty( $m['generated'] ) ) {
             $ts = strtotime( (string) $m['generated'] . ' UTC' );
             if ( $ts ) {
@@ -211,7 +221,7 @@ class MyNJILGA_Page_Dashboard {
                 // Only members with a recorded payment date: a member on the
                 // older tag with no date has no real expiration to report.
                 'sub'     => (int) $mem['renewing'] > 0
-                    ? sprintf( '%s with a payment date expire 12/31/%d', self::n( (int) $mem['renewing'] ), $year )
+                    ? sprintf( '%s with a payment date %s 12/31/%d', self::n( (int) $mem['renewing'] ), (int) $mem['renewing'] === 1 ? 'expires' : 'expire', $year )
                     : '',
             ],
             [
@@ -221,7 +231,7 @@ class MyNJILGA_Page_Dashboard {
                 'icon'    => 'alert',
                 'url'     => add_query_arg( 'scope', 'all', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_FIRMS ) ),
                 'sub'     => self::terms( [
-                    (int) $mem['exempt'] > 0 ? self::n( (int) $mem['exempt'] ) . ' dues-exempt' : '',
+                    (int) $mem['exempt'] > 0 ? self::n( (int) $mem['exempt'] ) . ' exempt with no payment' : '',
                     (int) $mem['inactive'] > 0 ? self::n( (int) $mem['inactive'] ) . ' inactive' : '',
                 ], 'Not counted: ' ),
             ],
@@ -234,7 +244,7 @@ class MyNJILGA_Page_Dashboard {
                 'sub'     => self::terms( [
                     (int) $firms['without_active'] > 0 ? self::n( (int) $firms['without_active'] ) . ' with none' : '',
                     (int) $firms['no_owner'] > 0 ? self::n( (int) $firms['no_owner'] ) . ' with no Owner' : '',
-                    (int) $firms['empty'] > 0 ? self::n( (int) $firms['empty'] ) . ' companies with no contacts' : '',
+                    (int) $firms['empty'] > 0 ? sprintf( '%s %s with no contacts', self::n( (int) $firms['empty'] ), (int) $firms['empty'] === 1 ? 'company' : 'companies' ) : '',
                 ] ),
             ],
             [
@@ -246,7 +256,7 @@ class MyNJILGA_Page_Dashboard {
                 'sub'     => self::terms( [
                     (int) $trustees['active'] > 0 ? self::n( (int) $trustees['active'] ) . ' paid' : '',
                     (int) $trustees['expired'] > 0 ? self::n( (int) $trustees['expired'] ) . ' unpaid' : '',
-                    (int) $trustees['exempt'] > 0 ? self::n( (int) $trustees['exempt'] ) . ' dues-exempt' : '',
+                    (int) $trustees['exempt'] > 0 ? self::n( (int) $trustees['exempt'] ) . ' Past President or Senior Trustee' : '',
                 ] ),
             ],
             [
@@ -276,7 +286,12 @@ class MyNJILGA_Page_Dashboard {
                 '<tr><td>%s%s</td><td class="njilga-col-num">%s</td><td class="njilga-col-num">%s</td></tr>',
                 esc_html( (string) $c['label'] ),
                 (int) $c['defaulted'] > 0
-                    ? sprintf( '<span class="njilga-subline">%s carry no category tag and are counted here by default</span>', esc_html( self::n( (int) $c['defaulted'] ) ) )
+                    ? sprintf(
+                        '<span class="njilga-subline">%s %s no category tag and %s counted here by default</span>',
+                        esc_html( self::n( (int) $c['defaulted'] ) ),
+                        (int) $c['defaulted'] === 1 ? 'contact carries' : 'contacts carry',
+                        (int) $c['defaulted'] === 1 ? 'is' : 'are'
+                    )
                     : '',
                 MyNJILGA_Admin_UI::status( self::n( (int) $c['active'] ), (int) $c['active'] > 0 ? 'ok' : 'muted' ),
                 MyNJILGA_Admin_UI::status( self::n( (int) $c['expired'] ), (int) $c['expired'] > 0 ? 'bad' : 'muted' )
@@ -350,7 +365,7 @@ class MyNJILGA_Page_Dashboard {
                 'sub'     => self::terms( [
                     sprintf( '%s %s', self::n( (int) $annual['invoices'] ), (int) $annual['invoices'] === 1 ? 'invoice' : 'invoices' ),
                     (int) $annual['batch_cents'] > (int) $annual['invoiced_cents']
-                        ? 'batch total ' . MyNJILGA_Invoicing::money( (int) $annual['batch_cents'] )
+                        ? 'incl. drafts ' . MyNJILGA_Invoicing::money( (int) $annual['batch_cents'] )
                         : '',
                 ] ),
             ];
@@ -393,7 +408,9 @@ class MyNJILGA_Page_Dashboard {
             'icon'    => 'alert',
             'url'     => $payments,
             'sub'     => (int) $recv['past_due_count'] > 0
-                ? sprintf( '%s %s past their due date', self::n( (int) $recv['past_due_count'] ), (int) $recv['past_due_count'] === 1 ? 'invoice' : 'invoices' )
+                ? ( (int) $recv['past_due_count'] === 1
+                    ? '1 invoice past its due date'
+                    : sprintf( '%s invoices past their due date', self::n( (int) $recv['past_due_count'] ) ) )
                 : 'Nothing overdue',
         ];
         $cards[] = [
@@ -418,7 +435,7 @@ class MyNJILGA_Page_Dashboard {
             'icon'    => 'alert',
             'url'     => MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETUP ),
             'sub'     => (int) $flags['review'] > 0
-                ? sprintf( 'plus %s paid with a refund or dispute note', self::n( (int) $flags['review'] ) )
+                ? sprintf( 'plus %s closed %s carrying a note', self::n( (int) $flags['review'] ), (int) $flags['review'] === 1 ? 'invoice' : 'invoices' )
                 : '',
         ];
 
@@ -494,19 +511,22 @@ class MyNJILGA_Page_Dashboard {
                 'variant' => 'info',
                 'icon'    => 'refresh',
                 'url'     => $joinUrl,
-                'sub'     => (int) $joins['clearing'] > 0 && $joins['oldest_clearing_days'] !== null
-                    ? 'oldest ' . self::days( (int) $joins['oldest_clearing_days'] )
-                    : '',
+                'sub'     => self::terms( [
+                    (int) $joins['clearing'] > 0 && $joins['oldest_clearing_days'] !== null
+                        ? 'oldest ' . self::days( (int) $joins['oldest_clearing_days'] )
+                        : '',
+                    (int) $joins['failed'] > 0 ? sprintf( '%s failed to date', self::n( (int) $joins['failed'] ) ) : '',
+                ] ),
             ],
             [
-                'label'   => sprintf( 'Joined online in %d', $year ),
+                'label'   => sprintf( 'Online joins completed in %d', $year ),
                 'value'   => self::n( (int) $joins['joined_year'] ),
                 'variant' => 'success',
                 'icon'    => 'check-circle',
                 'url'     => $joinUrl,
                 'sub'     => self::terms( [
                     (int) $joins['awaiting_payment'] > 0 ? sprintf( '%s awaiting payment', self::n( (int) $joins['awaiting_payment'] ) ) : '',
-                    (int) $joins['failed'] > 0 ? sprintf( '%s bank payment%s failed', self::n( (int) $joins['failed'] ), (int) $joins['failed'] === 1 ? '' : 's' ) : '',
+                    'each join can cover colleagues',
                 ] ),
             ],
         ], 4 );
@@ -595,7 +615,8 @@ class MyNJILGA_Page_Dashboard {
         foreach ( $categories as $key => $c ) {
             $n = (int) ( $byCategory[ $key ] ?? 0 );
             if ( $n > 0 ) {
-                $out[] = self::n( $n ) . ' ' . trim( (string) preg_replace( '/\s*Membership.*$/i', '', (string) $c['label'] ) );
+                $name  = trim( (string) preg_replace( '/\s+Membership$/i', '', (string) $c['label'] ) );
+                $out[] = self::n( $n ) . ' ' . ( $name !== '' ? $name : (string) $c['label'] );
             }
         }
         return $out;

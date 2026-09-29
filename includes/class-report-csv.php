@@ -16,6 +16,12 @@ class MyNJILGA_Report_Csv {
      * Entry point: dispatch on the report type.
      */
     public static function stream( string $type ): void {
+        if ( in_array( $type, [ self::TYPE_MEMBERS, self::TYPE_TRUSTEES, self::TYPE_COMPANIES ], true ) ) {
+            $why = MyNJILGA_Members_Data::unavailable_reason( true );
+            if ( $why !== '' ) {
+                wp_die( esc_html( $why ) );
+            }
+        }
         switch ( $type ) {
             case self::TYPE_MEMBERS:   self::stream_members();   break;
             case self::TYPE_TRUSTEES:  self::stream_trustees();  break;
@@ -91,7 +97,7 @@ class MyNJILGA_Report_Csv {
                         $c['paid_count'],
                         $c['total_count'],
                         $m['name'],
-                        $m['is_paid'] ? 'Paid' : 'Unpaid',
+                        MyNJILGA_Members_Data::dues_pill( (string) $m['state'] )[0],
                     ] );
                 }
             }
