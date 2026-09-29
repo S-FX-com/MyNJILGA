@@ -113,8 +113,13 @@ class MyNJILGA_Page_Dashboard {
         // It is a stored sighting, not a live check: once the admin has fixed
         // the mapping (or created the role) the callout must go, not wait for
         // the next paid batch to clear it.
-        if ( $problem && ! MyNJILGA_Role_Sync::problem_is_current( $problem ) ) {
-            $problem = null;
+        if ( $problem ) {
+            $now = MyNJILGA_Role_Sync::current_problem_status( $problem );
+            if ( $now === '' ) {
+                $problem = null;
+            } else {
+                $problem['status'] = $now; // Created-but-privileged, or deleted-but-still-mapped, reads as what it is now.
+            }
         }
         if ( $problem ) {
             $role  = esc_html( (string) ( $problem['role'] ?? '' ) );

@@ -401,34 +401,44 @@ class MyNJILGA_Role_Sync {
     }
 
     /**
-     * Whether a stored problem still describes the site as it is NOW. The
-     * stored problem is a sighting from the last payment that met it; once
-     * the admin has fixed the cause it must stop being shown, not wait for
-     * the next paid batch to clear it (next_problem() only runs then).
+     * What is wrong with a mapped role RIGHT NOW: '' when a payment could
+     * grant it, else the status a payment would report for it.
      *
-     *   - Nothing maps to its role any more            -> fixed.
-     *   - role_undefined, and the role now exists      -> fixed.
-     *   - role_privileged, and the role is gone or no  -> fixed. (A role that
-     *     longer holds an administrator-level cap         still holds one is
-     *                                                     NOT fixed by existing.)
+     *   - Nothing maps to the role any more   -> ''  (the mapping was fixed)
+     *   - The role is not defined             -> role_undefined
+     *   - The role holds an administrator-
+     *     level capability                    -> role_privileged
+     *   - Otherwise                           -> ''  (grantable)
      *
-     * @param array<string,mixed> $problem      problem() as stored.
-     * @param array<int,string>   $mappedRoles  Every role a category maps to right now.
+     * Judged from the live role alone, never from what was stored: creating
+     * a missing role that is itself privileged, or deleting a privileged role
+     * that is still mapped, changes the problem, it does not fix it.
+     *
+     * @param array<int,string>             $mappedRoles  Every role a category maps to right now.
+     * @param array<int|string,bool|string> $capabilities The role's capabilities now ([] when undefined).
+     */
+    public static function problem_status_now( string $role, array $mappedRoles, bool $roleDefined, array $capabilities = [] ): string {
+        if ( $role === '' || ! in_array( $role, $mappedRoles, true ) ) {
+            return '';
+        }
+        if ( ! $roleDefined ) {
+            return self::STATUS_ROLE_UNDEFINED;
+        }
+        return self::is_privileged( $capabilities ) ? self::STATUS_ROLE_PRIVILEGED : '';
+    }
+
+    /**
+     * Whether a stored problem's role is still not grantable. The stored
+     * problem is a sighting from the last payment that met it; once the admin
+     * has fixed the cause it must stop being shown, not wait for the next
+     * paid batch to clear it (next_problem() only runs then).
+     *
+     * @param array<string,mixed>           $problem      problem() as stored.
+     * @param array<int,string>             $mappedRoles  Every role a category maps to right now.
      * @param array<int|string,bool|string> $capabilities The role's capabilities now ([] when undefined).
      */
     public static function problem_still_applies( array $problem, array $mappedRoles, bool $roleDefined, array $capabilities = [] ): bool {
-        $role = (string) ( $problem['role'] ?? '' );
-        if ( $role === '' || ! in_array( $role, $mappedRoles, true ) ) {
-            return false;
-        }
-        switch ( (string) ( $problem['status'] ?? '' ) ) {
-            case self::STATUS_ROLE_UNDEFINED:
-                return ! $roleDefined;
-            case self::STATUS_ROLE_PRIVILEGED:
-                return $roleDefined && self::is_privileged( $capabilities );
-            default:
-                return false;
-        }
+        return self::problem_status_now( (string) ( $problem['role'] ?? '' ), $mappedRoles, $roleDefined, $capabilities ) !== '';
     }
 
     // -------------------------------------------------------------------------
@@ -701,20 +711,29 @@ class MyNJILGA_Role_Sync {
     }
 
     /**
-     * problem_still_applies() against the live Settings and roles — what the
-     * Dashboard asks before it shows the callout.
+     * problem_status_now() against the live Settings and roles: '' when the
+     * stored problem's role is grantable again, else what is wrong with it
+     * NOW — which can differ from the stored status.
      *
      * @param array<string,mixed> $problem problem() as stored.
      */
-    public static function problem_is_current( array $problem ): bool {
+    public static function current_problem_status( array $problem ): string {
         $mapped = [];
         foreach ( MyNJILGA_Dues_Settings::categories() as $cat ) {
             if ( (string) ( $cat['role'] ?? '' ) !== '' ) {
                 $mapped[] = (string) $cat['role'];
             }
         }
-        $wpRole = get_role( (string) ( $problem['role'] ?? '' ) );
-        return self::problem_still_applies( $problem, $mapped, (bool) $wpRole, $wpRole ? (array) $wpRole->capabilities : [] );
+        $role   = (string) ( $problem['role'] ?? '' );
+        $wpRole = $role !== '' ? get_role( $role ) : null;
+        return self::problem_status_now( $role, $mapped, (bool) $wpRole, $wpRole ? (array) $wpRole->capabilities : [] );
+    }
+
+    /**
+     * @param array<string,mixed> $problem problem() as stored.
+     */
+    public static function problem_is_current( array $problem ): bool {
+        return self::current_problem_status( $problem ) !== '';
     }
 
     /**
