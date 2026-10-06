@@ -155,10 +155,6 @@ class MyNJILGA_Page_Settings {
 
         self::render_payments_notices();
 
-        if ( ! MyNJILGA_Stripe_Connection::encryption_active() ) {
-            self::render_encryption_warning();
-        }
-
         if ( $activeMode === MyNJILGA_Stripe_Connection::MODE_TEST ) {
             MyNJILGA_Admin_UI::callout( '<strong>Test mode takes online joins too.</strong> Anyone joining on a Membership page pays with a Stripe test card and no real money moves — but their membership, account, FluentCRM tags and firm changes are real. Right for a staging copy; on the live site, switch back to Live as soon as you\'re done trying something.', 'warning' );
         }
@@ -170,6 +166,10 @@ class MyNJILGA_Page_Settings {
 
         self::render_mode_switch_banner( $activeMode );
         self::render_payment_flat_settings( $s );
+
+        if ( ! MyNJILGA_Stripe_Connection::encryption_active() ) {
+            self::render_encryption_note();
+        }
     }
 
     private static function render_payments_notices(): void {
@@ -200,12 +200,22 @@ class MyNJILGA_Page_Settings {
         }
     }
 
-    private static function render_encryption_warning(): void {
-        echo '<div class="njilga-callout njilga-callout-warning">';
-        echo '<p><strong>Stripe keys are stored in plaintext.</strong> Define <code>NJILGA_STRIPE_KEY</code> in wp-config.php to encrypt the secret key and webhook secret at rest.</p>';
-        echo '<p>1. Generate a key once, at a terminal: <code>php -r "echo bin2hex(random_bytes(32));"</code></p>';
-        echo '<p>2. Paste the resulting 64-character hex string into wp-config.php: <code>define( \'NJILGA_STRIPE_KEY\', \'&lt;paste the hex string here&gt;\' );</code></p>';
-        echo '</div>';
+    /**
+     * A collapsed, low-key footnote at the bottom of the Payments tab
+     * (not a warning callout at the top) for the optional at-rest
+     * encryption of the stored Stripe secrets. The Stripe keys
+     * themselves always come from this tab; NJILGA_STRIPE_KEY is only a
+     * site-owner passphrase that encrypts them before they hit the
+     * options table.
+     */
+    private static function render_encryption_note(): void {
+        echo '<details class="njilga-details">';
+        printf( '<summary>%s Optional: encrypt the stored Stripe keys at rest</summary>', MyNJILGA_Admin_UI::icon( 'lock' ) );
+        echo '<p class="njilga-help">The keys you paste on this tab are saved to the WordPress database as entered. If you want them encrypted there, add a passphrase to <code>wp-config.php</code> on the server — nothing changes on this tab, and the keys still come only from here.</p>';
+        echo '<p class="njilga-help">1. Generate a passphrase once, at a terminal: <code>php -r "echo bin2hex(random_bytes(32));"</code></p>';
+        echo '<p class="njilga-help">2. Add the resulting 64-character hex string to wp-config.php: <code>define( \'NJILGA_STRIPE_KEY\', \'&lt;paste the hex string here&gt;\' );</code></p>';
+        echo '<p class="njilga-help">3. Re-paste the key(s) on this tab so they are stored encrypted. Keep the passphrase: without it, encrypted keys cannot be read.</p>';
+        echo '</details>';
     }
 
     /**
