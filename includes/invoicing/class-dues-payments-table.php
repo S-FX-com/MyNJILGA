@@ -110,6 +110,32 @@ class MyNJILGA_Dues_Payments_Table {
     }
 
     /**
+     * Ledger rows for several invoice rows in one query — invoice row id
+     * => its rows, newest first. Backs the Dues History tab, which lists a
+     * whole firm's payments at once and must not query once per invoice.
+     *
+     * @param array<int,int> $invoiceRowIds
+     * @return array<int,array<int,object>>
+     */
+    public static function get_for_invoice_rows( array $invoiceRowIds ): array {
+        global $wpdb;
+        $ids = array_values( array_unique( array_filter( array_map( 'intval', $invoiceRowIds ), static function ( $id ) { return $id > 0; } ) ) );
+        if ( empty( $ids ) ) {
+            return [];
+        }
+        $table        = self::table_name();
+        $placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+        $out          = [];
+        foreach ( (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE invoice_row_id IN ($placeholders) ORDER BY occurred_at DESC",
+            $ids
+        ) ) as $row ) {
+            $out[ (int) $row->invoice_row_id ][] = $row;
+        }
+        return $out;
+    }
+
+    /**
      * The invoice row a Stripe object (a charge, usually) was recorded
      * against, or 0.
      */

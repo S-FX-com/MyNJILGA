@@ -242,7 +242,8 @@ printf(
 );
 ```
 
-Wrap them in `.njilga-linkcards`. `.njilga-banner` is the sibling
+Wrap them in `.njilga-linkcards`. The title and description are block
+elements, so they stack inside the card. `.njilga-banner` is the sibling
 pattern: copy on the left, one action on the right.
 
 ### Tabs
@@ -298,8 +299,75 @@ echo '</div>';
 `currentColor` (lucide geometry). Available: `chevron`, `check`,
 `check-circle`, `alert`, `users`, `user`, `file`, `search`, `sliders`,
 `calendar`, `refresh`, `download`, `building`, `tag`, `inbox`, `award`,
-`external`. Add new ones to the `$paths` map in `icon()` — never inline
+`external`, `wrench`, `upload`, `receipt`, `history`, `printer`, `undo`. Add new ones to the `$paths` map in `icon()` — never inline
 an SVG in a page class.
+
+---
+
+### Embedded panels
+
+Markup that is **returned** rather than echoed — the Dues History tabs in
+FluentCRM — goes through one helper:
+
+```php
+return MyNJILGA_Admin_UI::embed( static function () {
+    MyNJILGA_Admin_UI::stat_cards( [ … ] );
+    // … the rest of the panel, echoed as on any screen …
+} );
+```
+
+`embed()` runs the body in a buffer and returns the stylesheet (**once**, even
+though every helper inside asks for it) plus the body in
+`<div class="njilga-ui njilga-embed">`. It cleans its buffer if the body throws,
+so a failing panel can't leak half a page into the REST response it is part of.
+
+FluentCRM renders the result with `v-html`, which sets three rules for
+anything embedded:
+
+1. **No JavaScript.** A `<script>` inserted that way never runs. Anything
+   interactive is plain HTML/CSS — a disclosure is `<details>`, a switch is the
+   scope switch below, "open this" is an `<a target="_blank" rel="noopener">`
+   (the panel sits inside another app's page and must not navigate it away).
+2. **Escape everything at the point it is printed.** The HTML is not sanitised
+   on the way in.
+3. **No page-level helpers.** `open()` / `close()` are for admin screens;
+   an embedded panel has no title block.
+
+### Scope switch
+
+A CSS-only segmented control for choosing between several views of one panel
+(a contact, or each firm they belong to):
+
+```html
+<div class="njilga-scope">
+  <input type="radio" class="njilga-scope-radio" name="u" id="u-0" checked>
+  <input type="radio" class="njilga-scope-radio" name="u" id="u-1">
+  <div class="njilga-scope-bar"><label for="u-0">This contact <span class="njilga-scope-n">4</span></label><label for="u-1">…</label></div>
+  <div class="njilga-scope-panels"><div class="njilga-scope-panel">…</div><div class="njilga-scope-panel">…</div></div>
+</div>
+```
+
+The radios are direct children of `.njilga-scope`, in the same order as the
+labels and the panels; the stylesheet pairs them by position, for up to **six**
+scopes. Give the group a unique `name`/`id` prefix per render.
+
+### Invoice document
+
+`.njilga-doc` is a card laid out as a printable invoice: `-head` (organisation,
+title, status pills), `-meta` (a grid of labelled facts: `-k` / `-v`),
+`-parties`, a boxed `njilga-table` for the lines, `-totals` (right-aligned;
+`-due` is the emphasised final row) and `-note`. Add `njilga-noprint` to
+anything that shouldn't be on paper — the print stylesheet also hides the
+WordPress admin chrome, so an invoice page prints as a clean document.
+`njilga-mono` is for references (check numbers, transaction ids).
+
+### Tool screens
+
+One-off data jobs (the PMPro Migrator, the Historical Invoice Import) share a
+shape: **choose → preview → confirm**. A preview is a plain GET that writes
+nothing; the confirm is `action_form()` with a `confirm()` text; the result
+comes back as a `callout()` after a redirect. Lay a form's inline controls out
+with `njilga-inline-fields` (each a `njilga-field`).
 
 ---
 
@@ -345,7 +413,7 @@ aren't just filtered slices of the same columns.
 ## 6. Not covered
 
 The public shortcodes — `[njilga_membership_application]`,
-`[njilga_firm_dues_status]`, `[njilga_my_membership]` and `[njilga_join]`, listed for staff on
+`[njilga_firm_dues_status]`, `[njilga_firm_renewal_lookup]`, `[njilga_my_membership]` and `[njilga_join]`, listed for staff on
 My NJILGA → Shortcodes — render on the **front
 end**, inside the site's own theme, and keep their own small scoped
 stylesheets. They deliberately do not load this admin stylesheet:
@@ -360,7 +428,7 @@ text, **Inter** for eyebrows, labels and buttons. Its colour tokens —
 the site's Automatic.css variables (`--secondary`, `--primary`,
 `--accent`, `--btn-radius`) with the site's values as fallbacks, and are
 scoped to each shortcode's root class (`.njilga-join`, `.njilga-status`,
-`.njilga-mem`, `.njilga-app`). Sizes are px, not rem: Automatic.css sets the root font
+`.njilga-renew`, `.njilga-mem`, `.njilga-app`). Sizes are px, not rem: Automatic.css sets the root font
 size to 62.5%. Inter is loaded from Google Fonts only on pages with a form
 (`my_njilga_front_font_url` filter; `''` leaves it to the theme).
 
