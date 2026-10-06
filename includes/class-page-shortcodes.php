@@ -45,18 +45,19 @@ class MyNJILGA_Page_Shortcodes {
 
         MyNJILGA_Admin_UI::callout(
             sprintf(
-                '<strong>Joining online?</strong> Put <code>[njilga_join]</code> on a Membership page for each category below — applicants pay in Stripe Checkout and are members as soon as the payment clears. <code>[njilga_membership_application]</code> is the older apply-then-approve form (no payment; staff approve each applicant in <a href="%s">Applications</a>); <code>[njilga_firm_dues_status]</code> and <code>[njilga_my_membership]</code> are for signed-in members, not joiners.',
+                '<strong>Joining online?</strong> Put <code>[njilga_join]</code> on a Membership page for each category below — applicants pay in Stripe Checkout and are members as soon as the payment clears. <code>[njilga_membership_application]</code> is the older apply-then-approve form (no payment; staff approve each applicant in <a href="%s">Applications</a>); <code>[njilga_firm_dues_status]</code> and <code>[njilga_my_membership]</code> are for signed-in members, not joiners. <code>[njilga_firm_renewal_lookup]</code> is open to everyone: a firm\'s way to find its open invoice and pay it without the email.',
                 esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) )
             ),
             'info'
         );
 
-        $uses = self::uses( [ MyNJILGA_Join_Form::SHORTCODE, MyNJILGA_Application_Form::SHORTCODE, MyNJILGA_Firm_Status_Page::SHORTCODE, MyNJILGA_My_Membership::SHORTCODE ] );
+        $uses = self::uses( [ MyNJILGA_Join_Form::SHORTCODE, MyNJILGA_Application_Form::SHORTCODE, MyNJILGA_Firm_Status_Page::SHORTCODE, MyNJILGA_Firm_Renewal_Lookup::SHORTCODE, MyNJILGA_My_Membership::SHORTCODE ] );
 
         self::render_how_to();
         self::render_join( $uses[ MyNJILGA_Join_Form::SHORTCODE ] );
         self::render_application( $uses[ MyNJILGA_Application_Form::SHORTCODE ] );
         self::render_firm_status( $uses[ MyNJILGA_Firm_Status_Page::SHORTCODE ] );
+        self::render_firm_renewal( $uses[ MyNJILGA_Firm_Renewal_Lookup::SHORTCODE ] );
         self::render_my_membership( $uses[ MyNJILGA_My_Membership::SHORTCODE ] );
 
         self::scripts();
@@ -242,6 +243,17 @@ class MyNJILGA_Page_Shortcodes {
             'For members, not joiners. A signed-in member sees the dues invoices of every firm they belong to, newest year first: the roster, amounts, status and the payment link — every member of the firm, not just the Owner. Visitors who aren\'t signed in are asked to log in. It always shows Live-mode invoices, whichever way the admin Test/Live toggle is set. Put it on a page members reach once they\'ve logged in. No attributes.'
         );
         self::single_line_table( '[' . MyNJILGA_Firm_Status_Page::SHORTCODE . ']', $hits );
+    }
+
+    /**
+     * @param array<int,array{post:WP_Post,via:?WP_Post,atts:array<int,string>}> $hits
+     */
+    private static function render_firm_renewal( array $hits ): void {
+        MyNJILGA_Admin_UI::section(
+            'Firm renewal lookup — [njilga_firm_renewal_lookup]',
+            'Open to everyone, signed in or not — for the person who didn\'t see the invoice email. They search by firm name; every firm with an <strong>open</strong> invoice that matches is listed with a <strong>Pay now</strong> button that goes to that invoice\'s own Stripe payment page. Nothing new is created: paying that invoice settles every member on it exactly as the email link does. The lookup\'s own page shows only the firm, dues year, amount, "billed to Ann B." and a member count, lists at most eight firms, and limits how often one visitor can search. <strong>The Stripe page the button opens is not that minimal</strong> — it is the page the firm was emailed, with the bill-to\'s name and email and every line (member names and amounts) — so anyone who can find a firm by name can read it. A firm with nothing open (or one that doesn\'t exist) gets the same "couldn\'t find" answer. Always Live-mode invoices. Optional attributes: <code>verify="email"</code> also asks for an email address that is on the firm\'s invoice before showing the firm (and so its Stripe page) — use it if the firm name alone is too little of a gate; <code>title="…"</code> changes the heading.'
+        );
+        self::single_line_table( '[' . MyNJILGA_Firm_Renewal_Lookup::SHORTCODE . ']', $hits );
     }
 
     /**

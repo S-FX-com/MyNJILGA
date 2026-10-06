@@ -39,6 +39,17 @@ require_once dirname( __DIR__ ) . '/includes/join/class-join-pricing.php';
 // class talks to WordPress and FluentCRM and isn't called from tests.
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-role-sync.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/interface-checkout-gateway.php';
+// Dues History, the two import tools and the Firm Renewal Lookup: their
+// parsing, mapping, matching and selection are pure; the few methods that
+// touch $wpdb / FluentCRM / WordPress are never called from tests, except
+// the SQL-emitting reads, which run against the recording stub below.
+require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-payments-table.php';
+require_once dirname( __DIR__ ) . '/includes/history/class-dues-history-table.php';
+require_once dirname( __DIR__ ) . '/includes/history/class-dues-history.php';
+require_once dirname( __DIR__ ) . '/includes/tools/class-spreadsheet-reader.php';
+require_once dirname( __DIR__ ) . '/includes/tools/class-historical-import.php';
+require_once dirname( __DIR__ ) . '/includes/tools/class-pmpro-migrator.php';
+require_once dirname( __DIR__ ) . '/includes/class-firm-renewal-lookup.php';
 
 class NJILGA_Assertion_Failed extends Exception {}
 
@@ -144,6 +155,11 @@ class NJILGA_Recording_Wpdb {
     public function get_results( string $query ): array {
         $this->queries[] = $query;
         return [];
+    }
+
+    /** Escapes LIKE wildcards the way $wpdb->esc_like() does. */
+    public function esc_like( string $text ): string {
+        return addcslashes( $text, '_%\\' );
     }
 
     /** @return null Always — nothing is stored. */

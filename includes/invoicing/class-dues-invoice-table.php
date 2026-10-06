@@ -435,6 +435,66 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
+     * Every row, any year, kind or status, that NAMES this contact — as a
+     * member of the frozen roster, as the person it is billed to, or as
+     * the firm's Owner — newest year first. Backs the Dues History tab on
+     * a FluentCRM contact, which (unlike the member-facing My Membership
+     * view) also wants the firm invoices the contact pays or owns without
+     * being a member of.
+     *
+     * The LIKE only narrows what is fetched (it matches a member entry,
+     * and the owner/bill-to objects, which also carry "contact_id"); the
+     * billing columns catch the rest. $livemode is required, as for every
+     * other read here.
+     *
+     * @return array<int,object>
+     */
+    public static function rows_involving_contact( int $contactId, bool $livemode ): array {
+        global $wpdb;
+        if ( $contactId <= 0 ) {
+            return [];
+        }
+        $table = self::table_name();
+        $like  = '%' . $wpdb->esc_like( '"contact_id":' . $contactId . ',' ) . '%';
+        $rows  = (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE livemode = %d AND ( bill_to_contact_id = %d OR fluentcrm_owner_contact_id = %d OR roster_snapshot LIKE %s ) ORDER BY dues_year DESC, id ASC",
+            $livemode ? 1 : 0,
+            $contactId,
+            $contactId,
+            $like
+        ) );
+        // A LIKE hit can be a person who merely shares an id prefix inside
+        // some other field; keep only rows that really name the contact.
+        return array_values( array_filter( $rows, static function ( $row ) use ( $contactId ) {
+            return (int) $row->bill_to_contact_id === $contactId
+                || (int) $row->fluentcrm_owner_contact_id === $contactId
+                || self::listed_member( $row, $contactId ) !== null;
+        } ) );
+    }
+
+    /**
+     * Invoices a firm could pay right now: issued (created or sent), with
+     * a hosted payment page, in the given mode. Backs the public Firm
+     * Renewal Lookup. ACH-in-flight rows are returned too (the caller
+     * tells the visitor a payment is already on its way, rather than
+     * offering a second one); drafts, approved rows, paid, voided and
+     * downgraded rows never are.
+     *
+     * @return array<int,object>
+     */
+    public static function get_open_issued( bool $livemode ): array {
+        global $wpdb;
+        $table = self::table_name();
+        return (array) $wpdb->get_results( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE livemode = %d AND status IN (%s, %s, %s) AND fluentcrm_company_id > 0 ORDER BY dues_year ASC, id ASC",
+            $livemode ? 1 : 0,
+            self::STATUS_CREATED,
+            self::STATUS_SENT,
+            self::STATUS_PROCESSING
+        ) );
+    }
+
+    /**
      * This contact's entry in a row's frozen members[] — null when the
      * snapshot doesn't list them as a member (being its Owner or bill-to
      * doesn't count). Pure — tested directly.

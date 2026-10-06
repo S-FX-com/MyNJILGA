@@ -20,18 +20,28 @@ class MyNJILGA_Admin_Menu {
     const SLUG_SETTINGS     = 'my-njilga-settings';
     const SLUG_SETUP        = 'my-njilga-setup';
     const SLUG_SHORTCODES   = 'my-njilga-shortcodes';
+    const SLUG_TOOLS        = 'my-njilga-tools';
+    const SLUG_TOOL_PMPRO   = 'my-njilga-tool-pmpro';
+    const SLUG_TOOL_IMPORT  = 'my-njilga-tool-import';
+    const SLUG_DUES_INVOICE = 'my-njilga-dues-invoice';
 
     /**
-     * Report detail pages that are reachable by URL (clicked into from the
-     * Reports landing page) but deliberately kept out of the admin menu.
+     * Detail pages that are reachable by URL (clicked into from the Reports
+     * or Tools landing page, or from a Dues History tab) but deliberately
+     * kept out of the admin menu. The optional third element is the menu
+     * item that stays highlighted while the page is open; it defaults to
+     * Reports.
      *
-     * @var array<string,array{0:string,1:string}>  slug => [ title, page class ]
+     * @var array<string,array{0:string,1:string,2?:string}>  slug => [ title, page class, highlighted submenu slug ]
      */
     const HIDDEN_PAGES = [
-        self::SLUG_MEMBERS   => [ 'Active Paid Members', 'MyNJILGA_Page_Members'   ],
-        self::SLUG_TRUSTEES  => [ 'Trustees',           'MyNJILGA_Page_Trustees'  ],
-        self::SLUG_COMPANIES => [ 'Companies',          'MyNJILGA_Page_Companies' ],
-        self::SLUG_FIRMS     => [ 'Membership by Firm', 'MyNJILGA_Page_Firms'     ],
+        self::SLUG_MEMBERS      => [ 'Active Paid Members',        'MyNJILGA_Page_Members'    ],
+        self::SLUG_TRUSTEES     => [ 'Trustees',                   'MyNJILGA_Page_Trustees'   ],
+        self::SLUG_COMPANIES    => [ 'Companies',                  'MyNJILGA_Page_Companies'  ],
+        self::SLUG_FIRMS        => [ 'Membership by Firm',         'MyNJILGA_Page_Firms'      ],
+        self::SLUG_TOOL_PMPRO   => [ 'PMPro Migrator',             'MyNJILGA_Page_Tool_Pmpro',  self::SLUG_TOOLS    ],
+        self::SLUG_TOOL_IMPORT  => [ 'Historical Invoice Import',  'MyNJILGA_Page_Tool_Import', self::SLUG_TOOLS    ],
+        self::SLUG_DUES_INVOICE => [ 'Invoice',                    'MyNJILGA_Page_Dues_Invoice', self::SLUG_PAYMENTS ],
     ];
 
     public static function register(): void {
@@ -77,6 +87,9 @@ class MyNJILGA_Admin_Menu {
         add_submenu_page( self::SLUG_ROOT, 'Dues & Billing Settings', 'Settings', 'manage_options', self::SLUG_SETTINGS, [ 'MyNJILGA_Page_Settings', 'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Setup',     'Setup',     'manage_options', self::SLUG_SETUP,     [ 'MyNJILGA_Page_Setup',      'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Shortcodes', 'Shortcodes', 'manage_options', self::SLUG_SHORTCODES, [ 'MyNJILGA_Page_Shortcodes', 'render' ] );
+        // Tools: one-off data jobs (PMPro Migrator, Historical Invoice
+        // Import). The tools themselves are hidden pages reached from here.
+        add_submenu_page( self::SLUG_ROOT, 'Tools', 'Tools', 'manage_options', self::SLUG_TOOLS, [ 'MyNJILGA_Page_Tools', 'render' ] );
 
         // Report detail pages: registered with an EMPTY parent slug. WordPress
         // keeps them in $submenu[''] — a bucket it never renders — so they stay
@@ -110,12 +123,14 @@ class MyNJILGA_Admin_Menu {
     }
 
     /**
-     * Keeps the "Reports" submenu item highlighted while viewing one of the
-     * hidden report pages. Hooked on `submenu_file`.
+     * Keeps the right submenu item highlighted while viewing one of the
+     * hidden pages — Reports for a report, Tools for a tool, Payments for
+     * an invoice. Hooked on `submenu_file`.
      */
     public static function highlight_submenu( $submenu_file ) {
         global $plugin_page;
-        return isset( self::HIDDEN_PAGES[ (string) $plugin_page ] ) ? self::SLUG_REPORTS : $submenu_file;
+        $page = (string) $plugin_page;
+        return isset( self::HIDDEN_PAGES[ $page ] ) ? ( self::HIDDEN_PAGES[ $page ][2] ?? self::SLUG_REPORTS ) : $submenu_file;
     }
 
     /**
@@ -124,6 +139,14 @@ class MyNJILGA_Admin_Menu {
      */
     public static function render_back_to_reports(): void {
         MyNJILGA_Admin_UI::back_link( self::url( self::SLUG_REPORTS ), 'All Reports' );
+    }
+
+    /**
+     * Renders a "← All Tools" link back to the Tools landing page. Shown at
+     * the top of each tool, which — like the reports — is a hidden page.
+     */
+    public static function render_back_to_tools(): void {
+        MyNJILGA_Admin_UI::back_link( self::url( self::SLUG_TOOLS ), 'All Tools' );
     }
 
     /**
