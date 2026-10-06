@@ -1,6 +1,6 @@
 # My NJILGA
 
-A WordPress plugin that gives NJILGA admins a one-stop dashboard for member status, trustees, and company rollups — plus the annual **dues invoicing** process (Stripe + FluentCRM), **online joining** with a firm upsell (Stripe Checkout), a **membership application gate**, and a **member-facing dues status page**. Everything is driven by FluentCRM tags on the local WordPress install; billing is driven by Stripe. No subscriptions anywhere — every dues cycle is its own one-time invoice.
+A WordPress plugin that gives NJILGA admins a one-stop dashboard for the whole association — membership, invoices and applications — with reports for trustees and firms — plus the annual **dues invoicing** process (Stripe + FluentCRM), **online joining** with a firm upsell (Stripe Checkout), a **membership application gate**, a **member-facing dues status page**, and a **My Membership page** for the member and their firm. Everything is driven by FluentCRM tags on the local WordPress install; billing is driven by Stripe. No subscriptions anywhere — every dues cycle is its own one-time invoice.
 
 ---
 
@@ -19,18 +19,19 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for member stat
 
 | Page | What it shows |
 |---|---|
-| **Dashboard** | Summary counts (paid members, trustees, companies with paid members), bucket distribution. |
+| **Dashboard** | The association at a glance, in three rows of cards that link to where the work happens. **Membership** — active members, paid ahead for next year, expired, firms with an active member, trustees, members without a firm, and a per-category table. **Invoices** — invoiced / collected for the dues year, outstanding and past due across all years, drafts to review, blocked (no Owner), flagged; scoped to the active Stripe mode. **Applications** — the application queue and online joins that need a person. Plus a **Refresh figures** button (membership figures are cached ten minutes and flushed after each payment, sweep, approval and settings save) and alerts (Stripe Test mode; a role a payment could not grant). See [One definition of "active"](#one-definition-of-active). |
 | **Reports** | Landing page for every report below, plus the Executive Summary export. |
-| **Active Paid Members** | Every contact carrying the **Dues Paid** tag, with firm, email, trustee flag, payment method. |
-| **Trustees** | Every contact carrying a trustee-family tag, plus whether they've paid dues. |
-| **Companies** | All FluentCRM Companies, grouped into **1 / 2–5 / 6+ Paid Members** buckets. |
+| **Active Paid Members** | Every *active* member — paid through this year or later — whatever their email-subscription status, with firm, email, trustee flag, payment method. |
+| **Trustees** | Every contact carrying a trustee-family tag, labelled Paid, Unpaid, Exempt (Past Presidents and Senior Trustees owe no dues), Inactive or None. |
+| **Companies** | FluentCRM Companies that have at least one contact, grouped into **1 / 2–5 / 6+ Active Members** buckets and a **No Active Members** bucket. Companies with no contacts at all are not listed, only counted in a note. |
 | **Membership by Firm** | Every FluentCRM Company with ≥1 contact, listed with its contacts. Exports to formatted Excel. |
 | **Invoicing** | Annual dues invoicing — see [Dues Invoicing](#dues-invoicing) below. |
 | **Payments** | Cross-year Stripe payments ledger — see [The Payments ledger](#the-payments-ledger) below. |
 | **Applications** | Enrollment review queue — see [Enrollment gate](#enrollment-gate) — and the **Online joins** tab — see [Online joining](#online-joining). |
 | **Settings** | **Dues & Billing** — category mapping, assessment, per-firm billing mode, all switches. **Payments** tab — Stripe connection, mode, and payment settings. |
 | **Setup** | Environment checks, tag checklist, **tag-slug audit** and **product-mapping audit** for the settings, plus Stripe connection health and a recent-API-activity log. |
-| **Shortcodes** | Every shortcode the plugin provides — a ready-to-paste `[njilga_join]` line per membership category, `[njilga_firm_dues_status]`, `[njilga_my_membership]`, `[njilga_membership_application]` — with copy buttons and the pages that use each one now. |
+| **Shortcodes** | Every shortcode the plugin provides — a ready-to-paste `[njilga_join]` line per membership category, `[njilga_firm_dues_status]`, `[njilga_firm_renewal_lookup]`, `[njilga_my_membership]`, `[njilga_membership_application]` — with copy buttons and the pages that use each one now. |
+| **Tools** | One-off data jobs: the **PMPro Migrator** and the **Historical Invoice Import** (see [Tools](#tools)), plus the import log with an **Undo** for every run. Both create reference history that shows on the [Dues History](#dues-history) tab of a FluentCRM contact or company. |
 
 ---
 
@@ -38,8 +39,8 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for member stat
 
 | Concept | Source |
 |---|---|
-| Paid / Active member | Contact has the **Dues Paid** tag |
-| Trustee | Contact has the **Trustees** tag |
+| Active member | Paid through **this year or later**: the highest `Dues Paid {year}` tag the contact carries (see [One definition of "active"](#one-definition-of-active)) |
+| Trustee | Contact has a trustee-family tag (**Trustees**, **Senior Trustee**, **Past President**) |
 | Payment method = Check / Invoice | **Paid by Check** / **Paid by Invoice** tags (default: Credit Card) |
 | Firm | The FluentCRM **Company** entity linked to the contact |
 
@@ -59,6 +60,18 @@ Tags are looked up by **slug** first, then by exact **title** as a fallback.
 | `inactive` | Inactive | Optional — "don't bill this record" override |
 
 The **Setup** page can create any of these in one click, plus any slug the Dues & Billing settings refer to (`professional`, `law-student`, `emerging-professional`, `pending-approval`, …).
+
+### One definition of "active"
+
+Every membership number — the Dashboard, the Reports KPI tiles, the Members / Trustees / Companies / Membership-by-Firm lists, their CSV and Excel exports and the Executive Summary — comes from one class, `MyNJILGA_Membership_Stats`, which classifies each contact with `MyNJILGA_My_Membership::standing()`, the same rule the member-facing [My Membership](#my-membership-page) page uses:
+
+- **Active** — paid through this year or later. There is no stored expiration date: a member is paid through the highest `Dues Paid {year}` tag they carry (Settings → year-tag pattern), and a membership ends 12/31 of that year. A contact with the evergreen `dues-paid` tag and **no** year tag (paid before invoicing existed) counts as active through the end of this year — the Dashboard shows them separately as "on the older tag, no date".
+- **Expired** — paid through an earlier year, or carrying only the `unpaid-dues` tag. The date wins over a lingering `dues-paid` tag.
+- **Exempt** (Past Presidents, Senior Trustees) and **Inactive** contacts owe no dues, so they are never "expired". The Trustees tiles partition the whole trustee family: Exempt / Paid / Unpaid / other.
+- It ignores the FluentCRM **contact status** (subscribed, transactional, pending, unsubscribed…): colleagues added by an online join are `transactional` and are paid members. A FluentCRM contact with no dues tag and on no firm roster (a newsletter subscriber) is not a member and is never counted.
+- **Firms** come from the FluentCRM Company roster. Companies with no contacts are reported separately, never as "no active member".
+
+The configured **paid / unpaid / inactive** tags and year-tag pattern in Settings are what is read — not fixed slugs. The provider reads FluentCRM with a constant number of queries (about 18, however many contacts) and caches the result for ten minutes.
 
 ---
 
@@ -147,7 +160,7 @@ Each invoice row is built through Stripe's own three-step sequence — `create` 
 
 ### On payment
 
-Settlement — granting tags and WordPress roles — is driven **only** by Stripe's `invoice.paid` webhook (`includes/invoicing/class-stripe-webhook.php`, its own REST route registered at `njilga/v1/stripe-webhook`, signature-verified against the mode's webhook secret). Every member of a paid dues invoice gets the year tag (`Dues Paid 2027`), the evergreen `dues-paid` tag (losing `unpaid-dues`), and their **category's WordPress role**, swapped in by the role sync (any other membership role they held is removed) — only where a linked WP user exists and the role is defined; contacts with no account are skipped cleanly, never an error. A Company Note records it. Idempotent on duplicate webhook deliveries: a re-delivered event is acknowledged quietly, while a database failure while recording one is answered with a 503 so Stripe retries it (an acknowledged delivery is never resent).
+Settlement — granting tags and WordPress roles — is driven **only** by Stripe's `invoice.paid` webhook (`includes/invoicing/class-stripe-webhook.php`, its own REST route registered at `njilga/v1/stripe-webhook`, signature-verified against the mode's webhook secret). Every member of a paid dues invoice gets the year tag (`Dues Paid 2027`), the evergreen `dues-paid` tag (losing `unpaid-dues`), and their **category's WordPress role**. `MyNJILGA_Role_Sync` decides it from the contact's **current CRM tags** at the moment of payment (the category whose tag they hold, in Settings order, else the default category) — not from the roster frozen into the invoice — and swaps it in: any other membership role they held is removed (never a WordPress core role). A role holding administrator-level capabilities is never granted (reported as `role_privileged`); the `professional` role is created on demand, with the `read` capability only, if the site lacks it — any other undefined role is reported, not created. Each member's role step is isolated, so one failure can't stop the rest of the roster or leave the invoice unmarked, and a contact with no website account is skipped cleanly, never an error. The outcome is counted in the Company Note ("WordPress role: 3 granted, 1 already had it, 2 have no website account…"), and an undefined or privileged role also raises a Dashboard callout until it is fixed. Idempotent on duplicate webhook deliveries: a re-delivered event is acknowledged quietly, while a database failure while recording one is answered with a 503 so Stripe retries it (an acknowledged delivery is never resent).
 
 A **daily reconciler** (`class-stripe-reconciler.php`) is the webhook's safety net, not a second source of truth — it never calls Stripe directly, only through the same gateway seam every other class uses. It re-fetches every `created`/`sent`/`processing` invoice in the active mode and brings the local row's status/amounts up to date with whatever Stripe actually shows, firing the same "paid" event the webhook does if a delivery was missed, delayed, or arrived before this migration's webhook auto-provisioning was in place. Staff can also trigger it on demand from the Invoicing page's **Sync with Stripe** button or a single row's **Refresh** action.
 
@@ -311,6 +324,109 @@ Like the firm dues status page, it shows every member of the firm the same thing
 
 ---
 
+## Dues History
+
+A **Dues History** tab on every FluentCRM **contact** record and every FluentCRM **company** record — the invoices and payments for that person or firm in one place, with every invoice one click from being called up.
+
+It uses FluentCRM's own extension API (`FluentCrmApi('extender')->addProfileSection()` / `->addCompanyProfileSection()`), so nothing in FluentCRM is patched or injected. The contact tab needs FluentCRM 2.2+, the company tab FluentCRM 2.8+ with the Companies module; on an older release the contact tab still works. The tab is for administrators (`manage_options`), like every My NJILGA screen.
+
+**Where the data comes from.** Two sources, merged for display only:
+
+| Source | What it is | Freshness |
+|---|---|---|
+| **Stripe** | The live invoices and the payment ledger (`njilga_dues_invoices`, `njilga_dues_payments`) — everything created through [Dues Invoicing](#dues-invoicing) | Read straight from the tables on every view, so an invoice that is created, sent, paid, voided or refunded shows its new state the next time the tab opens. Nothing is copied, so there is nothing to fall out of date. |
+| **PMPro / Imported** | Invoices recreated from earlier years by the [Tools](#tools) (`njilga_dues_history`) | Static reference records. |
+
+Draft and approved invoices aren't shown — they haven't been issued, and live in Invoicing. Like the Payments ledger, the Stripe half follows the active **Test/Live** mode; recreated history isn't mode-bound.
+
+**On a contact** — a switch between **This contact** (every invoice that names them: billed to them, or listing them as a member of its roster) and **each firm they belong to** (every invoice for the firm, whoever it was billed to). On a company — the firm's whole history. Each view shows:
+
+- **Figures** — open balance, paid to date (net of refunds), invoice count and years covered, last payment. On a contact's own tab these are for *the invoices that name them* (a whole firm invoice counts in full — the *This contact* column shows their share) and are labelled so; on a firm view they are the firm's.
+- **Open invoices** — oldest first, with due date and balance. *Open* means money is still owed: awaiting payment, **ACH clearing**, or **Lapsed** (a downgraded invoice that was never paid — the Payments ledger counts it as outstanding too). An open invoice past its due date reads **Overdue**; a live one has a **Pay online** button to its Stripe payment page. On a contact's tab, a *This contact* column shows their own share of a firm invoice.
+- **Payment history** — every payment and refund, newest first, with method (`Visa ••4242`, `Check #4417`, `ACH — Chase`), reference and the invoice it was for.
+- **All invoices** — newest dues year first, with source (Stripe / PMPro / Imported), status and a **View** button.
+
+**Calling up an invoice.** *View* (or the invoice number) opens a read-only invoice page in a new tab (`My NJILGA → … → Invoice`, a hidden admin page): the invoice document — status, dates, who it was billed to and the firm (each linked back to its FluentCRM record), every line item, totals, and its payments — with **Print**, and for a live invoice the Stripe **PDF** and **Payment page**. It prints without the admin chrome. The same page serves a recreated invoice, which has no Stripe page of its own.
+
+The panel is rendered by FluentCRM with `v-html`, so it uses no JavaScript (the contact/firm switch is CSS-only) and escapes everything it prints. See [design.md](design.md#embedded-panels).
+
+Recreated history lives in its **own table**, deliberately: nothing the Tools create can move a dashboard figure, appear in Invoicing or the Payments ledger, be touched by the Stripe reconciler or the downgrade sweep, or change anyone's tags or WordPress role.
+
+---
+
+## Tools
+
+**My NJILGA → Tools** holds one-off data jobs for bringing earlier years' dues into the site. Both tools create *reference history* — see [Dues History](#dues-history) — and both follow the same pattern: **choose → preview → confirm**. A preview writes nothing; the confirm step is a nonce-protected POST; running again is safe (what is already in is skipped); and every run is logged on the Tools page with an **Undo** that removes exactly the invoices that run created.
+
+### PMPro Migrator
+
+Recreates a past year's **paid** dues invoices from Paid Memberships Pro. It reads PMPro's order table (`{prefix}pmpro_membership_orders`, with `pmpro_membership_levels` for names) directly — PMPro doesn't need to be active, but its data does need to be in this site's database. It never writes to PMPro.
+
+1. **Choose** — the window of orders (last calendar year by default) and which **dues year** to record them under: *the year each order was placed*, or a fixed year (for a PMPro cycle that doesn't follow the calendar). A **Skip $0 orders** switch is on by default. The top of the screen shows PMPro's paid orders and totals per year, so the right window is easy to pick.
+2. **Preview** — every paid order matched to a contact and firm: how many will be migrated, how many already were, how many can't be matched, and what was skipped (and why — $0, test orders, orders that were never paid). A table shows the invoices that would be created.
+3. **Migrate** — creates them.
+
+| PMPro order | Becomes |
+|---|---|
+| `status = success` | A **paid** invoice. Pending, refunded, cancelled, error and review orders are not migrated, and `sandbox` (test-gateway) orders never are. |
+| `code` / `id` | Invoice number = PMPro's own invoice code; the order id is the idempotency key (`source_ref`), so a re-run — or an overlapping window — can't create a second copy. |
+| `user_id` → WordPress user → FluentCRM contact | Matched by linked user, then by email. The contact's **firm** (FluentCRM company) is the invoice's firm. An order with no matching contact is **not migrated** — it would appear on no tab — and is listed with the reason (e.g. *Website user #99 no longer exists*) so it can be fixed and the tool run again. A contact with no firm still migrates, onto the contact tab only. |
+| `membership_id` | The level's name: *2025 Professional Membership*. |
+| `subtotal`, `couponamount`, `tax`, `total` | Line items that always add up to the amount paid: the subtotal, a **Discount** line for a coupon, **Tax**, and an **Adjustment** for any difference PMPro's own figures leave. |
+| `gateway`, `payment_type`, `cardtype`, `accountnumber` | Method — card (`Visa ••4242`), check, PayPal or other. |
+| `payment_transaction_id` | The payment's reference (the order code if there is none). |
+| `timestamp` | Invoice date and paid date. |
+
+One run migrates up to 2,000 orders; it says so and a second run continues.
+
+### Historical Invoice Import
+
+Upload a **CSV or Excel (.xlsx)** sheet of earlier years' invoices. Nothing is stored from the file itself: it is parsed in the upload request, and the parsed invoices are held for an hour — for the uploading user only — while you review them.
+
+**The sheet** is *one row per invoice line*, with column headings in the first row. A firm's invoice for three members is three rows with the same invoice number; a one-member invoice is one row. **Download a blank template** on the tool's page for the exact headings and two example invoices.
+
+| Column | Needed | Notes |
+|---|---|---|
+| **Amount** | Required | Negative amounts (or `(125.00)`) are credits. `$1,250.00`, `1.250,50` and `125` all read. |
+| **Dues Year** *or* **Invoice Date** | Required | The year is taken from the invoice date if there is no Dues Year column. `2025`, `FY2025` and `2025-26` all read as 2025. |
+| **Firm** and/or **Member Email** | One of them | Firm → a FluentCRM **Company** by name (`Smith & Jones, LLP` = `Smith and Jones LLP`, the same rule the online join uses); Member Email → a **contact**, which also supplies the firm when the sheet has none. |
+| Invoice Number | Recommended | Rows sharing a number, year *and firm* become one invoice — so a placeholder like `N/A`, or a number two firms both used, never merges different firms. It is also what makes a re-upload safe. Without it, each row is its own invoice and is keyed by its content. |
+| Status | Optional | *Paid*, *Unpaid / Open / Outstanding*, or *Void*. Free text is read sensibly (*Paid - no balance* and *Overdue - paid* are paid; *Unpaid*, *Not paid* and *Partially paid* are open; *N/A*, *TBD* and *-* say nothing). A row with no status is recorded as paid or open, as you choose on upload. |
+| Amount Paid, Date Paid, Payment Method, Reference / Check # | Optional | The payment. A paid invoice with no Amount Paid is paid in full; an Amount Paid below the total is recorded as part-paid (open). |
+| Invoice Date, Due Date, Member Name, Description, Notes | Optional | Shown on the invoice. |
+
+Headings are matched loosely (`Invoice #`, `Invoice No`, `Invoice Number`) and extra columns are ignored; the review screen shows exactly how each heading was read. Dates read US-style (`3/4/2025` is March 4th) unless the first number can only be a day. Excel dates are converted using the cell's own format. Only the first worksheet of a workbook is read, up to **5 MB, 10,000 rows and 5,000 invoices** per upload. A sheet over the row limit is refused outright — never partly imported, since an invoice could straddle the cut — so split it, keeping each invoice's rows together. A worksheet may inflate to at most 8 MB of XML. An old `.xls` is declined with instructions for saving as CSV.
+
+**Review** shows what would be imported (new), what already was (skipped), invoices that **can't be imported** (not imported, with the reason — fix the sheet or FluentCRM and upload again), rows that couldn't be read (with their **sheet row numbers**, as a spreadsheet counts them), and notes where something was adjusted. An invoice is *held back* if it can't be matched to a firm or contact, **or if one of its own rows couldn't be read** — importing it would record it short, and the corrected sheet would then be skipped as "already imported". An invoice naming an email that isn't a FluentCRM contact still imports onto its firm. The matching is redone at import time, so what is written is checked against FluentCRM as it is then.
+
+---
+
+## Firm renewal lookup
+
+`[njilga_firm_renewal_lookup]` — for the person who **didn't see the invoice email**. Anyone, signed in or not, can search for a firm by name; every firm with an **open** invoice that matches is listed with a **Pay now** button. Put it on a public page (e.g. *Pay your dues*).
+
+```
+[njilga_firm_renewal_lookup]
+[njilga_firm_renewal_lookup verify="email" title="Pay your firm's dues"]
+```
+
+**Paying settles the whole firm — because it pays the real invoice.** *Pay now* goes to that invoice's own Stripe-hosted payment page, the same link the invoice email carries. Stripe's `invoice.paid` webhook then does what it always does ([On payment](#on-payment)): every member on the invoice's frozen roster gets the year tag, `dues-paid` and their category's WordPress role, and the Payments ledger, Company Note and Dues History all update. The lookup creates nothing and settles nothing itself, so there is no second payment path to keep in step. A firm with several open invoices (individual billing, split assessments, an earlier year) lists each, oldest first. An invoice whose bank (ACH) payment is already clearing shows *a payment is already being processed* instead of a second button.
+
+**What a visitor can and can't learn.** The lookup is public, so it is deliberately small:
+
+| Shown | Never shown |
+|---|---|
+| Firm name, dues year, amount due, member count, and *billed to Ann B.* (first name and last initial — enough to tell two invoices at one firm apart) | On this page: email addresses, member names, paid invoices, firms with nothing open. **Not true of the Stripe page** the button opens — see below. |
+
+- Only firms with an open, issued (created or sent) **Live** invoice are searchable, so a firm that doesn't exist and one that has already paid get **the same answer** — the lookup can't be used to find out who exists or who owes. Draft, voided and downgraded invoices never appear; a Test-mode invoice never does, whichever way the admin Test/Live toggle is set.
+- A search needs a real search word of at least **three letters** (judged on the words searched for, so `a bc` doesn't pass), lists at most **eight** firms, and is **rate-limited per visitor** (10 searches per 10 minutes, 60 per day). The visitor is the connecting address — an IPv6 visitor is their whole `/64`, so rotating addresses inside it buys nothing. With a persistent object cache the counter is an atomic increment; without one it uses transients, which a burst of parallel requests can overshoot by about the burst's size but never leaves open. Behind a proxy or load balancer, return the real client address from the `my_njilga_client_ip` filter (the same one the join form uses), or every visitor shares one limit.
+- Searches are **POSTs**, so a page cache never stores a result and a firm name never lands in a URL or access log; a hidden honeypot field quietly ignores bots. The *Pay now* link must be `https://`.
+- **The Stripe page the button opens is not minimal.** It is the same page the firm was emailed, and it shows the invoice's **bill-to name and email address** and **every line — member names and amounts**. So without `verify`, anyone who can find a firm by name can read that. If the firm name alone is too little of a gate for that, add **`verify="email"`**: the visitor must also give an email address that is on that firm's invoice (its bill-to, Owner or a listed member) before the firm — and so its Stripe page — is shown, and a wrong address gets the same "couldn't find" answer. The default is open because the page exists for people who *don't* have the email; whether that is the right trade is a decision for NJILGA.
+
+`title="…"` changes the heading. The page looks like the other public forms ([design.md §6](design.md#6-not-covered)). My NJILGA → **Shortcodes** lists it with the pages that carry it.
+
+---
+
 ## CSV / Excel exports
 
 Each list page has a **Download CSV** button; **Membership by Firm** and the **Payments** ledger export a formatted `.xls`; **Reports** offers the **Executive Summary** `.xls` combining every report. No third-party libraries. Names and firm names can come from the public join form, so a CSV cell that would start a spreadsheet formula (`=`, `+`, `-`, `@`) is written as text; the `.xls` exports already mark data cells as text.
@@ -325,7 +441,8 @@ my-njilga/
 ├── includes/
 │   ├── class-admin-menu.php
 │   ├── class-tags.php                    ← Tag resolution (core + settings-driven slugs)
-│   ├── class-members-data.php
+│   ├── class-membership-stats.php        ← ONE definition of active/expired/exempt + firm/trustee/category counts (pure half unit-tested), 10-min cache
+│   ├── class-members-data.php            ← Report row/list shaping on top of the stats provider
 │   ├── class-page-*.php                  ← Dashboard, Reports, Members, Trustees, Companies, Firms
 │   ├── class-page-invoicing.php          ← Invoicing dashboard + admin-post handlers
 │   ├── class-page-payments.php           ← Payments ledger (by invoice / firm / member / aging)
@@ -336,6 +453,20 @@ my-njilga/
 │   ├── class-my-membership.php           ← [njilga_my_membership]: standing, firm, members, fees (pure half unit-tested)
 │   ├── class-phone.php                   ← PURE: phone numbers in FluentCRM's shape (+1 ###-###-####) — unit-tested
 │   ├── class-front-style.php             ← Shared look of the public forms: site fonts + Automatic.css colour tokens
+│   ├── class-firm-renewal-lookup.php     ← [njilga_firm_renewal_lookup]: find a firm's open invoice and pay it (matching/selection pure, unit-tested)
+│   ├── history/                          ← Dues History tab + the table of recreated invoices
+│   │   ├── class-dues-history-table.php  ← njilga_dues_history schema + CRUD (PMPro / imported invoices; batch id per run)
+│   │   ├── class-dues-history.php        ← Read model: live Stripe invoices + payments + history → one entry shape (pure, unit-tested)
+│   │   ├── class-dues-history-view.php   ← Panel markup for the FluentCRM tabs (no JS: CSS-only contact/firm switch)
+│   │   ├── class-dues-history-tabs.php   ← Registers the contact + company tabs via FluentCrmApi('extender')
+│   │   └── class-page-dues-invoice.php   ← Hidden admin page: one invoice, live or recreated, printable
+│   ├── tools/                            ← My NJILGA → Tools
+│   │   ├── class-page-tools.php          ← Landing page, import log, per-run Undo
+│   │   ├── class-pmpro-migrator.php      ← PMPro orders → history invoices (mapping pure, unit-tested)
+│   │   ├── class-page-tool-pmpro.php     ← Choose → preview → migrate
+│   │   ├── class-spreadsheet-reader.php  ← CSV + .xlsx reader, no library (ZipArchive + DOMDocument), size/entity safe
+│   │   ├── class-historical-import.php   ← Headings, parsing, grouping, FluentCRM matching → history rows (pure, unit-tested)
+│   │   └── class-page-tool-import.php    ← Upload → review → import, template download
 │   ├── join/                             ← [njilga_join] — online joining (Stripe Checkout)
 │   │   ├── class-join-form.php           ← Controller: POST handling, validation, email codes, account, checkout
 │   │   ├── class-join-view.php           ← Markup, scoped front-end CSS, wizard/type-ahead JS
@@ -368,10 +499,12 @@ my-njilga/
 │   │   ├── class-invoice-sender.php      ← Email + CC policy + Company Note
 │   │   ├── class-payment-listener.php    ← Paid → tags + role (via role sync)
 │   │   ├── class-role-sync.php           ← Paid member's WP role follows their category
+│   │   ├── class-invoice-stats.php       ← Dashboard invoice figures: one GROUP BY, mode-scoped, parity-tested against the Payments ledger
 │   │   ├── class-downgrade-sweep.php     ← preview() + run()
 │   │   └── class-invoicing-notes.php     ← FluentCRM Company Note helper
 │   └── enrollment/
 │       ├── class-applications-table.php  ← njilga_membership_applications
+│       ├── class-application-stats.php   ← Dashboard application + online-join figures
 │       ├── class-application-form.php    ← [njilga_membership_application] + AJAX + submit
 │       └── class-application-review.php  ← approve() / reject() + join policy
 ├── tests/                                ← php tests/run.php

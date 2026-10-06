@@ -28,15 +28,19 @@ class MyNJILGA_Report_Summary {
             wp_die( 'FluentCRM is not active.' );
         }
 
+        // The Overview's KPIs come from the cached snapshot and every list below
+        // is read live: refresh the snapshot first so one file can never quote
+        // two different numbers for the same thing — and stop before any output
+        // if it can't be read, rather than stream a summary of zeros.
+        $why = MyNJILGA_Members_Data::unavailable_reason( true );
+        if ( $why !== '' ) {
+            wp_die( esc_html( $why ) );
+        }
+
         self::stream();
     }
 
     private static function stream(): void {
-        // The Overview's KPIs come from the cached snapshot and every list below
-        // is read live: refresh the snapshot first so one file can never quote
-        // two different numbers for the same thing.
-        MyNJILGA_Membership_Stats::snapshot( true );
-
         $filename = sprintf( 'MyNJILGA_executive-summary_%s.xls', date( 'Y-m-d' ) );
 
         nocache_headers();
@@ -151,7 +155,8 @@ class MyNJILGA_Report_Summary {
 
     /**
      * Trustees section — mirrors the on-screen report's columns, including
-     * the green/red Paid indicator.
+     * its Dues label (Paid, Unpaid, Exempt, Inactive or None — the same
+     * words the Trustees page and the Overview tiles use).
      */
     private static function render_trustees(): void {
         $rows = MyNJILGA_Members_Data::get_trustees();
@@ -168,13 +173,14 @@ class MyNJILGA_Report_Summary {
         }
 
         foreach ( $rows as $r ) {
+            [ $dues, $colour ] = MyNJILGA_Members_Data::dues_export( (string) $r['state'], ! empty( $r['is_exempt'] ) );
             printf(
                 '<tr><td>%s</td><td>%s</td><td>%s</td><td style="font-weight:bold;color:%s">%s</td><td>%s</td></tr>',
                 MyNJILGA_Report_Xls::xls( $r['member'] ),
                 MyNJILGA_Report_Xls::xls( $r['trustee_status'] ),
                 MyNJILGA_Report_Xls::xls( $r['firm'] ),
-                $r['is_paid'] ? '#1d6f42' : '#d63638',
-                $r['is_paid'] ? 'Paid' : 'Unpaid',
+                $colour,
+                MyNJILGA_Report_Xls::xls( $dues ),
                 MyNJILGA_Report_Xls::xls( $r['payment_method'] )
             );
         }
@@ -219,12 +225,13 @@ class MyNJILGA_Report_Summary {
                     continue;
                 }
                 foreach ( $c['members'] as $m ) {
+                    [ $dues, $colour ] = MyNJILGA_Members_Data::dues_export( (string) $m['state'] );
                     printf(
                         '<tr><td>%s</td><td>%s</td><td style="font-weight:bold;color:%s">%s</td></tr>',
                         MyNJILGA_Report_Xls::xls( $c['name'] ),
                         MyNJILGA_Report_Xls::xls( $m['name'] ),
-                        $m['is_paid'] ? '#1d6f42' : '#d63638',
-                        $m['is_paid'] ? 'Paid' : 'Unpaid'
+                        $colour,
+                        MyNJILGA_Report_Xls::xls( $dues )
                     );
                 }
             }

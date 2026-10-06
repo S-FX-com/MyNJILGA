@@ -221,6 +221,12 @@ class MyNJILGA_Admin_UI {
             'award'        => '<path d="m15.477 12.89 1.515 8.526a.5.5 0 0 1-.81.47l-3.58-2.687a1 1 0 0 0-1.197 0l-3.586 2.686a.5.5 0 0 1-.81-.469l1.514-8.526"/><circle cx="12" cy="8" r="6"/>',
             'external'     => '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
             'lock'         => '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+            'wrench'       => '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+            'upload'       => '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>',
+            'receipt'      => '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/>',
+            'history'      => '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+            'printer'      => '<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"/><rect x="6" y="14" width="12" height="8" rx="1"/>',
+            'undo'         => '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
         ];
         $body = $paths[ $name ] ?? '';
         return '<svg class="njilga-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . $body . '</svg>';
@@ -310,6 +316,17 @@ class MyNJILGA_Admin_UI {
 .njilga-btn-danger-outline{background:var(--bg);color:var(--danger-fg);border-color:var(--danger-bd)}
 .njilga-btn-danger-outline:hover{background:var(--danger-bg);color:var(--danger-fg)}
 .njilga-btn[disabled]{opacity:.5;cursor:not-allowed;pointer-events:none}
+/* A button rendered as a link (<a class="njilga-btn …">). Inside another app's
+   page — the FluentCRM tabs — the host styles every `a` itself, and its rule
+   (e.g. `.fluentcrm-app a:not(.el-button)`) outranks a bare button class: the
+   primary button's text turned dark on dark. Naming both classes outranks it,
+   in every state, without !important. */
+.njilga-ui .njilga-btn.njilga-btn:link,.njilga-ui .njilga-btn.njilga-btn:visited,.njilga-ui .njilga-btn.njilga-btn:hover,.njilga-ui .njilga-btn.njilga-btn:focus{text-decoration:none}
+.njilga-ui .njilga-btn.njilga-btn-primary:link,.njilga-ui .njilga-btn.njilga-btn-primary:visited,.njilga-ui .njilga-btn.njilga-btn-primary:hover,.njilga-ui .njilga-btn.njilga-btn-primary:focus{color:var(--primary-fg)}
+.njilga-ui .njilga-btn.njilga-btn-outline:link,.njilga-ui .njilga-btn.njilga-btn-outline:visited,.njilga-ui .njilga-btn.njilga-btn-outline:hover,.njilga-ui .njilga-btn.njilga-btn-outline:focus,
+.njilga-ui .njilga-btn.njilga-btn-ghost:link,.njilga-ui .njilga-btn.njilga-btn-ghost:visited,.njilga-ui .njilga-btn.njilga-btn-ghost:hover,.njilga-ui .njilga-btn.njilga-btn-ghost:focus{color:var(--fg)}
+.njilga-ui .njilga-btn.njilga-btn-danger:link,.njilga-ui .njilga-btn.njilga-btn-danger:visited,.njilga-ui .njilga-btn.njilga-btn-danger:hover,.njilga-ui .njilga-btn.njilga-btn-danger:focus{color:#fff}
+.njilga-ui .njilga-btn.njilga-btn-danger-outline:link,.njilga-ui .njilga-btn.njilga-btn-danger-outline:visited,.njilga-ui .njilga-btn.njilga-btn-danger-outline:hover,.njilga-ui .njilga-btn.njilga-btn-danger-outline:focus{color:var(--danger-fg)}
 .njilga-actionform{margin:0;display:inline-block}
 .njilga-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}
 
@@ -379,8 +396,8 @@ class MyNJILGA_Admin_UI {
 .njilga-linkcard:hover{border-color:var(--ring);background:var(--hover);text-decoration:none;color:inherit}
 .njilga-linkcard-icon{display:flex;align-items:center;justify-content:center;width:38px;height:38px;
   border-radius:10px;background:var(--muted);color:var(--muted-fg);flex:0 0 auto}
-.njilga-linkcard-title{font-size:15px;font-weight:600;margin-bottom:4px}
-.njilga-linkcard-desc{color:var(--muted-fg);font-size:13px;line-height:1.5}
+.njilga-linkcard-title{display:block;font-size:15px;font-weight:600;margin-bottom:4px}
+.njilga-linkcard-desc{display:block;color:var(--muted-fg);font-size:13px;line-height:1.5}
 
 /* --- Tabs ---------------------------------------------------------------- */
 .njilga-tabs{display:flex;gap:4px;padding:10px 12px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
@@ -611,7 +628,116 @@ class MyNJILGA_Admin_UI {
   background:var(--muted);border-radius:0 6px 6px 0;color:#3f3f46;font-size:13px}
 .njilga-reviewform{margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .njilga-reviewform textarea{flex:1;min-width:260px;height:38px}
+
+/* --- Embedded panels (FluentCRM profile tabs) ----------------------------- */
+/* The panel is injected with v-html: no scripts run there, so everything
+   interactive in it is plain HTML/CSS. It sits inside another app's page, so
+   it drops the admin-column margin and the screen-level spacing. */
+.njilga-ui.njilga-embed{margin:0;padding:4px 0 8px}
+.njilga-embed .njilga-stats{margin-bottom:6px}
+.njilga-embed .njilga-section{margin:22px 0 10px}
+
+/* --- Scope switch (CSS-only radio tabs) ----------------------------------- */
+/* Radios are direct children of .njilga-scope, in the same order as the
+   labels in .njilga-scope-bar and the panels in .njilga-scope-panels. Up to
+   six scopes: a contact, plus each firm they belong to. */
+.njilga-scope-radio{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.njilga-scope-bar{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 4px}
+.njilga-scope-bar label{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border:1px solid var(--border);
+  border-radius:999px;background:var(--bg);color:var(--muted-fg);font-size:13px;font-weight:500;cursor:pointer}
+.njilga-scope-bar label:hover{background:var(--accent);color:var(--fg)}
+.njilga-scope-bar .njilga-scope-n{font-size:11.5px;font-weight:600;color:var(--muted-fg)}
+.njilga-scope-panel{display:none}
+.njilga-scope>.njilga-scope-radio:nth-of-type(1):checked~.njilga-scope-bar label:nth-child(1),
+.njilga-scope>.njilga-scope-radio:nth-of-type(2):checked~.njilga-scope-bar label:nth-child(2),
+.njilga-scope>.njilga-scope-radio:nth-of-type(3):checked~.njilga-scope-bar label:nth-child(3),
+.njilga-scope>.njilga-scope-radio:nth-of-type(4):checked~.njilga-scope-bar label:nth-child(4),
+.njilga-scope>.njilga-scope-radio:nth-of-type(5):checked~.njilga-scope-bar label:nth-child(5),
+.njilga-scope>.njilga-scope-radio:nth-of-type(6):checked~.njilga-scope-bar label:nth-child(6){
+  background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
+.njilga-scope>.njilga-scope-radio:nth-of-type(1):checked~.njilga-scope-bar label:nth-child(1) .njilga-scope-n,
+.njilga-scope>.njilga-scope-radio:nth-of-type(2):checked~.njilga-scope-bar label:nth-child(2) .njilga-scope-n,
+.njilga-scope>.njilga-scope-radio:nth-of-type(3):checked~.njilga-scope-bar label:nth-child(3) .njilga-scope-n,
+.njilga-scope>.njilga-scope-radio:nth-of-type(4):checked~.njilga-scope-bar label:nth-child(4) .njilga-scope-n,
+.njilga-scope>.njilga-scope-radio:nth-of-type(5):checked~.njilga-scope-bar label:nth-child(5) .njilga-scope-n,
+.njilga-scope>.njilga-scope-radio:nth-of-type(6):checked~.njilga-scope-bar label:nth-child(6) .njilga-scope-n{color:var(--primary-fg);opacity:.8}
+.njilga-scope>.njilga-scope-radio:nth-of-type(1):checked~.njilga-scope-panels>.njilga-scope-panel:nth-child(1),
+.njilga-scope>.njilga-scope-radio:nth-of-type(2):checked~.njilga-scope-panels>.njilga-scope-panel:nth-child(2),
+.njilga-scope>.njilga-scope-radio:nth-of-type(3):checked~.njilga-scope-panels>.njilga-scope-panel:nth-child(3),
+.njilga-scope>.njilga-scope-radio:nth-of-type(4):checked~.njilga-scope-panels>.njilga-scope-panel:nth-child(4),
+.njilga-scope>.njilga-scope-radio:nth-of-type(5):checked~.njilga-scope-panels>.njilga-scope-panel:nth-child(5),
+.njilga-scope>.njilga-scope-radio:nth-of-type(6):checked~.njilga-scope-panels>.njilga-scope-panel:nth-child(6){display:block}
+.njilga-scope-radio:focus-visible~.njilga-scope-bar{outline:2px solid var(--ring);outline-offset:3px;border-radius:999px}
+
+/* --- Invoice document (the invoice viewer) --------------------------------- */
+.njilga-doc{max-width:860px;padding:32px 36px}
+.njilga-doc-head{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:flex-start;
+  padding-bottom:20px;border-bottom:1px solid var(--border)}
+.njilga-doc-org{font-size:13px;color:var(--muted-fg)}
+.njilga-doc-title{font-size:24px;font-weight:700;margin:2px 0 0;letter-spacing:-.01em}
+.njilga-doc-sub{color:var(--muted-fg);font-size:13.5px;margin-top:4px}
+.njilga-doc-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px 24px;margin:22px 0}
+.njilga-doc-k{font-size:11.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted-fg)}
+.njilga-doc-v{font-size:14px;margin-top:3px}
+.njilga-doc-parties{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px 32px;margin:0 0 22px}
+.njilga-doc-totals{margin:16px 0 0 auto;max-width:340px}
+.njilga-doc-totals table{width:100%;border-collapse:collapse;font-size:14px}
+.njilga-doc-totals td{padding:6px 0}
+.njilga-doc-totals td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.njilga-doc-totals .njilga-doc-due td{border-top:1px solid var(--border);padding-top:10px;font-weight:700;font-size:15px}
+.njilga-doc-note{margin-top:20px;padding:12px 14px;background:var(--muted);border-radius:8px;color:#3f3f46;font-size:13px}
+.njilga-col-wide{min-width:150px}
+.njilga-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+
+/* --- Tool screens (migrator / import) ---------------------------------------- */
+.njilga-inline-fields{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+.njilga-inline-fields .njilga-field{min-width:150px}
+
+/* --- Print: invoices print without the admin chrome ---------------------------- */
+@media print{
+  #adminmenumain,#adminmenuback,#adminmenuwrap,#wpadminbar,#wpfooter,.update-nag,.notice,.njilga-noprint{display:none}
+  body.wp-admin #wpcontent{margin-left:0;padding-left:0}
+  html.wp-toolbar{padding-top:0}
+  .njilga-ui .njilga-card{box-shadow:none}
+  .njilga-doc{max-width:none;padding:0;border:0}
+}
 </style>
 CSS;
+    }
+
+    /**
+     * Run $body and return its output wrapped for embedding in another
+     * page — the FluentCRM profile tabs hand their HTML back to FluentCRM
+     * instead of printing it. The markup carries the stylesheet exactly
+     * once, whether or not styles() has already run in this request (the
+     * panel is injected into another page, so it always needs its own
+     * copy), and the helpers called inside $body — which each ask for the
+     * stylesheet — are told it is already there so none repeats it.
+     *
+     * @param callable $body Echoes the panel's markup.
+     */
+    public static function embed( callable $body ): string {
+        $already = self::$printed;
+        $level   = ob_get_level();
+        try {
+            self::$printed = false;
+
+            ob_start();
+            self::styles(); // Sets $printed: helpers inside $body now stay quiet.
+            $css = (string) ob_get_clean();
+
+            ob_start();
+            $body();
+            $html = (string) ob_get_clean();
+        } finally {
+            // If $body threw, its buffer is still open: close it, or PHP
+            // would flush the half-built panel into whatever response is
+            // being sent (a REST reply, for the FluentCRM tabs).
+            while ( ob_get_level() > $level ) {
+                ob_end_clean();
+            }
+            self::$printed = $already;
+        }
+        return $css . '<div class="njilga-ui njilga-embed">' . $html . '</div>';
     }
 }

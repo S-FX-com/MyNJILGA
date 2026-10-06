@@ -2,8 +2,8 @@
 /**
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
- * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, and a member-facing dues status and membership overview — driven entirely from FluentCRM tags on the local install.
- * Version:     3.7.1
+ * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, a member-facing dues status and membership overview, a public firm renewal lookup, a Dues History tab on FluentCRM contacts and companies, and tools to bring earlier years' dues in from PMPro or a spreadsheet — driven entirely from FluentCRM tags on the local install.
+ * Version:     3.8.2
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -107,6 +107,27 @@ require_once NJILGA_REPORT_DIR . 'includes/join/class-join-fulfillment.php';
 require_once NJILGA_REPORT_DIR . 'includes/join/class-join-view.php';
 require_once NJILGA_REPORT_DIR . 'includes/join/class-join-form.php';
 
+// Firm Renewal Lookup — [njilga_firm_renewal_lookup]: a public way for
+// anyone to find a firm's open invoice and pay it.
+require_once NJILGA_REPORT_DIR . 'includes/class-firm-renewal-lookup.php';
+
+// Dues History — the tab on FluentCRM contacts and companies, the invoice
+// viewer, and the history table that holds invoices recreated from PMPro
+// or a spreadsheet. See includes/history/.
+require_once NJILGA_REPORT_DIR . 'includes/history/class-dues-history-table.php';
+require_once NJILGA_REPORT_DIR . 'includes/history/class-dues-history.php';
+require_once NJILGA_REPORT_DIR . 'includes/history/class-dues-history-view.php';
+require_once NJILGA_REPORT_DIR . 'includes/history/class-dues-history-tabs.php';
+require_once NJILGA_REPORT_DIR . 'includes/history/class-page-dues-invoice.php';
+
+// Tools — the PMPro Migrator and the Historical Invoice Import. See includes/tools/.
+require_once NJILGA_REPORT_DIR . 'includes/tools/class-spreadsheet-reader.php';
+require_once NJILGA_REPORT_DIR . 'includes/tools/class-historical-import.php';
+require_once NJILGA_REPORT_DIR . 'includes/tools/class-pmpro-migrator.php';
+require_once NJILGA_REPORT_DIR . 'includes/tools/class-page-tools.php';
+require_once NJILGA_REPORT_DIR . 'includes/tools/class-page-tool-pmpro.php';
+require_once NJILGA_REPORT_DIR . 'includes/tools/class-page-tool-import.php';
+
 add_action( 'admin_menu', [ 'MyNJILGA_Admin_Menu', 'register' ] );
 
 // Keep My NJILGA → Reports highlighted while viewing a hidden report page.
@@ -123,6 +144,7 @@ register_activation_hook( __FILE__, [ 'MyNJILGA_Stripe_Events_Table', 'maybe_upg
 register_activation_hook( __FILE__, [ 'MyNJILGA_Stripe_Customer_Map', 'maybe_upgrade' ] );
 register_activation_hook( __FILE__, [ 'MyNJILGA_Join_Orders_Table', 'maybe_upgrade' ] );
 register_activation_hook( __FILE__, [ 'MyNJILGA_Join_Invites_Table', 'maybe_upgrade' ] );
+register_activation_hook( __FILE__, [ 'MyNJILGA_Dues_History_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Dues_Invoice_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Applications_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Dues_Payments_Table', 'maybe_upgrade' ] );
@@ -130,6 +152,11 @@ add_action( 'admin_init', [ 'MyNJILGA_Stripe_Events_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Stripe_Customer_Map', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Join_Orders_Table', 'maybe_upgrade' ] );
 add_action( 'admin_init', [ 'MyNJILGA_Join_Invites_Table', 'maybe_upgrade' ] );
+add_action( 'admin_init', [ 'MyNJILGA_Dues_History_Table', 'maybe_upgrade' ] );
+
+// Dues History tab on FluentCRM contacts and companies (registered once
+// FluentCRM has booted).
+MyNJILGA_Dues_History_Tabs::register();
 
 // Endpoints provisioned before a release that added webhook events (the
 // online-join Checkout events, disputes) get them added once, here,
@@ -160,6 +187,7 @@ MyNJILGA_Role_Sync::register();
 add_action( 'plugins_loaded', [ 'MyNJILGA_Payment_Listener', 'register' ], 20 );
 
 // Public shortcodes: [njilga_membership_application], [njilga_firm_dues_status],
+// [njilga_firm_renewal_lookup] (find a firm's open invoice and pay it),
 // [njilga_my_membership] (a member's standing, firm and fees), [njilga_join]
 // (online joining; its tables are created on first use as well as on
 // admin_init, since a public page can be the first request after an update).
@@ -168,6 +196,7 @@ MyNJILGA_Firm_Status_Page::register();
 MyNJILGA_My_Membership::register();
 MyNJILGA_Join_Form::register();
 MyNJILGA_Join_Documents::register();
+MyNJILGA_Firm_Renewal_Lookup::register();
 add_action( 'init', static function () {
     MyNJILGA_Join_Orders_Table::maybe_upgrade();
     MyNJILGA_Join_Invites_Table::maybe_upgrade();
@@ -251,3 +280,10 @@ add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_STRIPE_SWITCH_MODE,  
 // Applications review queue, and the Online joins tab beside it.
 add_action( 'admin_post_' . MyNJILGA_Page_Applications::ACTION_DECIDE, [ 'MyNJILGA_Page_Applications', 'handle_decide' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Applications::ACTION_JOIN, [ 'MyNJILGA_Page_Applications', 'handle_join_action' ] );
+
+// Tools: PMPro Migrator, Historical Invoice Import, and undoing a run.
+add_action( 'admin_post_' . MyNJILGA_Page_Tool_Pmpro::ACTION_RUN,         [ 'MyNJILGA_Page_Tool_Pmpro', 'handle_run' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Tool_Import::ACTION_UPLOAD,     [ 'MyNJILGA_Page_Tool_Import', 'handle_upload' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Tool_Import::ACTION_COMMIT,     [ 'MyNJILGA_Page_Tool_Import', 'handle_commit' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Tool_Import::ACTION_TEMPLATE,   [ 'MyNJILGA_Page_Tool_Import', 'handle_template' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Tools::ACTION_UNDO,             [ 'MyNJILGA_Page_Tools', 'handle_undo' ] );

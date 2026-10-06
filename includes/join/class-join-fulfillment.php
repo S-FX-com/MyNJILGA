@@ -761,6 +761,8 @@ class MyNJILGA_Join_Fulfillment {
                         }
                     }
                 }
+                // settle() flushed before this year tag existed, so flush again.
+                MyNJILGA_Membership_Stats::flush();
                 $progress['settled'] = true;
                 $save();
             }
