@@ -205,7 +205,9 @@ echo '</tbody></table></div></div>';
 Modifiers: `njilga-table-compact` (tighter padding), `njilga-kv`
 (key/value — `<th>` becomes a 300px label column). Cell helpers:
 `njilga-col-num` (right-aligned tabular figures), `njilga-col-check`,
-`njilga-col-actions`, `njilga-col-center`, `njilga-col-expand`. Empty
+`njilga-col-actions`, `njilga-col-center`, `njilga-col-expand`, and `njilga-col-wide` (a minimum
+width for a text-heavy column — a firm, a description — so a narrow container
+scrolls the table instead of crushing the words). Empty
 state: `<tr class="njilga-emptyrow"><td colspan="…">No rows yet.</td></tr>`.
 
 ### Forms

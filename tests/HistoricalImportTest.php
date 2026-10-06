@@ -125,6 +125,23 @@ class HistoricalImportTest extends NJILGA_TestCase {
         $this->assertSame( 'open', $p( 'No' ) );
         $this->assertSame( '', $p( '' ) );
         $this->assertSame( '', $p( 'banana' ) );
+
+        // A paid invoice whose cell also says something about its history is still paid.
+        foreach ( [ 'Paid - no balance', 'Paid, balance $0', 'Paid (sent 1/2)', 'Overdue - paid', 'Paid in full', 'PAID' ] as $paid ) {
+            $this->assertSame( 'paid', $p( $paid ), $paid );
+        }
+        // …and "unpaid"/"not paid"/partial are open, whatever else they say.
+        foreach ( [ 'Unpaid', 'Not paid', 'Not yet paid', 'Non-paid', 'Partially paid', 'Part paid', 'Deposit received', 'Balance due', 'Overdue' ] as $open ) {
+            $this->assertSame( 'open', $p( $open ), $open );
+        }
+        // Placeholders say nothing; a lone letter is a flag.
+        foreach ( [ 'N/A', 'n/a', 'NA', 'TBD', '-', '?', 'none', 'unknown' ] as $blank ) {
+            $this->assertSame( '', $p( $blank ), $blank );
+        }
+        $this->assertSame( 'paid', $p( 'Y' ) );
+        $this->assertSame( 'open', $p( 'n' ) );
+        $this->assertSame( 'void', $p( 'Void' ) );
+        $this->assertSame( 'void', $p( 'Paid - refunded' ), 'a refunded payment is void, not paid' );
     }
 
     public function testMethodWords(): void {
@@ -232,8 +249,8 @@ class HistoricalImportTest extends NJILGA_TestCase {
         $this->assertCount( 2, $inv, 'the same number in another year is another invoice' );
         $this->assertSame( 20000, $inv[0]['total_cents'] );
         $this->assertSame( [ 2, 3 ], $inv[0]['rows'] );
-        $this->assertSame( '2025/7', $inv[0]['ref'] );
-        $this->assertSame( '2024/7', $inv[1]['ref'] );
+        $this->assertSame( '2025/7|poe and roe', $inv[0]['ref'], 'year, number and firm' );
+        $this->assertSame( '2024/7|poe and roe', $inv[1]['ref'] );
     }
 
     public function testUnnumberedRowsAreEachTheirOwnInvoiceWithStableRefs(): void {
@@ -259,15 +276,89 @@ class HistoricalImportTest extends NJILGA_TestCase {
         $this->assertSame( $a[0]['ref'], $b[0]['ref'] );
     }
 
-    public function testConflictingFirmsOnOneInvoiceAreFlagged(): void {
+    /** "N/A", "TBD" or a number reused by two firms must never merge them into one invoice. */
+    public function testRowsUnderOneNumberButDifferentFirmsAreDifferentInvoices(): void {
         $inv = MyNJILGA_Historical_Import::group( $this->prepare( [
             [ 'Invoice', 'Year', 'Firm', 'Amount' ],
-            [ '5', '2025', 'Alpha LLP', '10' ],
-            [ '5', '2025', 'Beta LLP', '10' ],
+            [ 'N/A', '2025', 'Alpha PC', '100' ],
+            [ 'N/A', '2025', 'Beta LLC', '200' ],
+            [ 'N/A', '2025', 'Gamma Inc', '300' ],
+        ] )['records'] );
+
+        $this->assertCount( 3, $inv );
+        $this->assertSame( [ 10000, 20000, 30000 ], array_column( $inv, 'total_cents' ) );
+        $this->assertSame( [ 'Alpha PC', 'Beta LLC', 'Gamma Inc' ], array_column( $inv, 'firm' ) );
+        $this->assertCount( 3, array_unique( array_column( $inv, 'ref' ) ), 'and each is its own idempotency key' );
+        $this->assertTrue( strpos( implode( ' ', $inv[0]['warnings'] ), 'used by 3 different firms' ) !== false );
+    }
+
+    public function testARowWithNoFirmJoinsTheFirmNamedUnderTheSameNumber(): void {
+        $inv = MyNJILGA_Historical_Import::group( $this->prepare( [
+            [ 'Invoice', 'Year', 'Firm', 'Email', 'Amount' ],
+            [ '5', '2025', '', 'ed@x.test', '75' ],              // first, with no firm…
+            [ '5', '2025', 'Alpha PC', 'ann@x.test', '125' ],    // …the firm is named on a later row
+        ] )['records'] );
+
+        $this->assertCount( 1, $inv, 'one invoice, not two' );
+        $this->assertSame( 20000, $inv[0]['total_cents'] );
+        $this->assertSame( 'Alpha PC', $inv[0]['firm'] );
+        $this->assertSame( '2025/5|alpha', $inv[0]['ref'] );
+    }
+
+    public function testTheSameSheetAlwaysGetsTheSameRefs(): void {
+        $rows = [ [ 'Invoice', 'Year', 'Firm', 'Amount' ], [ 'N/A', '2025', 'Alpha PC', '100' ], [ 'N/A', '2025', 'Beta LLC', '200' ] ];
+        $a = MyNJILGA_Historical_Import::group( $this->prepare( $rows )['records'] );
+        $b = MyNJILGA_Historical_Import::group( $this->prepare( $rows )['records'] );
+        $this->assertSame( array_column( $a, 'ref' ), array_column( $b, 'ref' ) );
+
+        // And Alpha's ref doesn't change just because another firm's "N/A" arrives in a later sheet.
+        $later = MyNJILGA_Historical_Import::group( $this->prepare( [ [ 'Invoice', 'Year', 'Firm', 'Amount' ], [ 'N/A', '2025', 'Alpha PC', '100' ] ] )['records'] );
+        $this->assertSame( $a[0]['ref'], $later[0]['ref'] );
+    }
+
+    /** One unreadable row inside a numbered invoice must stop the invoice, not import it short. */
+    public function testANumberedInvoiceThatLostALineToABadRowIsBlocked(): void {
+        $prep = $this->prepare( [
+            [ 'Invoice', 'Year', 'Firm', 'Amount' ],
+            [ '1001', '2025', 'Alpha', '100' ],
+            [ '1001', '2025', 'Alpha', '7S.00' ],   // a typo
+            [ '1001', '2025', 'Alpha', '100' ],
+            [ '1002', '2025', 'Alpha', '50' ],      // a different invoice, unaffected
+        ] );
+        $inv = MyNJILGA_Historical_Import::group( $prep['records'] );
+
+        $this->assertCount( 2, $inv );
+        $this->assertCount( 1, $inv[0]['problems'], 'the invoice is stopped, not imported with a line missing' );
+        $this->assertTrue( strpos( $inv[0]['problems'][0], 'Row 3' ) !== false, 'names the row to fix: ' . $inv[0]['problems'][0] );
+        $this->assertSame( [], $inv[1]['problems'], 'the other invoice is fine' );
+    }
+
+    public function testABadRowOfAnUnnumberedInvoiceJustSkipsThatRow(): void {
+        $inv = MyNJILGA_Historical_Import::group( $this->prepare( [
+            [ 'Year', 'Firm', 'Amount' ],
+            [ '2025', 'Alpha', '100' ],
+            [ '2025', 'Alpha', 'oops' ],
+        ] )['records'] );
+        $this->assertCount( 1, $inv, 'the good row is its own invoice' );
+        $this->assertSame( [], $inv[0]['problems'] );
+    }
+
+    public function testABadRowWithNoYearStillBlocksItsNumberedInvoice(): void {
+        $inv = MyNJILGA_Historical_Import::group( $this->prepare( [
+            [ 'Invoice', 'Year', 'Firm', 'Amount' ],
+            [ '1001', '2025', 'Alpha', '100' ],
+            [ '1001', '', 'Alpha', '100' ],   // no year, so no error-free home — but the same invoice
         ] )['records'] );
         $this->assertCount( 1, $inv );
-        $this->assertSame( 'Alpha LLP', $inv[0]['firm'] );
-        $this->assertTrue( strpos( implode( ' ', $inv[0]['warnings'] ), 'different firms' ) !== false );
+        $this->assertCount( 1, $inv[0]['problems'] );
+    }
+
+    public function testSheetRowNumbersSurviveBlankRowsDroppedByTheReader(): void {
+        // The reader drops blank rows and says which sheet row each survivor was.
+        $parsed = MyNJILGA_Spreadsheet_Reader::csv_records( "Invoice,Year,Firm,Amount\n1,2025,A,10\n\n\n2,2025,B,oops\n" );
+        $prep   = MyNJILGA_Historical_Import::prepare( $parsed['rows'], 'paid', $parsed['lines'] );
+        $this->assertSame( [ 2, 5 ], array_column( $prep['records'], 'line' ), 'the bad row is on sheet row 5, not 3' );
+        $this->assertTrue( strpos( $prep['records'][1]['errors'][0], 'not a number' ) !== false );
     }
 
     public function testNoStatusColumnMeansTheChosenDefault(): void {
@@ -458,7 +549,7 @@ class HistoricalImportTest extends NJILGA_TestCase {
         $row = MyNJILGA_Historical_Import::history_row( $inv, $res, 'import-X', 3 );
 
         $this->assertSame( 'import', $row['source'] );
-        $this->assertSame( '2025/9', $row['source_ref'] );
+        $this->assertSame( '2025/9|smith and jones', $row['source_ref'] );
         $this->assertSame( 'import-X', $row['batch_id'] );
         $this->assertSame( 3, $row['created_by'] );
         $this->assertSame( 2025, $row['dues_year'] );

@@ -107,31 +107,50 @@ class MyNJILGA_PMPro_Migrator {
     }
 
     /**
-     * The invoice's lines, always adding up to the order total: the
-     * subtotal, a discount line when a coupon was used, tax when charged,
-     * and an "Adjustment" for any difference PMPro's own figures leave
-     * (so a line total can never disagree with the amount that was paid).
+     * The invoice's lines, always adding up to the amount paid.
+     *
+     * PMPro's `subtotal` / `couponamount` / `tax` / `total` columns have two
+     * shapes in the wild: the subtotal before a coupon (subtotal − coupon +
+     * tax = total) and the subtotal already net of it (subtotal + tax =
+     * total, the coupon recorded for reference). Whichever reconciles is
+     * used, so a coupon order never gets a made-up "Adjustment". Only when
+     * neither does is an Adjustment added for the difference.
      *
      * @return array<int,array{title:string,amount:int,contact_id:int}>
      */
     public static function lines( string $title, int $sub, int $tax, int $coupon, int $total, int $contactId ): array {
+        $line = static function ( string $t, int $amount ) use ( $contactId ): array {
+            return [ 'title' => $t, 'amount' => $amount, 'contact_id' => $contactId ];
+        };
+
         $lines = [];
         if ( $sub > 0 ) {
-            $lines[] = [ 'title' => $title, 'amount' => $sub, 'contact_id' => $contactId ];
+            $lines[] = $line( $title, $sub );
         }
         if ( $coupon > 0 ) {
-            $lines[] = [ 'title' => 'Discount', 'amount' => -$coupon, 'contact_id' => $contactId ];
+            $lines[] = $line( 'Discount', -$coupon );
         }
         if ( $tax > 0 ) {
-            $lines[] = [ 'title' => 'Tax', 'amount' => $tax, 'contact_id' => $contactId ];
+            $lines[] = $line( 'Tax', $tax );
         }
-        $sum = array_sum( array_column( $lines, 'amount' ) );
         if ( ! $lines ) {
-            return [ [ 'title' => $title, 'amount' => $total, 'contact_id' => $contactId ] ];
+            return [ $line( $title, $total ) ];
         }
-        if ( $sum !== $total ) {
-            $lines[] = [ 'title' => 'Adjustment', 'amount' => $total - $sum, 'contact_id' => $contactId ];
+
+        $sum = array_sum( array_column( $lines, 'amount' ) );
+        if ( $sum === $total ) {
+            return $lines;
         }
+        if ( $coupon > 0 && $sub > 0 && $sub + $tax === $total ) {
+            // The subtotal is already net of the coupon: say so on the line
+            // rather than subtracting it twice.
+            $lines = [ $line( $title . ' (after $' . number_format( $coupon / 100, 2 ) . ' discount)', $sub ) ];
+            if ( $tax > 0 ) {
+                $lines[] = $line( 'Tax', $tax );
+            }
+            return $lines;
+        }
+        $lines[] = $line( 'Adjustment', $total - $sum );
         return $lines;
     }
 

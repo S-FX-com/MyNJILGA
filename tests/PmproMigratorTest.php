@@ -87,6 +87,26 @@ class PmproMigratorTest extends NJILGA_TestCase {
         $this->assertSame( 'Discount', $lines[1]['title'] );
     }
 
+    /** If PMPro's subtotal is already net of the coupon, subtracting it again would invent a line. */
+    public function testASubtotalThatIsAlreadyNetOfTheCouponGetsNoMadeUpAdjustment(): void {
+        $lines = MyNJILGA_PMPro_Migrator::lines( '2025 Professional', 10000, 0, 2500, 10000, 5 );
+        $this->assertCount( 1, $lines );
+        $this->assertSame( 10000, $lines[0]['amount'] );
+        $this->assertSame( '2025 Professional (after $25.00 discount)', $lines[0]['title'] );
+
+        $withTax = MyNJILGA_PMPro_Migrator::lines( 'X', 10000, 825, 2500, 10825, 5 );
+        $this->assertSame( [ 10000, 825 ], array_column( $withTax, 'amount' ) );
+        $this->assertSame( 'Tax', $withTax[1]['title'] );
+        $this->assertSame( 10825, array_sum( array_column( $withTax, 'amount' ) ) );
+    }
+
+    /** …while the pre-coupon shape keeps its explicit discount line. */
+    public function testASubtotalBeforeTheCouponKeepsAnExplicitDiscountLine(): void {
+        $lines = MyNJILGA_PMPro_Migrator::lines( 'X', 12500, 0, 2500, 10000, 5 );
+        $this->assertSame( [ 12500, -2500 ], array_column( $lines, 'amount' ) );
+        $this->assertSame( 'Discount', $lines[1]['title'] );
+    }
+
     public function testDisagreeingFiguresGetAnAdjustmentLine(): void {
         $lines = MyNJILGA_PMPro_Migrator::lines( '2025 X', 12500, 0, 0, 11000, 5 );
         $this->assertSame( [ 12500, -1500 ], array_column( $lines, 'amount' ) );

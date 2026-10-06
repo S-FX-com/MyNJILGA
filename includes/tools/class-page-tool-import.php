@@ -147,11 +147,15 @@ class MyNJILGA_Page_Tool_Import {
         if ( $read['error'] !== '' ) {
             self::fail( esc_html( $read['error'] ) );
         }
+        if ( $read['truncated'] ) {
+            // Never import the first part of a sheet: an invoice can straddle the cut.
+            self::fail( 'The sheet has more than ' . esc_html( number_format_i18n( MyNJILGA_Spreadsheet_Reader::MAX_ROWS ) ) . ' rows, which is more than can be read at once. Split it into smaller sheets (keep each invoice\'s rows together) and upload them one at a time.' );
+        }
         if ( count( $read['rows'] ) < 2 ) {
             self::fail( 'The sheet needs a heading row and at least one row of data.' );
         }
 
-        $prep = MyNJILGA_Historical_Import::prepare( $read['rows'], $default );
+        $prep = MyNJILGA_Historical_Import::prepare( $read['rows'], $default, $read['lines'] );
         if ( $prep['missing'] ) {
             self::fail(
                 'The sheet is missing ' . esc_html( implode( '; ', $prep['missing'] ) ) . '. Its headings were: <em>' . esc_html( implode( ', ', array_slice( array_map( 'strval', (array) $read['rows'][0] ), 0, 20 ) ) ) . '</em>. Download the template to see the expected headings.'
@@ -173,7 +177,7 @@ class MyNJILGA_Page_Tool_Import {
         }
 
         $token = wp_generate_password( 20, false, false );
-        self::store( $token, [
+        $kept  = self::store( $token, [
             'file'         => $name,
             'columns'      => $prep['columns'],
             'unrecognised' => $prep['unrecognised'],
@@ -183,6 +187,12 @@ class MyNJILGA_Page_Tool_Import {
             'row_errors'   => $rowErrors,
             'invoices'     => $invoices,
         ] );
+        if ( ! $kept ) {
+            // The parsed upload is too big for this site's transient storage
+            // (an object cache's item limit, say) — say so now, rather than
+            // send the person to a review screen that says it has expired.
+            self::fail( 'This sheet is too large for the server to hold between the upload and the review. Split it into smaller sheets and upload them one at a time.' );
+        }
         self::redirect( [ 'token' => $token ] );
     }
 
@@ -232,7 +242,7 @@ class MyNJILGA_Page_Tool_Import {
         MyNJILGA_Admin_UI::stat_cards( [
             [ 'label' => 'Will be imported',  'value' => $counts['new'],       'variant' => $counts['new'] > 0 ? 'success' : 'default', 'icon' => 'check-circle', 'sub' => $counts['new'] > 0 ? MyNJILGA_Invoicing::money( $total ) . ' invoiced' : '' ],
             [ 'label' => 'Already imported',  'value' => $counts['duplicate'], 'variant' => 'info',    'icon' => 'history', 'sub' => $counts['duplicate'] > 0 ? 'Skipped' : '' ],
-            [ 'label' => 'Can\'t be matched', 'value' => $counts['blocked'],   'variant' => $counts['blocked'] > 0 ? 'warning' : 'default', 'icon' => 'alert', 'sub' => $counts['blocked'] > 0 ? 'Not imported — listed below' : '' ],
+            [ 'label' => 'Can\'t be imported', 'value' => $counts['blocked'],   'variant' => $counts['blocked'] > 0 ? 'warning' : 'default', 'icon' => 'alert', 'sub' => $counts['blocked'] > 0 ? 'Not imported — listed below' : '' ],
             [ 'label' => 'Rows with problems', 'value' => count( (array) $p['row_errors'] ), 'variant' => count( (array) $p['row_errors'] ) > 0 ? 'warning' : 'default', 'icon' => 'file', 'sub' => count( (array) $p['row_errors'] ) > 0 ? 'Skipped — listed below' : '' ],
         ], 4 );
 
@@ -293,7 +303,7 @@ class MyNJILGA_Page_Tool_Import {
      * @param array<int,array<string,mixed>> $blocked
      */
     private static function render_blocked( array $blocked ): void {
-        MyNJILGA_Admin_UI::section( 'Invoices that can\'t be matched', 'Not imported — with no firm or contact they would appear on no tab. Fix the firm name or email in the sheet (or add the firm or contact in FluentCRM) and upload it again; invoices already imported are skipped.', count( $blocked ) );
+        MyNJILGA_Admin_UI::section( 'Invoices that can\'t be imported', 'Not imported. Either they can\'t be matched to a firm or contact (so they would appear on no tab), or a row of the invoice couldn\'t be read and importing it would record it incomplete. Fix the sheet (or add the firm or contact in FluentCRM) and upload it again; invoices already imported are skipped.', count( $blocked ) );
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Invoice</th><th>Rows</th><th>Firm in sheet</th><th>Email</th><th>Why</th></tr></thead><tbody>';
         foreach ( array_slice( $blocked, 0, self::SHOW ) as $x ) {
             $inv = $x['inv'];
@@ -453,7 +463,7 @@ class MyNJILGA_Page_Tool_Import {
             $msg .= ' ' . esc_html( number_format_i18n( $get( 'duplicate' ) ) ) . ' were already imported and skipped.';
         }
         if ( $get( 'blocked' ) > 0 ) {
-            $msg .= ' ' . esc_html( number_format_i18n( $get( 'blocked' ) ) ) . ' could not be matched and were not imported.';
+            $msg .= ' ' . esc_html( number_format_i18n( $get( 'blocked' ) ) ) . ' could not be imported (unmatched, or missing a row).';
         }
         if ( $get( 'failed' ) > 0 ) {
             $msg .= ' ' . esc_html( number_format_i18n( $get( 'failed' ) ) ) . ' could not be written — upload the sheet again to retry them.';
@@ -487,10 +497,11 @@ class MyNJILGA_Page_Tool_Import {
      * the user who uploaded it.
      *
      * @param array<string,mixed> $payload
+     * @return bool Whether it was kept.
      */
-    private static function store( string $token, array $payload ): void {
+    private static function store( string $token, array $payload ): bool {
         $payload['user'] = get_current_user_id();
-        set_transient( self::transient_key( $token ), $payload, self::TOKEN_TTL );
+        return (bool) set_transient( self::transient_key( $token ), $payload, self::TOKEN_TTL );
     }
 
     /**

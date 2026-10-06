@@ -296,4 +296,92 @@ class SpreadsheetReaderTest extends NJILGA_TestCase {
         $this->assertSame( [], $r['rows'] );
         $this->assertTrue( strpos( $r['error'], 'too large' ) !== false );
     }
+
+    // -------------------------------------------------------------------
+    // Row numbers and truncation
+    // -------------------------------------------------------------------
+
+    public function testCsvRowNumbersCountBlankRowsAndMultilineCells(): void {
+        // Record 3 is a quoted cell with a line break in it: one row, as a spreadsheet counts it.
+        $r = MyNJILGA_Spreadsheet_Reader::csv_records( "h1,h2\na,1\n\n\"two\nlines\",2\n\nlast,3\n" );
+        $this->assertSame( [ [ 'h1', 'h2' ], [ 'a', '1' ], [ "two\nlines", '2' ], [ 'last', '3' ] ], $r['rows'] );
+        $this->assertSame( [ 1, 2, 4, 6 ], $r['lines'], 'each row\'s own number in the sheet' );
+        $this->assertFalse( $r['truncated'] );
+    }
+
+    public function testASheetOverTheRowCapIsFlaggedNotSilentlyCut(): void {
+        $max = MyNJILGA_Spreadsheet_Reader::MAX_ROWS;
+        $at  = MyNJILGA_Spreadsheet_Reader::csv_records( "h\n" . implode( "\n", array_fill( 0, $max - 1, 'x' ) ) );
+        $this->assertSame( $max, count( $at['rows'] ) );
+        $this->assertFalse( $at['truncated'], 'exactly at the cap is not truncated' );
+
+        $over = MyNJILGA_Spreadsheet_Reader::csv_records( "h\n" . implode( "\n", array_fill( 0, $max, 'x' ) ) );
+        $this->assertSame( $max, count( $over['rows'] ) );
+        $this->assertTrue( $over['truncated'], 'one row past it is' );
+    }
+
+    public function testReadReturnsRowNumbersAndTheTruncationFlagForCsv(): void {
+        $f = $this->tmpfile( 'csv' );
+        file_put_contents( $f, "a\n\nb\n" );
+        $r = MyNJILGA_Spreadsheet_Reader::read( $f, 'x.csv' );
+        $this->assertSame( [ 1, 3 ], $r['lines'] );
+        $this->assertFalse( $r['truncated'] );
+    }
+
+    public function testXlsxRowNumbersComeFromTheRowsOwnReference(): void {
+        if ( ! class_exists( 'ZipArchive' ) ) {
+            return;
+        }
+        // Excel omits empty rows from the XML: rows 1, 2 and 6 exist; 3-5 do not.
+        $cell = static function ( string $ref, string $v ): string {
+            return '<c r="' . $ref . '" t="inlineStr"><is><t>' . $v . '</t></is></c>';
+        };
+        $f = $this->xlsx( [ 'xl/worksheets/sheet1.xml' => '<?xml version="1.0"?><worksheet ' . self::NS . '><sheetData>'
+            . '<row r="1">' . $cell( 'A1', 'head' ) . '</row><row r="2">' . $cell( 'A2', 'one' ) . '</row><row r="6">' . $cell( 'A6', 'six' ) . '</row>'
+            . '</sheetData></worksheet>' ] );
+        $r = MyNJILGA_Spreadsheet_Reader::read( $f, 'x.xlsx' );
+        $this->assertSame( [ [ 'head' ], [ 'one' ], [ 'six' ] ], $r['rows'] );
+        $this->assertSame( [ 1, 2, 6 ], $r['lines'] );
+    }
+
+    public function testAnXlsxOverTheRowCapIsFlagged(): void {
+        if ( ! class_exists( 'ZipArchive' ) ) {
+            return;
+        }
+        $rows = '';
+        for ( $i = 1; $i <= MyNJILGA_Spreadsheet_Reader::MAX_ROWS + 5; $i++ ) {
+            $rows .= '<row r="' . $i . '"><c r="A' . $i . '" t="inlineStr"><is><t>x</t></is></c></row>';
+        }
+        $f = $this->xlsx( [ 'xl/worksheets/sheet1.xml' => '<?xml version="1.0"?><worksheet ' . self::NS . '><sheetData>' . $rows . '</sheetData></worksheet>' ] );
+        $r = MyNJILGA_Spreadsheet_Reader::read( $f, 'big.xlsx' );
+        $this->assertSame( MyNJILGA_Spreadsheet_Reader::MAX_ROWS, count( $r['rows'] ) );
+        $this->assertTrue( $r['truncated'] );
+    }
+
+    // -------------------------------------------------------------------
+    // Encodings and size
+    // -------------------------------------------------------------------
+
+    /** A UTF-7 document would write its DOCTYPE as "+ADwAIQ-DOCTYPE", invisible to a byte search. */
+    public function testADeclaredEncodingOtherThanUtf8IsRefused(): void {
+        if ( ! class_exists( 'ZipArchive' ) ) {
+            return;
+        }
+        $xml = '<?xml version="1.0" encoding="UTF-7"?>+ADw-worksheet+AD4-+ADw-/worksheet+AD4-';
+        $f   = $this->xlsx( [ 'xl/worksheets/sheet1.xml' => $xml ] );
+        $r   = MyNJILGA_Spreadsheet_Reader::read( $f, 'utf7.xlsx' );
+        $this->assertSame( [], $r['rows'] );
+        $this->assertTrue( strpos( $r['error'], 'could not be read' ) !== false );
+
+        // UTF-8, spelled either way, is fine.
+        foreach ( [ 'UTF-8', 'utf-8', 'utf8' ] as $enc ) {
+            $ok = $this->xlsx( [ 'xl/worksheets/sheet1.xml' => '<?xml version="1.0" encoding="' . $enc . '"?><worksheet ' . self::NS . '><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>ok</t></is></c></row></sheetData></worksheet>' ] );
+            $this->assertSame( [ [ 'ok' ] ], MyNJILGA_Spreadsheet_Reader::read( $ok, 'x.xlsx' )['rows'], $enc );
+        }
+    }
+
+    /** DOM parsing holds a document in memory at many times its text size; the cap must stay low. */
+    public function testTheInflatedWorksheetCapIsConservative(): void {
+        $this->assertTrue( MyNJILGA_Spreadsheet_Reader::MAX_XML_BYTES <= 10 * 1048576, 'was 30 MB — measured near 600 MB of RSS for 27 MB of XML' );
+    }
 }

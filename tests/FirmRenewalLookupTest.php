@@ -270,4 +270,64 @@ class FirmRenewalLookupTest extends NJILGA_TestCase {
     public function testTheShortcodeNameIsStable(): void {
         $this->assertSame( 'njilga_firm_renewal_lookup', MyNJILGA_Firm_Renewal_Lookup::SHORTCODE );
     }
+
+    // -------------------------------------------------------------------
+    // Review findings: the minimum, the visitor bucket, multibyte names
+    // -------------------------------------------------------------------
+
+    /** Three characters in total isn't a three-letter search: judge the words that will actually be searched. */
+    public function testTheMinimumIsAppliedToTheSearchWordsNotTheRawText(): void {
+        $ok = [ 'MyNJILGA_Firm_Renewal_Lookup', 'query_ok' ];
+        $this->assertFalse( $ok( 'a bc' ), '"a" is dropped, leaving the two letters "bc" to match nearly anything' );
+        $this->assertFalse( $ok( 'jo ne' ), 'two short words are not a three-letter word' );
+        $this->assertFalse( $ok( 'a b c d' ) );
+        $this->assertFalse( $ok( 'the' ), 'a stopword is not a name' );
+        $this->assertFalse( $ok( 'LLP' ) );
+        $this->assertTrue( $ok( 'a bcd' ) );
+        $this->assertTrue( $ok( 'Poe & Roe' ), 'two short names still have a 3-letter word: "poe"' );
+        $this->assertSame( [], MyNJILGA_Firm_Renewal_Lookup::select( $this->rows(), 'a sm' )['firms'], 'and a bypassing search finds nothing' );
+    }
+
+    public function testAnIPv4VisitorIsTheirOwnBucket(): void {
+        $b = [ 'MyNJILGA_Firm_Renewal_Lookup', 'ip_bucket' ];
+        $this->assertSame( 'v4:203.0.113.9', $b( '203.0.113.9' ) );
+        $this->assertTrue( $b( '203.0.113.9' ) !== $b( '203.0.113.10' ) );
+    }
+
+    /** One connection owns a whole /64 — rotating inside it must not buy a fresh allowance. */
+    public function testAnIPv6VisitorIsTheirWholeSlash64(): void {
+        $b = [ 'MyNJILGA_Firm_Renewal_Lookup', 'ip_bucket' ];
+        $this->assertSame( $b( '2001:db8:1:2::1' ), $b( '2001:db8:1:2:ffff:ffff:ffff:ffff' ) );
+        $this->assertSame( $b( '2001:db8:1:2::1' ), $b( '2001:0db8:0001:0002:aaaa:bbbb:cccc:dddd' ), 'however it is written' );
+        $this->assertTrue( $b( '2001:db8:1:2::1' ) !== $b( '2001:db8:1:3::1' ), 'a different /64 is a different visitor' );
+        $this->assertSame( 'v6:20010db800010002', $b( '2001:db8:1:2::1' ) );
+    }
+
+    public function testAnIPv4MappedIPv6AddressIsTheIPv4Visitor(): void {
+        $b = [ 'MyNJILGA_Firm_Renewal_Lookup', 'ip_bucket' ];
+        $this->assertSame( $b( '203.0.113.9' ), $b( '::ffff:203.0.113.9' ) );
+    }
+
+    /** No address must share a bucket, not skip the limit; junk is bucketed as typed. */
+    public function testAMissingOrOddAddressIsStillLimited(): void {
+        $b = [ 'MyNJILGA_Firm_Renewal_Lookup', 'ip_bucket' ];
+        $this->assertSame( 'unknown', $b( '' ) );
+        $this->assertSame( 'unknown', $b( '   ' ) );
+        $this->assertSame( 'raw:not-an-ip', $b( 'Not-An-IP' ) );
+    }
+
+    public function testAMultibyteSurnameGivesAWholeCharacterInitial(): void {
+        if ( ! function_exists( 'mb_substr' ) ) {
+            return;
+        }
+        $n = static function ( string $last ): string {
+            return MyNJILGA_Firm_Renewal_Lookup::short_name( [ 'name' => '', 'first_name' => 'Ann', 'last_name' => $last, 'email' => '' ] );
+        };
+        $this->assertSame( 'Ann Á.', $n( 'Álvarez' ) );
+        $this->assertSame( 'Ann Ö.', $n( 'öztürk' ), 'upper-cased too' );
+        $this->assertSame( 'Ann 李.', $n( '李' ) );
+        foreach ( [ 'Álvarez', 'öztürk', '李', 'Ōno' ] as $last ) {
+            $this->assertTrue( mb_check_encoding( $n( $last ), 'UTF-8' ), "$last: the initial is valid UTF-8" );
+        }
+    }
 }

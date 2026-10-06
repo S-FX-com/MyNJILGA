@@ -22,8 +22,17 @@ class MyNJILGA_Spreadsheet_Reader {
     /** Most rows read from one sheet (header included). */
     const MAX_ROWS = 10000;
 
-    /** Most bytes any one XML part may inflate to. */
-    const MAX_XML_BYTES = 31457280; // 30 MB
+    /**
+     * Most bytes any one XML part may inflate to. DOM parsing holds a
+     * document in memory at many times its text size (a 27 MB worksheet was
+     * measured near 600 MB), and libxml's heap is outside PHP's
+     * memory_limit, so the cap is low: 8 MB is ~18,000 rows of 15 columns,
+     * past MAX_ROWS.
+     */
+    const MAX_XML_BYTES = 8388608; // 8 MB
+
+    /** Largest CSV read, in bytes (the upload limit is lower; this guards direct callers). */
+    const MAX_CSV_BYTES = 20971520; // 20 MB
 
     /** Most columns kept from a row. */
     const MAX_COLS = 60;
@@ -31,7 +40,10 @@ class MyNJILGA_Spreadsheet_Reader {
     /**
      * Read a spreadsheet by its filename's extension.
      *
-     * @return array{rows:array<int,array<int,string>>,error:string}
+     * @return array{rows:array<int,array<int,string>>,lines:array<int,int>,truncated:bool,error:string}
+     *   rows: the non-blank rows; lines: each one's row number in the sheet
+     *   (blank rows are dropped, so position is not number); truncated: the
+     *   sheet had more than MAX_ROWS rows and the rest was not read.
      */
     public static function read( string $path, string $filename ): array {
         $ext = strtolower( (string) pathinfo( $filename, PATHINFO_EXTENSION ) );
@@ -55,14 +67,29 @@ class MyNJILGA_Spreadsheet_Reader {
     // -------------------------------------------------------------------------
 
     /**
-     * @return array{rows:array<int,array<int,string>>,error:string}
+     * @return array{rows:array<int,array<int,string>>,lines:array<int,int>,truncated:bool,error:string}
      */
     public static function read_csv( string $path ): array {
-        $raw = file_get_contents( $path, false, null, 0, 20971520 ); // 20 MB is far past any real sheet.
+        $size = (int) @filesize( $path );
+        if ( $size > self::MAX_CSV_BYTES ) {
+            return self::fail( 'That file is too large to read (over ' . (int) ( self::MAX_CSV_BYTES / 1048576 ) . ' MB). Split it into smaller sheets.' );
+        }
+        $raw = file_get_contents( $path );
         if ( $raw === false ) {
             return self::fail( 'The uploaded file could not be read.' );
         }
-        return [ 'rows' => self::csv_rows( $raw ), 'error' => '' ];
+        $parsed = self::csv_records( $raw );
+        return [ 'rows' => $parsed['rows'], 'lines' => $parsed['lines'], 'truncated' => $parsed['truncated'], 'error' => '' ];
+    }
+
+    /**
+     * Parse CSV text into rows. See csv_records() for the row numbers and
+     * the truncation flag.
+     *
+     * @return array<int,array<int,string>>
+     */
+    public static function csv_rows( string $text ): array {
+        return self::csv_records( $text )['rows'];
     }
 
     /**
@@ -70,9 +97,12 @@ class MyNJILGA_Spreadsheet_Reader {
      * (comma, semicolon or tab) from the first line, and converts a
      * Windows-1252 file — what Excel's plain "CSV" save produces — to UTF-8.
      *
-     * @return array<int,array<int,string>>
+     * A "row" is a CSV record, the way a spreadsheet counts it: a quoted
+     * cell with a line break in it is still one row.
+     *
+     * @return array{rows:array<int,array<int,string>>,lines:array<int,int>,truncated:bool}
      */
-    public static function csv_rows( string $text ): array {
+    public static function csv_records( string $text ): array {
         if ( strncmp( $text, "\xEF\xBB\xBF", 3 ) === 0 ) {
             $text = substr( $text, 3 );
         }
@@ -93,25 +123,32 @@ class MyNJILGA_Spreadsheet_Reader {
 
         $h = fopen( 'php://memory', 'r+' );
         if ( ! $h ) {
-            return [];
+            return [ 'rows' => [], 'lines' => [], 'truncated' => false ];
         }
         fwrite( $h, $text );
         rewind( $h );
 
-        $rows = [];
+        $rows      = [];
+        $lines     = [];
+        $number    = 0;
+        $truncated = false;
         while ( ( $cells = fgetcsv( $h, 0, $best, '"', '\\' ) ) !== false ) {
+            $number++;
             $row = self::clean_row( array_map( static function ( $c ) {
                 return (string) $c;
             }, $cells ) );
-            if ( $row !== null ) {
-                $rows[] = $row;
-                if ( count( $rows ) >= self::MAX_ROWS ) {
-                    break;
-                }
+            if ( $row === null ) {
+                continue;
             }
+            if ( count( $rows ) >= self::MAX_ROWS ) {
+                $truncated = true;
+                break;
+            }
+            $rows[]  = $row;
+            $lines[] = $number;
         }
         fclose( $h );
-        return $rows;
+        return [ 'rows' => $rows, 'lines' => $lines, 'truncated' => $truncated ];
     }
 
     // -------------------------------------------------------------------------
@@ -119,7 +156,7 @@ class MyNJILGA_Spreadsheet_Reader {
     // -------------------------------------------------------------------------
 
     /**
-     * @return array{rows:array<int,array<int,string>>,error:string}
+     * @return array{rows:array<int,array<int,string>>,lines:array<int,int>,truncated:bool,error:string}
      */
     public static function read_xlsx( string $path ): array {
         if ( ! class_exists( 'ZipArchive' ) || ! class_exists( 'DOMDocument' ) ) {
@@ -142,13 +179,13 @@ class MyNJILGA_Spreadsheet_Reader {
             $workbook  = (string) self::zip_text( $zip, 'xl/workbook.xml' );
             $date1904  = (bool) preg_match( '/<workbookPr[^>]*\bdate1904\s*=\s*"(?:1|true)"/i', $workbook );
 
-            $rows = self::sheet_rows( $sheetXml, $strings, $dateXfs, $date1904 );
+            $sheet = self::sheet_rows( $sheetXml, $strings, $dateXfs, $date1904 );
         } catch ( \Throwable $e ) {
             $zip->close();
             return self::fail( 'That workbook could not be read: ' . $e->getMessage() );
         }
         $zip->close();
-        return [ 'rows' => $rows, 'error' => '' ];
+        return [ 'rows' => $sheet['rows'], 'lines' => $sheet['lines'], 'truncated' => $sheet['truncated'], 'error' => '' ];
     }
 
     /**
@@ -219,6 +256,11 @@ class MyNJILGA_Spreadsheet_Reader {
         }
         if ( strpos( $xml, "\0" ) !== false ) {
             throw new \RuntimeException( 'the file is not UTF-8 XML' );
+        }
+        // …and neither can a declared encoding other than UTF-8 (UTF-7 would
+        // write the DOCTYPE in a form the check above cannot see).
+        if ( preg_match( '/^\s*<\?xml[^>]*\bencoding\s*=\s*["\']([^"\']+)["\']/i', $xml, $m ) && ! in_array( strtolower( $m[1] ), [ 'utf-8', 'utf8' ], true ) ) {
+            throw new \RuntimeException( 'the file declares an encoding other than UTF-8' );
         }
         // PHP 8 never resolves external entities; 7.4 needs telling.
         if ( PHP_VERSION_ID < 80000 && function_exists( 'libxml_disable_entity_loader' ) ) {
@@ -310,11 +352,19 @@ class MyNJILGA_Spreadsheet_Reader {
     /**
      * @param array<int,string>  $strings
      * @param array<int,bool>    $dateXfs
-     * @return array<int,array<int,string>>
+     * @return array{rows:array<int,array<int,string>>,lines:array<int,int>,truncated:bool}
      */
     private static function sheet_rows( string $xml, array $strings, array $dateXfs, bool $date1904 ): array {
-        $rows = [];
+        $rows      = [];
+        $lines     = [];
+        $truncated = false;
+        $number    = 0;
         foreach ( self::dom( $xml )->getElementsByTagNameNS( '*', 'row' ) as $rowEl ) {
+            // The row's own number (<row r="5">) — empty rows are often
+            // absent from the XML, so counting elements would drift.
+            $r      = (int) $rowEl->getAttribute( 'r' );
+            $number = $r > 0 ? $r : $number + 1;
+
             $cells = [];
             $next  = 0;
             foreach ( $rowEl->childNodes as $c ) {
@@ -338,14 +388,17 @@ class MyNJILGA_Spreadsheet_Reader {
                 $row[ $i ] = $cells[ $i ] ?? '';
             }
             $row = self::clean_row( $row );
-            if ( $row !== null ) {
-                $rows[] = $row;
-                if ( count( $rows ) >= self::MAX_ROWS ) {
-                    break;
-                }
+            if ( $row === null ) {
+                continue;
             }
+            if ( count( $rows ) >= self::MAX_ROWS ) {
+                $truncated = true;
+                break;
+            }
+            $rows[]  = $row;
+            $lines[] = $number;
         }
-        return $rows;
+        return [ 'rows' => $rows, 'lines' => $lines, 'truncated' => $truncated ];
     }
 
     /**
@@ -481,9 +534,9 @@ class MyNJILGA_Spreadsheet_Reader {
     }
 
     /**
-     * @return array{rows:array<int,array<int,string>>,error:string}
+     * @return array{rows:array<int,array<int,string>>,lines:array<int,int>,truncated:bool,error:string}
      */
     private static function fail( string $message ): array {
-        return [ 'rows' => [], 'error' => $message ];
+        return [ 'rows' => [], 'lines' => [], 'truncated' => false, 'error' => $message ];
     }
 }

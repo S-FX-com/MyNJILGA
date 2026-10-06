@@ -22,14 +22,21 @@
  *     the lookup can't be used to learn who exists or who owes.
  *   • Results show the firm, dues year, amount, "billed to Ann B." (first
  *     name and last initial) and a member count. Never an email address or
- *     the roster's names. (The Stripe page the Pay button opens does list
- *     the invoice's lines — it is the same page the firm was emailed.)
+ *     the roster's names. BUT the Stripe page the Pay button opens is the
+ *     same page the firm was emailed, and it shows the invoice's bill-to
+ *     name and email and every line ("Ann Brown — 2027 Professional
+ *     Membership"). So anyone who can find a firm can read that — the
+ *     lookup's own page is minimal, the payment page is not. verify="email"
+ *     is the control for that (below); without it, the firm name is the
+ *     only gate, which is what an anonymous "pay without the email" page
+ *     means.
  *   • A search needs at least three letters, returns at most eight firms,
  *     and is rate-limited per visitor (a short and a daily window).
  *   • Searches are POSTs: never cached by a page cache, and the firm name
  *     never lands in a URL or an access log.
- *   • verify="email" tightens it further: a firm is shown only to someone
- *     who also types an email address that is on that firm's invoice.
+ *   • verify="email" tightens it further: a firm — and so its Stripe
+ *     page — is shown only to someone who also types an email address that
+ *     is on that firm's invoice.
  *   • Always Live-mode invoices, whichever way staff have set the admin
  *     Test/Live toggle — the same rule as [njilga_firm_dues_status].
  *
@@ -75,11 +82,16 @@ class MyNJILGA_Firm_Renewal_Lookup {
         $searched = isset( $_SERVER['REQUEST_METHOD'] ) && $_SERVER['REQUEST_METHOD'] === 'POST' && isset( $_POST[ self::FIELD_QUERY ] ); // phpcs:ignore WordPress.Security.NonceVerification -- a read-only search; see the class comment.
         $query    = $searched ? self::clean( wp_unslash( (string) $_POST[ self::FIELD_QUERY ] ), 100 ) : ''; // phpcs:ignore WordPress.Security.NonceVerification
         $email    = ( $searched && $verifyEmail && isset( $_POST[ self::FIELD_EMAIL ] ) ) ? strtolower( self::clean( wp_unslash( (string) $_POST[ self::FIELD_EMAIL ] ), 190 ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification
-        $trapped  = $searched && ! empty( $_POST[ self::FIELD_TRAP ] ); // phpcs:ignore WordPress.Security.NonceVerification
+        // !== '' rather than !empty(): empty('0') is true, so a bot posting "0" would pass.
+        $trapped  = $searched && isset( $_POST[ self::FIELD_TRAP ] ) && trim( (string) wp_unslash( $_POST[ self::FIELD_TRAP ] ) ) !== ''; // phpcs:ignore WordPress.Security.NonceVerification
 
         $message = '';
         $result  = null;
-        if ( $searched && ! $trapped ) {
+        if ( $trapped ) {
+            // A person never fills the hidden field — but autofill sometimes
+            // does, and a silent blank page would leave them stuck.
+            $message = 'Something went wrong with that search. Please reload the page and try again.';
+        } elseif ( $searched ) {
             if ( ! self::query_ok( $query ) ) {
                 $message = 'Please type at least ' . self::MIN_QUERY . ' letters of your firm\'s name.';
             } elseif ( $verifyEmail && ! is_email( $email ) ) {
@@ -296,8 +308,19 @@ class MyNJILGA_Firm_Renewal_Lookup {
                 return ''; // A lone word or an email address: say nothing.
             }
         }
-        $initial = $last !== '' ? strtoupper( substr( $last, 0, 1 ) ) . '.' : '';
+        $initial = $last !== '' ? self::upper_initial( $last ) . '.' : '';
         return trim( $first . ' ' . $initial );
+    }
+
+    /**
+     * The first letter of a name, upper-cased, as a whole character — a
+     * byte slice would cut "Álvarez" in half and print invalid UTF-8.
+     */
+    private static function upper_initial( string $name ): string {
+        if ( function_exists( 'mb_substr' ) && function_exists( 'mb_strtoupper' ) ) {
+            return mb_strtoupper( mb_substr( $name, 0, 1, 'UTF-8' ), 'UTF-8' );
+        }
+        return strtoupper( substr( $name, 0, 1 ) );
     }
 
     /**
@@ -343,11 +366,18 @@ class MyNJILGA_Firm_Renewal_Lookup {
     }
 
     /**
-     * A search must carry at least MIN_QUERY letters or digits, so one
-     * or two letters can't be used to page through every firm.
+     * A search must carry a real search word of at least MIN_QUERY letters
+     * or digits — judged on the words that will actually be searched for
+     * (see tokens()), not the raw text, so "a bc" (which would search for
+     * the two letters "bc" across every firm) and one or two letters can't
+     * be used to page through the firms.
      */
     public static function query_ok( string $query ): bool {
-        return strlen( (string) preg_replace( '/[^a-z0-9]/i', '', $query ) ) >= self::MIN_QUERY;
+        $longest = 0;
+        foreach ( self::tokens( $query ) as $t ) {
+            $longest = max( $longest, strlen( $t ) );
+        }
+        return $longest >= self::MIN_QUERY;
     }
 
     /**
@@ -401,33 +431,81 @@ class MyNJILGA_Firm_Renewal_Lookup {
     }
 
     // -------------------------------------------------------------------------
-    // Rate limiting (transients, per visitor)
+    // Rate limiting (per visitor)
     // -------------------------------------------------------------------------
 
     /**
-     * Count this search against the visitor's two windows; false (and not
-     * counted) when either is spent.
+     * Who a search is counted against. An IPv4 address is its own visitor;
+     * an IPv6 address is its /64 — one subscriber's whole allocation — since
+     * a single connection can rotate through billions of addresses in it. A
+     * missing address shares one "unknown" bucket rather than skipping the
+     * limit. PURE.
+     */
+    public static function ip_bucket( string $ip ): string {
+        $ip = trim( $ip );
+        if ( $ip === '' ) {
+            return 'unknown';
+        }
+        $bin = @inet_pton( $ip );
+        if ( $bin === false ) {
+            return 'raw:' . strtolower( $ip );
+        }
+        if ( strlen( $bin ) === 16 ) {
+            // ::ffff:203.0.113.9 is the IPv4 address 203.0.113.9.
+            if ( substr( $bin, 0, 12 ) === "\0\0\0\0\0\0\0\0\0\0\xff\xff" ) {
+                return 'v4:' . implode( '.', array_map( 'ord', str_split( substr( $bin, 12 ) ) ) );
+            }
+            return 'v6:' . bin2hex( substr( $bin, 0, 8 ) );
+        }
+        return 'v4:' . implode( '.', array_map( 'ord', str_split( $bin ) ) );
+    }
+
+    /**
+     * Count this search against the visitor's two windows; false when
+     * either is spent.
+     *
+     * With a persistent object cache the count is an atomic increment, so a
+     * burst of parallel requests can't each read "0". Without one, the
+     * counts are transients — read, then written — which a burst of
+     * parallel requests can overshoot by about its own size; it never
+     * leaves the limit open. A transient is only written for an allowed
+     * search, so a blocked visitor's retries don't extend their own wait.
      */
     private static function within_limits( string $ip ): bool {
-        if ( $ip === '' ) {
-            return true; // Nothing to key on; the daily cap on a shared address would lock everyone out.
+        $bucket = self::ip_bucket( $ip );
+
+        if ( function_exists( 'wp_using_ext_object_cache' ) && wp_using_ext_object_cache() ) {
+            $short = self::cache_bump( 'short', $bucket, self::LIMIT_SHORT[1] );
+            $day   = self::cache_bump( 'day', $bucket, self::LIMIT_DAY[1] );
+            if ( $short !== null && $day !== null ) {
+                return self::limits_allow( $short - 1, $day - 1 );
+            }
         }
-        $short = self::used( 'short', $ip );
-        $day   = self::used( 'day', $ip );
+
+        $short = (int) get_transient( self::key( 'short', $bucket ) );
+        $day   = (int) get_transient( self::key( 'day', $bucket ) );
         if ( ! self::limits_allow( $short, $day ) ) {
             return false;
         }
-        set_transient( self::key( 'short', $ip ), $short + 1, self::LIMIT_SHORT[1] );
-        set_transient( self::key( 'day', $ip ), $day + 1, self::LIMIT_DAY[1] );
+        set_transient( self::key( 'short', $bucket ), $short + 1, self::LIMIT_SHORT[1] );
+        set_transient( self::key( 'day', $bucket ), $day + 1, self::LIMIT_DAY[1] );
         return true;
     }
 
-    private static function used( string $bucket, string $ip ): int {
-        return (int) get_transient( self::key( $bucket, $ip ) );
+    /**
+     * Atomically add one to a counter in the object cache and return the
+     * new value (the expiry is set when the counter is first created and
+     * not refreshed), or null if the cache can't do it.
+     */
+    private static function cache_bump( string $window, string $bucket, int $ttl ): ?int {
+        $key = self::key( $window, $bucket );
+        wp_cache_add( $key, 0, 'njilga_renew', $ttl );
+        $n = wp_cache_incr( $key, 1, 'njilga_renew' );
+        return $n === false ? null : (int) $n;
     }
 
-    private static function key( string $bucket, string $ip ): string {
-        return 'njilga_renew_' . $bucket . '_' . md5( $ip );
+    private static function key( string $bucket, string $who ): string {
+        return 'njilga_renew_' . $bucket . '_' . md5( $who );
     }
 
     // -------------------------------------------------------------------------

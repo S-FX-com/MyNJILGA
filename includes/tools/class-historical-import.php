@@ -279,23 +279,35 @@ class MyNJILGA_Historical_Import {
 
     /**
      * A status word as paid | open | void, or '' when it says nothing.
-     * "Unpaid" must read as open, not paid.
+     *
+     * Order matters, because a status cell is free text: "Unpaid" and "Not
+     * paid" are checked before "paid" (they contain it); "paid" is checked
+     * before the words that merely describe an invoice's history ("Paid -
+     * no balance", "Overdue - paid", "Paid (sent 1/2)" are all paid). A
+     * partial payment is open — the Amount Paid column carries the rest.
+     * "N/A", "TBD" and "-" say nothing, and a lone Y/N is a yes/no flag.
      */
     public static function parse_status( string $raw ): string {
         $s = strtolower( trim( $raw ) );
-        if ( $s === '' ) {
+        if ( $s === '' || preg_match( '#^(n/?a|none|nil|tbd|unknown|\?+|-+|\x{2014}+)$#u', $s ) ) {
             return '';
         }
-        if ( preg_match( '/\b(unpaid|not paid|open|outstanding|pending|overdue|past due|due|balance|sent|owed)\b/', $s ) ) {
+        if ( in_array( $s, [ 'y', 'yes', 'true', '1' ], true ) ) {
+            return MyNJILGA_Dues_History_Table::STATUS_PAID;
+        }
+        if ( in_array( $s, [ 'n', 'no', 'false', '0' ], true ) ) {
+            return MyNJILGA_Dues_History_Table::STATUS_OPEN;
+        }
+        if ( preg_match( '/\b(unpaid|not\s+(yet\s+)?paid|non-?paid|partial(ly)?|part\s+paid|deposit)\b/', $s ) ) {
             return MyNJILGA_Dues_History_Table::STATUS_OPEN;
         }
         if ( preg_match( '/\b(void|voided|cancel|cancelled|canceled|written off|write off|uncollectible|refunded)\b/', $s ) ) {
             return MyNJILGA_Dues_History_Table::STATUS_VOID;
         }
-        if ( preg_match( '/\b(paid|complete|completed|settled|received|closed|success|yes|y|true)\b/', $s ) ) {
+        if ( preg_match( '/\b(paid|complete|completed|settled|received|closed|success|successful)\b/', $s ) ) {
             return MyNJILGA_Dues_History_Table::STATUS_PAID;
         }
-        if ( preg_match( '/\b(no|n|false)\b/', $s ) ) {
+        if ( preg_match( '/\b(open|outstanding|pending|overdue|past\s+due|due|balance|sent|owed)\b/', $s ) ) {
             return MyNJILGA_Dues_History_Table::STATUS_OPEN;
         }
         return '';
@@ -372,10 +384,12 @@ class MyNJILGA_Historical_Import {
      *
      * @param array<int,array<int,string>> $rows          From MyNJILGA_Spreadsheet_Reader.
      * @param string                       $defaultStatus What a row with no status (and no payment) means: paid | open.
+     * @param array<int,int>               $lines         The sheet row number of each of $rows (the reader drops blank rows, so a row's position is not its number); defaults to counting from 1.
      * @return array{map:array<string,int>,columns:array<string,string>,unrecognised:array<int,string>,missing:array<int,string>,records:array<int,array<string,mixed>>,has_status:bool}
      */
-    public static function prepare( array $rows, string $defaultStatus ): array {
+    public static function prepare( array $rows, string $defaultStatus, array $lines = [] ): array {
         $rows   = array_values( $rows );
+        $lines  = array_values( $lines );
         $header = $rows ? (array) array_shift( $rows ) : [];
         $m      = self::map_headers( $header );
         $m['records']    = [];
@@ -385,7 +399,8 @@ class MyNJILGA_Historical_Import {
         }
 
         foreach ( $rows as $i => $row ) {
-            $m['records'][] = self::record( (array) $row, $m['map'], $i + 2, $defaultStatus );
+            // $rows had its heading row removed: row $i is $lines[ $i + 1 ].
+            $m['records'][] = self::record( (array) $row, $m['map'], (int) ( $lines[ $i + 1 ] ?? $i + 2 ), $defaultStatus );
         }
         return $m;
     }
@@ -490,14 +505,52 @@ class MyNJILGA_Historical_Import {
      * @return array<int,array<string,mixed>>
      */
     public static function group( array $records ): array {
+        // A numbered invoice that has a row with an error is incomplete: it
+        // must not import with a line missing (and then be skipped as
+        // "already imported" when the corrected sheet comes back).
+        $damaged = [];
+        foreach ( $records as $r ) {
+            $number = strtolower( trim( (string) $r['invoice_number'] ) );
+            if ( ! empty( $r['errors'] ) && $number !== '' ) {
+                $damaged[ $number ][] = (int) $r['line'];
+            }
+        }
+
+        // The firms named under each (year, number), in sheet order.
+        $firmsOf = [];
+        foreach ( $records as $r ) {
+            $number = trim( (string) $r['invoice_number'] );
+            $fk     = self::firm_key( (string) $r['firm'] );
+            if ( empty( $r['errors'] ) && $number !== '' && $fk !== '' ) {
+                $firmsOf[ (int) $r['year'] . '|' . strtolower( $number ) ][ $fk ] = true;
+            }
+        }
+
         $buckets = [];
         $order   = [];
+        $shared  = [];
         foreach ( $records as $r ) {
             if ( ! empty( $r['errors'] ) ) {
                 continue;
             }
             $number = trim( (string) $r['invoice_number'] );
-            $key    = $number !== '' ? (int) $r['year'] . '|' . strtolower( $number ) : 'row|' . (int) $r['line'];
+            if ( $number === '' ) {
+                $key = 'row|' . (int) $r['line'];
+            } else {
+                // Rows under one number but different firms are different
+                // invoices — "N/A", "TBD" or a reused number must not merge
+                // three firms into one. A row naming no firm belongs to the
+                // first firm named under that number.
+                $base = (int) $r['year'] . '|' . strtolower( $number );
+                $fk   = self::firm_key( (string) $r['firm'] );
+                if ( $fk === '' && ! empty( $firmsOf[ $base ] ) ) {
+                    $fk = (string) key( $firmsOf[ $base ] );
+                }
+                $key = $base . '|' . $fk;
+                if ( count( $firmsOf[ $base ] ?? [] ) > 1 ) {
+                    $shared[ $key ] = count( $firmsOf[ $base ] );
+                }
+            }
             if ( ! isset( $buckets[ $key ] ) ) {
                 $buckets[ $key ] = [];
                 $order[]         = $key;
@@ -509,6 +562,13 @@ class MyNJILGA_Historical_Import {
         $seen     = [];
         foreach ( $order as $key ) {
             $inv = self::invoice( $buckets[ $key ] );
+            if ( isset( $shared[ $key ] ) ) {
+                $inv['warnings'][] = 'Invoice number ' . $inv['invoice_number'] . ' is used by ' . $shared[ $key ] . ' different firms; each is imported as its own invoice.';
+            }
+            $num = strtolower( $inv['invoice_number'] );
+            if ( $num !== '' && isset( $damaged[ $num ] ) ) {
+                $inv['problems'][] = 'Row' . ( count( $damaged[ $num ] ) > 1 ? 's ' : ' ' ) . implode( ', ', $damaged[ $num ] ) . ' of invoice ' . $inv['invoice_number'] . ' could not be read, so importing it would record the invoice incomplete — fix ' . ( count( $damaged[ $num ] ) > 1 ? 'them' : 'it' ) . ' and upload again.';
+            }
             // Two identical unnumbered rows are two invoices; number them in
             // sheet order so the same sheet always yields the same refs.
             $base = $inv['ref'];
@@ -620,6 +680,7 @@ class MyNJILGA_Historical_Import {
                 return (int) $r['line'];
             }, $rows ),
             'warnings'       => $warnings,
+            'problems'       => [],
         ];
     }
 
@@ -657,7 +718,10 @@ class MyNJILGA_Historical_Import {
     }
 
     /**
-     * The idempotency key for an invoice. Numbered: year/number. Unnumbered:
+     * The idempotency key for an invoice. Numbered: year/number, plus the
+     * firm when the sheet names one — an invoice number is only unique
+     * within a firm in a hand-kept sheet ("N/A", a number reused by two
+     * firms), and a re-upload must find the same invoice again. Unnumbered:
      * a hash of what the row says, so the same sheet uploaded twice
      * produces the same keys.
      *
@@ -665,7 +729,14 @@ class MyNJILGA_Historical_Import {
      */
     public static function source_ref( string $number, int $year, array $rows ): string {
         if ( $number !== '' ) {
-            return substr( $year . '/' . strtolower( $number ), 0, 100 );
+            $fk = '';
+            foreach ( $rows as $r ) {
+                $fk = self::firm_key( (string) $r['firm'] );
+                if ( $fk !== '' ) {
+                    break;
+                }
+            }
+            return substr( $year . '/' . strtolower( $number ) . ( $fk !== '' ? '|' . $fk : '' ), 0, 100 );
         }
         $parts = [ (string) $year ];
         foreach ( $rows as $r ) {
@@ -865,6 +936,8 @@ class MyNJILGA_Historical_Import {
         $out      = [];
         foreach ( $invoices as $inv ) {
             $resolved = self::resolve( $inv, $dir['contacts'], $dir['companyKeys'], $dir['companyNames'] );
+            // An invoice that lost a line to an unreadable row is blocked too.
+            $resolved['problems'] = array_merge( (array) ( $inv['problems'] ?? [] ), $resolved['problems'] );
             $state    = $resolved['problems'] ? 'blocked' : ( isset( $existing[ $inv['ref'] ] ) ? 'duplicate' : 'new' );
             $out[]    = [ 'inv' => $inv, 'resolved' => $resolved, 'state' => $state ];
         }

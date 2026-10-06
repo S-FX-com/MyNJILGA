@@ -45,6 +45,7 @@ class MyNJILGA_Dues_History_View {
                 'label'      => 'This contact',
                 'entries'    => MyNJILGA_Dues_History::for_contact( $contactId ),
                 'contact_id' => $contactId,
+                'own'        => true,
                 'show_firm'  => count( $firms ) > 1,
                 'empty'      => 'No dues invoices on record that name ' . ( $contactName !== '' ? $contactName : 'this contact' ) . '.',
             ],
@@ -54,6 +55,7 @@ class MyNJILGA_Dues_History_View {
                 'label'      => $name !== '' ? $name : 'Firm #' . (int) $companyId,
                 'entries'    => MyNJILGA_Dues_History::for_company( (int) $companyId ),
                 'contact_id' => $contactId,
+                'own'        => false,
                 'show_firm'  => false,
                 'empty'      => 'No dues invoices on record for this firm.',
             ];
@@ -91,14 +93,14 @@ class MyNJILGA_Dues_History_View {
     /**
      * One panel, or — with more than one scope — a switch between them.
      *
-     * @param array<int,array{label:string,entries:array<int,array<string,mixed>>,contact_id:int,show_firm:bool,empty:string}> $scopes
+     * @param array<int,array{label:string,entries:array<int,array<string,mixed>>,contact_id:int,own:bool,show_firm:bool,empty:string}> $scopes
      */
     private static function scopes( array $scopes ): void {
         // Nothing for the contact personally AND no firm: one plain empty
         // state, not a switch with a single option.
         if ( count( $scopes ) === 1 ) {
             $s = $scopes[0];
-            self::panel( $s['entries'], $s['contact_id'], $s['show_firm'], $s['empty'] );
+            self::panel( $s['entries'], $s['contact_id'], $s['show_firm'], $s['empty'], $s['own'] );
             return;
         }
 
@@ -125,7 +127,7 @@ class MyNJILGA_Dues_History_View {
         echo '</div><div class="njilga-scope-panels">';
         foreach ( $scopes as $s ) {
             echo '<div class="njilga-scope-panel">';
-            self::panel( $s['entries'], $s['contact_id'], $s['show_firm'], $s['empty'] );
+            self::panel( $s['entries'], $s['contact_id'], $s['show_firm'], $s['empty'], $s['own'] );
             echo '</div>';
         }
         echo '</div></div>';
@@ -138,8 +140,9 @@ class MyNJILGA_Dues_History_View {
     /**
      * @param array<int,array<string,mixed>> $entries   Newest year first.
      * @param int                            $contactId Whose share to show on each invoice (0 = none).
+     * @param bool                           $own       The entries are the invoices that merely NAME the contact — each may be a whole firm's invoice with the contact one member of it — so the headline figures say "on their invoices" rather than claim to be the contact's own balance.
      */
-    private static function panel( array $entries, int $contactId, bool $showFirm, string $emptyText ): void {
+    private static function panel( array $entries, int $contactId, bool $showFirm, string $emptyText, bool $own = false ): void {
         if ( ! $entries ) {
             echo '<div class="njilga-card njilga-empty"><div class="njilga-empty-icon">' . MyNJILGA_Admin_UI::icon( 'receipt' ) . '</div>';
             echo '<h2 class="njilga-empty-title">Nothing here yet</h2><p class="njilga-empty-text">' . esc_html( $emptyText ) . '</p></div>';
@@ -154,18 +157,18 @@ class MyNJILGA_Dues_History_View {
 
         MyNJILGA_Admin_UI::stat_cards( [
             [
-                'label'   => 'Open balance',
+                'label'   => $own ? 'Open on their invoices' : 'Open balance',
                 'value'   => MyNJILGA_Invoicing::money( $sum['open_cents'] ),
                 'variant' => $sum['open_cents'] > 0 ? 'warning' : 'success',
                 'icon'    => $sum['open_cents'] > 0 ? 'alert' : 'check-circle',
                 'sub'     => $sum['open_count'] > 0 ? sprintf( '%d open invoice%s', $sum['open_count'], $sum['open_count'] === 1 ? '' : 's' ) : 'Nothing owed',
             ],
             [
-                'label'   => 'Paid to date',
+                'label'   => $own ? 'Paid on their invoices' : 'Paid to date',
                 'value'   => MyNJILGA_Invoicing::money( $net ),
                 'variant' => 'default',
                 'icon'    => 'receipt',
-                'sub'     => $sum['refunded_cents'] > 0 ? MyNJILGA_Invoicing::money( $sum['refunded_cents'] ) . ' refunded' : '',
+                'sub'     => $sum['refunded_cents'] > 0 ? MyNJILGA_Invoicing::money( $sum['refunded_cents'] ) . ' refunded' : ( $own ? 'whole invoices, not just their share' : '' ),
             ],
             [
                 'label'   => 'Invoices',
