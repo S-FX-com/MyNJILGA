@@ -409,4 +409,57 @@ class MyNJILGA_Pricing_Engine_Test extends NJILGA_TestCase {
         $r = MyNJILGA_Pricing_Engine::price( [ $this->contact( 1, 'Ann', 'Adams', [ 'professional', 'inactive' ] ) ], $this->config( [ 'dues_covered' => [ 1 => 'paid via online join' ] ] ) );
         $this->assertSame( 'inactive', $this->member( $r, 1 )['unbilled_reason'] );
     }
+
+    /**
+     * dues_paid (already tagged "Dues Paid {year}"): $0 with the reason,
+     * ranked after the paying members — and, unlike a join, the assessment
+     * is not owed either: the year is paid.
+     */
+    public function test_dues_paid_members_owe_nothing_and_rank_after(): void {
+        $r = MyNJILGA_Pricing_Engine::price( [
+            $this->contact( 1, 'Ann', 'Adams', [ 'professional', 'officer' ] ),
+            $this->contact( 2, 'Bob', 'Baker', [ 'professional' ] ),
+            $this->contact( 3, 'Cy', 'Clark', [ 'professional' ] ),
+        ], $this->config( [ 'dues_paid' => [ 1 => 'already paid' ] ] ) );
+
+        $ann = $this->member( $r, 1 );
+        $this->assertSame( 0, $ann['dues_cents'] );
+        $this->assertSame( 0, $ann['rank'] );
+        $this->assertSame( 'already paid', $ann['dues_note'] );
+        $this->assertSame( '', $ann['unbilled_reason'], 'Paid is not an exception.' );
+        $this->assertSame( 0, $ann['assessment_cents'], 'The year is paid — no dinner either.' );
+        $this->assertSame( 12500, $this->member( $r, 2 )['dues_cents'] );
+        $this->assertSame( 7500, $this->member( $r, 3 )['dues_cents'] );
+        $this->assertSame( 20000, $r['totals']['total_cents'] );
+        $this->assertSame( [ 2, 3, 1 ], array_column( $r['members'], 'contact_id' ) );
+    }
+
+    /** A firm whose every member has paid the year owes nothing. */
+    public function test_firm_fully_paid_totals_zero(): void {
+        $r = MyNJILGA_Pricing_Engine::price( [
+            $this->contact( 1, 'Ann', 'Adams', [ 'professional', 'trustees' ] ),
+            $this->contact( 2, 'Bob', 'Baker', [ 'professional' ] ),
+        ], $this->config( [ 'dues_paid' => [ 1 => 'already paid', 2 => 'already paid' ] ] ) );
+        $this->assertSame( 0, $r['totals']['total_cents'] );
+    }
+
+    /**
+     * An online joiner is tagged "Dues Paid {year}" too, so they can be in
+     * both lists — the join's rule wins: the dinner is still owed.
+     */
+    public function test_dues_covered_beats_dues_paid(): void {
+        $r = MyNJILGA_Pricing_Engine::price( [ $this->contact( 1, 'Ann', 'Adams', [ 'professional', 'officer' ] ) ], $this->config( [
+            'dues_covered' => [ 1 => 'paid via online join' ],
+            'dues_paid'    => [ 1 => 'already paid' ],
+        ] ) );
+        $ann = $this->member( $r, 1 );
+        $this->assertSame( 'paid via online join', $ann['dues_note'] );
+        $this->assertSame( 20000, $ann['assessment_cents'] );
+    }
+
+    /** Inactive still wins over paid. */
+    public function test_inactive_beats_dues_paid(): void {
+        $r = MyNJILGA_Pricing_Engine::price( [ $this->contact( 1, 'Ann', 'Adams', [ 'professional', 'inactive' ] ) ], $this->config( [ 'dues_paid' => [ 1 => 'already paid' ] ] ) );
+        $this->assertSame( 'inactive', $this->member( $r, 1 )['unbilled_reason'] );
+    }
 }

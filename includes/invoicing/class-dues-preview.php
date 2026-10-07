@@ -48,6 +48,12 @@ class MyNJILGA_Dues_Preview {
     const NOTE_JOIN_CLEARING = 'online join payment clearing';
 
     /**
+     * The dues_note on a member priced at $0 because they already carry
+     * the year's "Dues Paid {year}" tag (see year_paid_contacts()).
+     */
+    const NOTE_YEAR_PAID = 'already paid';
+
+    /**
      * Compute (no DB writes) every invoice candidate for the year.
      *
      * @return array<int,array<string,mixed>> Candidate rows, sorted by company name.
@@ -172,7 +178,9 @@ class MyNJILGA_Dues_Preview {
      * so re-running the preview for a year people have joined in never
      * bills them a second time, and nobody else's tier shifts — and, as
      * 'dues_pending' (which the engine ignores), everyone on a join whose
-     * money hasn't settled, for flag_join_pending().
+     * money hasn't settled, for flag_join_pending(). Plus, as 'dues_paid',
+     * everyone already tagged as paid for the year some other way — they
+     * stay on the roster at $0 and owe no assessment.
      *
      * @return array<string,mixed>
      */
@@ -181,7 +189,31 @@ class MyNJILGA_Dues_Preview {
         $coverage = self::join_coverage( $duesYear, MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
         $config['dues_covered'] = $coverage['covered'];
         $config['dues_pending'] = $coverage['pending'];
+        $config['dues_paid']    = self::year_paid_contacts( $duesYear );
         return $config;
+    }
+
+    /**
+     * Everyone carrying the year's "Dues Paid {year}" tag — contact id =>
+     * NOTE_YEAR_PAID. That tag is what a paid invoice or join writes, and
+     * what staff (or an import) put on anyone who paid the year outside
+     * Stripe — a PMPro renewal, a check — so a preview for that year must
+     * not bill them again — nor the downgrade sweep lapse them for sitting
+     * at $0 on their firm's unpaid invoice. The tag is looked up, never
+     * created.
+     *
+     * @return array<int,string>
+     */
+    public static function year_paid_contacts( int $duesYear ): array {
+        $tagId = MyNJILGA_Tags::find_title_id( MyNJILGA_Dues_Settings::year_tag( 'year_paid_tag_pattern', $duesYear ) );
+        if ( ! $tagId ) {
+            return [];
+        }
+        $out = [];
+        foreach ( \FluentCrm\App\Models\Subscriber::filterByTags( [ $tagId ] )->pluck( 'id' ) as $id ) {
+            $out[ (int) $id ] = self::NOTE_YEAR_PAID;
+        }
+        return $out;
     }
 
     /**

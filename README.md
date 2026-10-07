@@ -111,6 +111,8 @@ Prices in Settings are what invoices actually charge — that never depends on a
 4. Non-tier categories charge their flat price (normally $0).
 5. **Assessment** — an active contact with any qualifying tag owes it once, on top of dues (an exempt Senior Trustee still owes the dinner).
 
+**Already paid.** Anyone who has already paid the year's dues stays on the firm's roster at $0 and is ranked after the paying members, so they never take a paid slot. Paid through an online join → *"paid via online join"*, and the assessment is still owed (a join pays dues, not the dinner). Carrying the year's `Dues Paid {year}` tag any other way — a PMPro renewal, a check, an earlier invoice → *"already paid"*, and no assessment either: the year is settled. A firm whose whole roster has paid owes nothing and gets no invoice. To bill a past year's stragglers (e.g. a 2026 "last call" after 2026 was collected in PMPro), first make sure everyone who paid carries `Dues Paid 2026`, then generate the preview for that year.
+
 Seventeen unit tests cover this, including the ranking-partition cases. Run them with any PHP CLI — no WordPress, no PHPUnit:
 
 ```bash
@@ -174,7 +176,7 @@ Note the one thing this costs: **Stripe's "Mark as paid" settles the whole invoi
 
 ### Downgrade sweep
 
-Manual, from the Invoicing page, via a **confirmation screen** showing the exact invoices, firms, and members it will touch (and how many are protected by a paid invoice elsewhere). Applies `Unpaid Dues {year}` + `unpaid-dues`, removes `dues-paid`, removes every WordPress membership role if the setting says so, marks rows downgraded, leaves a Company Note.
+Manual, from the Invoicing page, via a **confirmation screen** showing the exact invoices, firms, and members it will touch (and how many are protected by a paid invoice elsewhere or by already carrying `Dues Paid {year}`). Applies `Unpaid Dues {year}` + `unpaid-dues`, removes `dues-paid`, removes every WordPress membership role if the setting says so, marks rows downgraded, leaves a Company Note.
 
 ### WordPress role sync
 

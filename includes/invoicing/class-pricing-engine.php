@@ -15,7 +15,8 @@
  *     'categories' => ordered rows (see MyNJILGA_Dues_Settings::defaults()),
  *     'assessment' => [ label, price_cents, qualifiers[] ],
  *     'rank_in_roster_order' => bool (optional, default false — see rule 3),
- *     'dues_covered' => [ contact_id => reason ] (optional — see rule 3a) ]
+ *     'dues_covered' => [ contact_id => reason ] (optional — see rule 3a),
+ *     'dues_paid'    => [ contact_id => reason ] (optional — see rule 3b) ]
  *
  * Rules, in the order they're applied to each contact:
  *
@@ -43,6 +44,10 @@
  *      that reason as the note, ranked after the paying members like any
  *      other non-paying member, so nobody else's tier shifts. Their
  *      assessment is still owed: a join pays dues, not the dinner.
+ *   3b. Already paid. A contact listed in 'dues_paid' already carries the
+ *      year's "Dues Paid {year}" tag — the year is settled, so $0 dues AND
+ *      no assessment, ranked after the paying members like 3a. A contact
+ *      in both lists (an online joiner is tagged too) follows 3a.
  *   4. Non-tier-eligible categories charge their flat price (normally $0).
  *   5. Assessment. An ACTIVE contact carrying any qualifying tag owes the
  *      assessment once (capped at one per person, labelled by the first
@@ -88,16 +93,17 @@ class MyNJILGA_Pricing_Engine {
 
         // Pass 2 — partition. Group order IS billing order.
         $covered  = (array) ( $config['dues_covered'] ?? [] );
+        $paidYear = (array) ( $config['dues_paid'] ?? [] );
         $rankable = []; // active + tier-eligible category
         $flat     = []; // active + non-tier-eligible category
-        $paid     = []; // active, dues already covered this cycle
+        $paid     = []; // active, dues already covered or paid this cycle
         $noCat    = []; // active, no category
         $inactive = [];
         foreach ( $classified as $c ) {
             $cid = (int) ( $c['entry']['contact_id'] ?? 0 );
             if ( $c['inactive'] ) {
                 $inactive[] = $c;
-            } elseif ( $cid > 0 && isset( $covered[ $cid ] ) && $c['category'] !== null ) {
+            } elseif ( $cid > 0 && ( isset( $covered[ $cid ] ) || isset( $paidYear[ $cid ] ) ) && $c['category'] !== null ) {
                 $paid[] = $c;
             } elseif ( $c['category'] === null ) {
                 $noCat[] = $c;
@@ -144,9 +150,14 @@ class MyNJILGA_Pricing_Engine {
             $members[] = $m;
         }
         foreach ( $paid as $c ) {
-            $m               = self::base_member( $c );
-            $m['dues_note']  = (string) $covered[ (int) $c['entry']['contact_id'] ];
-            self::apply_assessment( $m, $c['tags'], $assessment );
+            $cid = (int) $c['entry']['contact_id'];
+            $m   = self::base_member( $c );
+            if ( isset( $covered[ $cid ] ) ) {
+                $m['dues_note'] = (string) $covered[ $cid ];
+                self::apply_assessment( $m, $c['tags'], $assessment );
+            } else {
+                $m['dues_note'] = (string) $paidYear[ $cid ];
+            }
             $members[] = $m;
         }
         foreach ( $noCat as $c ) {

@@ -15,7 +15,8 @@
  * Only firms that never paid are touched: paid rows are excluded by the
  * query, and a contact who appears on BOTH an unpaid row and a paid row
  * for the same year (possible under individual billing) is protected —
- * they're skipped, since someone's payment did cover them.
+ * they're skipped, since someone's payment did cover them. So is anyone
+ * already tagged "Dues Paid {year}".
  */
 class MyNJILGA_Downgrade_Sweep {
 
@@ -126,13 +127,15 @@ class MyNJILGA_Downgrade_Sweep {
     }
 
     /**
-     * Contacts covered by a PAID dues/combined invoice for the year —
-     * never downgraded even if they also appear on an unpaid row.
+     * Contacts covered by a PAID dues/combined invoice for the year, or
+     * carrying the year's "Dues Paid {year}" tag (paid outside Stripe and
+     * listed at $0 on their firm's invoice) — never downgraded even if
+     * they also appear on an unpaid row.
      *
      * @return array<int,true>
      */
     private static function protected_contact_ids( int $duesYear, bool $livemode ): array {
-        $ids = [];
+        $ids = array_fill_keys( array_keys( MyNJILGA_Dues_Preview::year_paid_contacts( $duesYear ) ), true );
         foreach ( MyNJILGA_Dues_Invoice_Table::get_by_year( $duesYear, [ MyNJILGA_Dues_Invoice_Table::STATUS_PAID ], $livemode ) as $row ) {
             if ( ! MyNJILGA_Dues_Snapshot::settles_dues( $row ) ) {
                 continue;
