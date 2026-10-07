@@ -180,13 +180,14 @@ class MyNJILGA_Page_Invoicing {
     }
 
     private static function render_year_form( int $duesYear ): void {
-        $years   = MyNJILGA_Dues_Invoice_Table::years();
-        if ( empty( $years ) ) {
-            $years = [ $duesYear ];
-        }
-        if ( ! in_array( $duesYear, $years, true ) ) {
-            array_unshift( $years, $duesYear );
-        }
+        // Years with rows, plus the selected one, next year (the default)
+        // and this year — so a late batch for the current year (a "last
+        // call" to firms that haven't renewed) can be generated too.
+        $years = array_merge(
+            MyNJILGA_Dues_Invoice_Table::years(),
+            [ $duesYear, MyNJILGA_Invoicing::default_dues_year(), MyNJILGA_Invoicing::current_dues_year() ]
+        );
+        $years = array_values( array_unique( array_map( 'intval', $years ) ) );
         sort( $years );
 
         $options = '';
