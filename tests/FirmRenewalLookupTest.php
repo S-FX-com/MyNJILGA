@@ -267,6 +267,45 @@ class FirmRenewalLookupTest extends NJILGA_TestCase {
         $this->assertTrue( $short < $day, 'a burst is limited harder than a day\'s use' );
     }
 
+    public function testSuggestionsAreLimitedApartFromSearchesAndMoreGenerously(): void {
+        [ $short ] = MyNJILGA_Firm_Renewal_Lookup::LIMIT_SUGGEST_SHORT;
+        [ $day ]   = MyNJILGA_Firm_Renewal_Lookup::LIMIT_SUGGEST_DAY;
+
+        $this->assertTrue( MyNJILGA_Firm_Renewal_Lookup::limits_allow( $short - 1, $day - 1, 'suggest' ) );
+        $this->assertFalse( MyNJILGA_Firm_Renewal_Lookup::limits_allow( $short, 0, 'suggest' ), 'the short window is spent' );
+        $this->assertFalse( MyNJILGA_Firm_Renewal_Lookup::limits_allow( 0, $day, 'suggest' ), 'the daily window is spent' );
+        $this->assertTrue( $short > MyNJILGA_Firm_Renewal_Lookup::LIMIT_SHORT[0], 'typing a name takes several requests, so suggestions get more room' );
+        $this->assertFalse( MyNJILGA_Firm_Renewal_Lookup::limits_allow( $short - 1, 0 ), '...but the roomier limit never applies to searches' );
+        $this->assertSame( [ MyNJILGA_Firm_Renewal_Lookup::LIMIT_SHORT, MyNJILGA_Firm_Renewal_Lookup::LIMIT_DAY ], MyNJILGA_Firm_Renewal_Lookup::limits_for( 'search' ) );
+    }
+
+    // -------------------------------------------------------------------
+    // Suggestions as you type
+    // -------------------------------------------------------------------
+
+    public function testASuggestionIsOnlyTheNamesASearchWouldList(): void {
+        $names = MyNJILGA_Firm_Renewal_Lookup::suggest( $this->rows(), 'smith' );
+        $this->assertSame( [ 'Smith & Jones, LLP', 'Smithson Law Offices' ], $names, 'the same firms, in the same order, and nothing but the name' );
+        $this->assertSame( $names, array_column( MyNJILGA_Firm_Renewal_Lookup::select( $this->rows(), 'smith' )['firms'], 'name' ) );
+    }
+
+    public function testASuggestionObeysEveryGateTheSearchDoes(): void {
+        $rows = $this->rows();
+        $this->assertSame( [], MyNJILGA_Firm_Renewal_Lookup::suggest( $rows, 'sm' ), 'two letters: nothing, so the firms cannot be paged through' );
+        $this->assertSame( [], MyNJILGA_Firm_Renewal_Lookup::suggest( [ $this->row( 1, 10, 'Smith & Jones, LLP', [ 'status' => 'paid' ] ) ], 'smith' ), 'a paid firm is not suggested' );
+        $this->assertSame( [], MyNJILGA_Firm_Renewal_Lookup::suggest( $rows, 'smith', true, 'stranger@elsewhere.test' ), 'verify mode: a stranger sees no names' );
+        $this->assertSame( [], MyNJILGA_Firm_Renewal_Lookup::suggest( $rows, 'smith', true, '' ), 'verify mode: no email, no names' );
+        $this->assertSame( [ 'Smith & Jones, LLP', 'Smithson Law Offices' ], MyNJILGA_Firm_Renewal_Lookup::suggest( $rows, 'smith', true, 'edwina@private.test' ), 'verify mode: a member sees their firms' );
+    }
+
+    public function testSuggestionsAreCappedLikeSearches(): void {
+        $rows = [];
+        for ( $i = 1; $i <= 12; $i++ ) {
+            $rows[] = $this->row( $i, 100 + $i, 'Smith Office ' . $i );
+        }
+        $this->assertCount( MyNJILGA_Firm_Renewal_Lookup::MAX_FIRMS, MyNJILGA_Firm_Renewal_Lookup::suggest( $rows, 'smith' ) );
+    }
+
     public function testTheShortcodeNameIsStable(): void {
         $this->assertSame( 'njilga_firm_renewal_lookup', MyNJILGA_Firm_Renewal_Lookup::SHORTCODE );
     }

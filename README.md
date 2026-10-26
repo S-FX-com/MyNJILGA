@@ -405,7 +405,7 @@ Headings are matched loosely (`Invoice #`, `Invoice No`, `Invoice Number`) and e
 
 ## Firm renewal lookup
 
-`[njilga_firm_renewal_lookup]` — for the person who **didn't see the invoice email**. Anyone, signed in or not, can search for a firm by name; every firm with an **open** invoice that matches is listed with a **Pay now** button. Put it on a public page (e.g. *Pay your dues*).
+`[njilga_firm_renewal_lookup]` — for the person who **didn't see the invoice email**. Anyone, signed in or not, can search for a firm by name; matching firm names are suggested as they type (pick one and the search runs), and every firm with an **open** invoice that matches is listed with a **Pay now** button. Put it on a public page (e.g. *Pay your dues*).
 
 ```
 [njilga_firm_renewal_lookup]

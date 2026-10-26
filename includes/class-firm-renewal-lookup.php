@@ -32,6 +32,10 @@
  *     means.
  *   • A search needs at least three letters, returns at most eight firms,
  *     and is rate-limited per visitor (a short and a daily window).
+ *   • As the visitor types, matching firm NAMES are suggested under the
+ *     box (admin-ajax, same gates: three letters, open invoice only, the
+ *     email in verify mode, its own per-visitor limit). A suggestion is
+ *     only a name — picking it submits the ordinary search.
  *   • Searches are POSTs: never cached by a page cache, and the firm name
  *     never lands in a URL or an access log.
  *   • verify="email" tightens it further: a firm — and so its Stripe
@@ -61,8 +65,20 @@ class MyNJILGA_Firm_Renewal_Lookup {
     const LIMIT_SHORT = [ 10, 600 ];
     const LIMIT_DAY   = [ 60, 86400 ];
 
+    /**
+     * Suggestions-as-you-type: the admin-ajax action, and its own, roomier
+     * limits — typing one firm name costs a handful of requests, so the
+     * search limits above would run out mid-word.
+     */
+    const AJAX_SUGGEST  = 'njilga_firm_suggest';
+    const NONCE_SUGGEST = 'njilga_firm_suggest';
+    const LIMIT_SUGGEST_SHORT = [ 40, 600 ];
+    const LIMIT_SUGGEST_DAY   = [ 300, 86400 ];
+
     public static function register(): void {
         add_shortcode( self::SHORTCODE, [ __CLASS__, 'render' ] );
+        add_action( 'wp_ajax_' . self::AJAX_SUGGEST, [ __CLASS__, 'ajax_suggest' ] );
+        add_action( 'wp_ajax_nopriv_' . self::AJAX_SUGGEST, [ __CLASS__, 'ajax_suggest' ] );
     }
 
     // -------------------------------------------------------------------------
@@ -122,9 +138,12 @@ class MyNJILGA_Firm_Renewal_Lookup {
     }
 
     private static function form( string $query, string $email, bool $verifyEmail ): void {
-        printf( '<form class="njilga-renew__form" method="post" action="%s" role="search">', esc_url( self::page_url() . '#njilga-renew-results' ) );
+        printf( '<form class="njilga-renew__form" id="njilga-renew-form" method="post" action="%s" role="search">', esc_url( self::page_url() . '#njilga-renew-results' ) );
+        // autocomplete="off": the browser's own address-book suggestions would
+        // cover the firm list. role=combobox + the listbox below are what
+        // the typeahead script drives; without JS it is a plain text box.
         printf(
-            '<div class="njilga-renew__field"><label for="njilga-renew-q">Firm name</label><input type="text" id="njilga-renew-q" name="%s" value="%s" maxlength="100" autocomplete="organization" placeholder="e.g. Smith &amp; Jones" required></div>',
+            '<div class="njilga-renew__field njilga-renew__field--firm"><label for="njilga-renew-q">Firm name</label><input type="text" id="njilga-renew-q" name="%s" value="%s" maxlength="100" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="njilga-renew-suggest" placeholder="Start typing your firm\'s name&hellip;" required><ul class="njilga-renew__suggest" id="njilga-renew-suggest" role="listbox" aria-label="Matching firms"></ul></div>',
             esc_attr( self::FIELD_QUERY ),
             esc_attr( $query )
         );
@@ -141,6 +160,48 @@ class MyNJILGA_Firm_Renewal_Lookup {
             esc_attr( self::FIELD_TRAP )
         );
         echo '<button type="submit" class="njilga-renew__go">Find my invoice</button></form>';
+        self::typeahead_script( $verifyEmail );
+    }
+
+    /**
+     * Suggestions as you type. After a short pause in typing, the firm
+     * names that the search WOULD find are listed under the box; picking
+     * one fills it in and submits the form, so the result is exactly the
+     * page a typed search gives. Everything is still gated server-side
+     * (ajax_suggest()); this only asks, and shows what comes back.
+     */
+    private static function typeahead_script( bool $verifyEmail ): void {
+        $cfg = [
+            'url'    => admin_url( 'admin-ajax.php' ),
+            'action' => self::AJAX_SUGGEST,
+            'nonce'  => wp_create_nonce( self::nonce_action( $verifyEmail ) ),
+            'min'    => self::MIN_QUERY,
+            'verify' => $verifyEmail,
+        ];
+        echo '<script>(function(){'
+            . 'var cfg=' . wp_json_encode( $cfg ) . ';'
+            . 'var form=document.getElementById("njilga-renew-form"),input=document.getElementById("njilga-renew-q"),list=document.getElementById("njilga-renew-suggest"),email=document.getElementById("njilga-renew-email");'
+            . 'if(!form||!input||!list||!window.fetch||!window.URLSearchParams)return;'
+            . 'var timer=null,seq=0,items=[],active=-1;'
+            . 'function close(){list.style.display="none";list.innerHTML="";input.setAttribute("aria-expanded","false");input.removeAttribute("aria-activedescendant");items=[];active=-1;}'
+            . 'function pick(name){input.value=name;close();if(form.requestSubmit){form.requestSubmit();}else{form.submit();}}'
+            . 'function mark(){var lis=list.children;for(var i=0;i<lis.length;i++){lis[i].setAttribute("aria-selected",i===active?"true":"false");}if(active>=0){input.setAttribute("aria-activedescendant",lis[active].id);lis[active].scrollIntoView({block:"nearest"});}else{input.removeAttribute("aria-activedescendant");}}'
+            . 'function render(names){close();if(!names.length)return;items=names;names.forEach(function(n,i){var li=document.createElement("li");li.id="njilga-renew-opt-"+i;li.setAttribute("role","option");li.setAttribute("aria-selected","false");li.textContent=n;li.addEventListener("mousedown",function(e){e.preventDefault();pick(n);});list.appendChild(li);});list.style.display="block";input.setAttribute("aria-expanded","true");}'
+            . 'function ready(){if(!cfg.verify)return true;var v=email?email.value.trim():"";return v.indexOf("@")>0&&v.indexOf(".",v.indexOf("@"))>0;}'
+            . 'function ask(){var q=input.value.trim();if(q.length<cfg.min||!ready()){close();return;}'
+            . 'var mine=++seq,body=new URLSearchParams({action:cfg.action,q:q,_nonce:cfg.nonce});if(cfg.verify){body.set("email",email.value.trim());}'
+            . 'fetch(cfg.url,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body.toString()}).then(function(r){return r.json();}).then(function(res){if(mine!==seq)return;var d=(res&&res.success&&Array.isArray(res.data))?res.data:[];render(d.filter(function(n){return typeof n==="string";}));}).catch(function(){if(mine===seq)close();});}'
+            . 'function schedule(){clearTimeout(timer);timer=setTimeout(ask,250);}'
+            . 'input.addEventListener("input",schedule);'
+            . 'if(email){email.addEventListener("input",schedule);}'
+            . 'input.addEventListener("keydown",function(e){if(list.style.display!=="block")return;'
+            . 'if(e.key==="ArrowDown"){e.preventDefault();active=Math.min(active+1,items.length-1);mark();}'
+            . 'else if(e.key==="ArrowUp"){e.preventDefault();active=Math.max(active-1,-1);mark();}'
+            . 'else if(e.key==="Enter"){if(active>=0){e.preventDefault();pick(items[active]);}else{close();}}'
+            . 'else if(e.key==="Escape"){e.preventDefault();close();}});'
+            . 'input.addEventListener("blur",function(){setTimeout(close,150);});'
+            . 'document.addEventListener("click",function(e){if(!form.contains(e.target))close();});'
+            . '})();</script>';
     }
 
     /**
@@ -201,8 +262,65 @@ class MyNJILGA_Firm_Renewal_Lookup {
     }
 
     // -------------------------------------------------------------------------
+    // AJAX — suggestions as you type
+    // -------------------------------------------------------------------------
+
+    /**
+     * The nonce action carries the page's verify mode, so the endpoint
+     * learns the mode from which nonce checks out — never from a request
+     * field a visitor could flip to skip the email gate.
+     */
+    private static function nonce_action( bool $verifyEmail ): string {
+        return self::NONCE_SUGGEST . ( $verifyEmail ? ':email' : ':none' );
+    }
+
+    /**
+     * Firm names for the typeahead: the same firms, under the same gates,
+     * that a typed search would list — and nothing about them but the
+     * name. Any refusal (bad nonce, short query, missing email, over the
+     * limit) is an empty list: the box then simply offers no suggestions
+     * and the visitor can still submit the form.
+     */
+    public static function ajax_suggest(): void {
+        $nonce = isset( $_POST['_nonce'] ) ? (string) wp_unslash( $_POST['_nonce'] ) : ''; // phpcs:ignore WordPress.Security.NonceVerification -- verified just below.
+        if ( wp_verify_nonce( $nonce, self::nonce_action( true ) ) ) {
+            $verifyEmail = true;
+        } elseif ( wp_verify_nonce( $nonce, self::nonce_action( false ) ) ) {
+            $verifyEmail = false;
+        } else {
+            wp_send_json_error( 'bad nonce', 403 );
+        }
+
+        $query = isset( $_POST['q'] ) ? self::clean( wp_unslash( (string) $_POST['q'] ), 100 ) : '';
+        $email = ( $verifyEmail && isset( $_POST['email'] ) ) ? strtolower( self::clean( wp_unslash( (string) $_POST['email'] ), 190 ) ) : '';
+        if ( ! self::query_ok( $query ) || ( $verifyEmail && ! is_email( $email ) ) ) {
+            wp_send_json_success( [] );
+        }
+        if ( ! self::within_limits( MyNJILGA_Join_Form::client_ip(), 'suggest' ) ) {
+            wp_send_json_success( [] );
+        }
+        $rows = MyNJILGA_Dues_Invoice_Table::get_open_issued( true );
+        wp_send_json_success( self::suggest( $rows, $query, $verifyEmail, $email ) );
+    }
+
+    // -------------------------------------------------------------------------
     // PURE — what a search finds
     // -------------------------------------------------------------------------
+
+    /**
+     * The firm names a typeahead may offer for a query: exactly the firms
+     * select() would list, in its order, and only their names.
+     *
+     * @param array<int,object> $rows njilga_dues_invoices rows (Live, issued, open).
+     * @return array<int,string>
+     */
+    public static function suggest( array $rows, string $query, bool $requireEmail = false, string $email = '' ): array {
+        $names = [];
+        foreach ( self::select( $rows, $query, $requireEmail, $email )['firms'] as $firm ) {
+            $names[] = (string) $firm['name'];
+        }
+        return $names;
+    }
 
     /**
      * Pick the firms a search should list from the open-invoice rows.
@@ -416,10 +534,23 @@ class MyNJILGA_Firm_Renewal_Lookup {
 
     /**
      * Whether a visitor with this many searches already used in the
-     * short and daily windows may search again.
+     * short and daily windows may search again. Searches and typeahead
+     * suggestions are counted apart, each against its own pair of limits.
+     *
+     * @param string $kind 'search' or 'suggest'.
      */
-    public static function limits_allow( int $shortUsed, int $dayUsed ): bool {
-        return $shortUsed < self::LIMIT_SHORT[0] && $dayUsed < self::LIMIT_DAY[0];
+    public static function limits_allow( int $shortUsed, int $dayUsed, string $kind = 'search' ): bool {
+        [ $short, $day ] = self::limits_for( $kind );
+        return $shortUsed < $short[0] && $dayUsed < $day[0];
+    }
+
+    /**
+     * @return array{0:array{0:int,1:int},1:array{0:int,1:int}} [ short, day ] as [ count, seconds ].
+     */
+    public static function limits_for( string $kind ): array {
+        return $kind === 'suggest'
+            ? [ self::LIMIT_SUGGEST_SHORT, self::LIMIT_SUGGEST_DAY ]
+            : [ self::LIMIT_SHORT, self::LIMIT_DAY ];
     }
 
     /**
@@ -471,24 +602,27 @@ class MyNJILGA_Firm_Renewal_Lookup {
      * leaves the limit open. A transient is only written for an allowed
      * search, so a blocked visitor's retries don't extend their own wait.
      */
-    private static function within_limits( string $ip ): bool {
+    private static function within_limits( string $ip, string $kind = 'search' ): bool {
         $bucket = self::ip_bucket( $ip );
+        [ $shortLimit, $dayLimit ] = self::limits_for( $kind );
+        $shortKey = ( $kind === 'suggest' ? 'sshort' : 'short' );
+        $dayKey   = ( $kind === 'suggest' ? 'sday' : 'day' );
 
         if ( function_exists( 'wp_using_ext_object_cache' ) && wp_using_ext_object_cache() ) {
-            $short = self::cache_bump( 'short', $bucket, self::LIMIT_SHORT[1] );
-            $day   = self::cache_bump( 'day', $bucket, self::LIMIT_DAY[1] );
+            $short = self::cache_bump( $shortKey, $bucket, $shortLimit[1] );
+            $day   = self::cache_bump( $dayKey, $bucket, $dayLimit[1] );
             if ( $short !== null && $day !== null ) {
-                return self::limits_allow( $short - 1, $day - 1 );
+                return self::limits_allow( $short - 1, $day - 1, $kind );
             }
         }
 
-        $short = (int) get_transient( self::key( 'short', $bucket ) );
-        $day   = (int) get_transient( self::key( 'day', $bucket ) );
-        if ( ! self::limits_allow( $short, $day ) ) {
+        $short = (int) get_transient( self::key( $shortKey, $bucket ) );
+        $day   = (int) get_transient( self::key( $dayKey, $bucket ) );
+        if ( ! self::limits_allow( $short, $day, $kind ) ) {
             return false;
         }
-        set_transient( self::key( 'short', $bucket ), $short + 1, self::LIMIT_SHORT[1] );
-        set_transient( self::key( 'day', $bucket ), $day + 1, self::LIMIT_DAY[1] );
+        set_transient( self::key( $shortKey, $bucket ), $short + 1, $shortLimit[1] );
+        set_transient( self::key( $dayKey, $bucket ), $day + 1, $dayLimit[1] );
         return true;
     }
 
@@ -537,6 +671,10 @@ class MyNJILGA_Firm_Renewal_Lookup {
             .njilga-renew__field input{width:100%;min-height:48px;padding:10px 14px;border:1px solid var(--nj-field);border-radius:var(--nj-radius-sm);font:inherit;font-size:16px;background:#fff;color:var(--nj-ink)}
             .njilga-renew__field input:focus{outline:2px solid var(--nj-blue);outline-offset:1px;border-color:var(--nj-blue)}
             .njilga-renew__hint{font-size:13px;color:var(--nj-muted)}
+            .njilga-renew__field--firm{position:relative}
+            .njilga-renew__suggest{position:absolute;left:0;right:0;top:100%;z-index:50;display:none;margin:4px 0 0;padding:6px 0;list-style:none;background:#fff;border:1px solid var(--nj-field);border-radius:var(--nj-radius-sm);box-shadow:0 12px 32px rgba(16,24,40,.14);max-height:280px;overflow:auto}
+            .njilga-renew__suggest li{margin:0;padding:11px 16px;cursor:pointer;color:var(--nj-ink);font-size:16px;line-height:1.4}
+            .njilga-renew__suggest li:hover,.njilga-renew__suggest li[aria-selected=true]{background:var(--nj-soft)}
             .njilga-renew__trap{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
             .njilga-renew__go,.njilga-renew__pay{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:10px 24px;border-radius:var(--nj-radius-sm);border:1px solid var(--nj-navy);background:var(--nj-navy);color:#fff!important;font-family:var(--nj-font-ui);font-size:15px;font-weight:600;text-decoration:none!important;cursor:pointer}
             .njilga-renew__go:hover,.njilga-renew__pay:hover{background:var(--nj-blue);border-color:var(--nj-blue)}
