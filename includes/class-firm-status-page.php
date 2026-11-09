@@ -29,6 +29,14 @@ class MyNJILGA_Firm_Status_Page {
             return '<div class="njilga-status"><p>Dues status is temporarily unavailable.</p></div>';
         }
 
+        // This page lists other people's names and fees and hands out payment
+        // links, so it must never be served from a page cache to someone
+        // else (the flag WP Super Cache, W3 Total Cache, WP Rocket,
+        // LiteSpeed and the like all honour) — My Membership does the same.
+        if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+            define( 'DONOTCACHEPAGE', true );
+        }
+
         $user    = wp_get_current_user();
         $contact = FluentCrmApi( 'contacts' )->getContactByUserRef( (int) $user->ID );
         if ( ! $contact && ! empty( $user->user_email ) ) {
@@ -69,9 +77,7 @@ class MyNJILGA_Firm_Status_Page {
         // its Pay button vanish from this page — silently halting
         // collection — because staff happen to have flipped the site
         // into Test mode to try something in the admin.
-        $rows = MyNJILGA_Dues_Invoice_Table::get_for_companies( $companyIds, true );
-        // Only real invoices — exceptions are staff-facing.
-        $rows = array_values( array_filter( $rows, static function ( $r ) { return $r->status !== MyNJILGA_Dues_Invoice_Table::STATUS_EXCLUDED; } ) );
+        $rows = self::visible_rows( MyNJILGA_Dues_Invoice_Table::get_for_companies( $companyIds, true ) );
 
         if ( empty( $rows ) ) {
             echo '<p>No dues invoices have been issued for your firm yet.</p></div>';
@@ -93,6 +99,29 @@ class MyNJILGA_Firm_Status_Page {
 
         echo '</div>';
         return (string) ob_get_clean();
+    }
+
+    /**
+     * PURE: the invoice rows a firm member may see.
+     *
+     * Not excluded rows (exceptions are staff-facing) and not DRAFTS: Generate
+     * Preview writes a draft for every firm, and a draft is an unreviewed
+     * estimate that staff re-price, regroup and delete. Showing it put a
+     * "2027 dues" card with an unchecked total and the whole roster in front
+     * of every logged-in member the moment a preview existed. My Membership
+     * has never shown drafts; neither does this page.
+     *
+     * @param array<int,object> $rows
+     * @return array<int,object>
+     */
+    public static function visible_rows( array $rows ): array {
+        $hidden = [
+            MyNJILGA_Dues_Invoice_Table::STATUS_EXCLUDED,
+            MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT,
+        ];
+        return array_values( array_filter( $rows, static function ( $r ) use ( $hidden ) {
+            return ! in_array( (string) $r->status, $hidden, true );
+        } ) );
     }
 
     private static function render_member_summary( $contact ): void {

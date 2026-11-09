@@ -206,14 +206,53 @@ class MyNJILGA_Stripe_Webhook {
         // Stripe expects a prompt 2xx and retries for up to 3 days
         // otherwise. Mirrors MyNJILGA_Invoice_Creator::schedule()'s
         // exact Action-Scheduler-else-inline fallback.
-        if ( function_exists( 'as_enqueue_async_action' ) ) {
-            as_enqueue_async_action( self::HOOK_PROCESS, [ 'event' => $event ], self::AS_GROUP );
-        } else {
-            self::process_event( $event );
-        }
+        self::dispatch(
+            $event,
+            function_exists( 'as_enqueue_async_action' )
+                ? static function ( array $e ) {
+                    return as_enqueue_async_action( self::HOOK_PROCESS, [ 'event' => $e ], self::AS_GROUP );
+                }
+                : null,
+            [ __CLASS__, 'process_event' ]
+        );
 
         // 9.
         return new WP_REST_Response( [ 'ok' => true ], 200 );
+    }
+
+    /**
+     * Hands a verified, already-recorded event to Action Scheduler — or, when
+     * that can't take it, processes it right here.
+     *
+     * The event row is in the table before this runs, and Stripe never
+     * resends an acknowledged delivery (a retry after a 5xx hits the
+     * duplicate gate and gets a 200), so an event that is neither queued
+     * nor processed is lost for good. Action Scheduler REFUSES an action
+     * whose JSON args exceed 8000 characters by throwing, and a full
+     * invoice.* event for a firm with several roster lines is larger than
+     * that — so an enqueue that throws, or returns no action id, falls
+     * back to inline processing instead of becoming an unhandled 500.
+     * process_event() isolates its own failures, so the fallback cannot
+     * turn into one either.
+     *
+     * @param array<string,mixed> $event
+     * @param callable|null       $enqueue fn( array $event ): int|string|false — the action id, or falsy when refused; null when Action Scheduler isn't available.
+     * @param callable            $inline  fn( array $event ): void
+     * @return string 'queued' or 'inline'
+     */
+    public static function dispatch( array $event, ?callable $enqueue, callable $inline ): string {
+        if ( $enqueue !== null ) {
+            try {
+                $actionId = $enqueue( $event );
+            } catch ( \Throwable $e ) {
+                $actionId = 0;
+            }
+            if ( $actionId ) {
+                return 'queued';
+            }
+        }
+        $inline( $event );
+        return 'inline';
     }
 
     // -------------------------------------------------------------------------

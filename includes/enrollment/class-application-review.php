@@ -85,10 +85,17 @@ class MyNJILGA_Application_Review {
             $outcome  = '';
             switch ( $policy ) {
                 case MyNJILGA_Dues_Settings::JOIN_INVOICE_NOW:
-                    $rowId = MyNJILGA_Dues_Preview::draft_individual_for_contact( $contactId, $companyId, $year );
-                    $outcome = $rowId
-                        ? sprintf( 'a draft %d invoice (#%d) is waiting in Invoicing', $year, $rowId )
-                        : sprintf( 'no %d invoice could be drafted (nothing billable, or an invoice for this member already exists)', $year );
+                    // The same year an online join would pay for: once next
+                    // year's invoices exist (or the Settings cutover has
+                    // passed) that is NEXT year. Billing the year that is
+                    // nearly over would charge full dues for a few weeks, and
+                    // leave the applicant off the firm's already-frozen
+                    // next-year invoice — expired on January 1st.
+                    $billYear = MyNJILGA_Join_Form::dues_year( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+                    $rowId    = MyNJILGA_Dues_Preview::draft_individual_for_contact( $contactId, $companyId, $billYear );
+                    $outcome  = $rowId
+                        ? sprintf( 'a draft %d invoice (#%d) is waiting in Invoicing', $billYear, $rowId )
+                        : sprintf( 'no %d invoice could be drafted (nothing billable, or an invoice for this member already exists)', $billYear );
                     break;
                 case MyNJILGA_Dues_Settings::JOIN_MANUAL:
                     $outcome = 'billing left to staff (manual policy)';

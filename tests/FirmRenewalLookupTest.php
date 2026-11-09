@@ -369,4 +369,33 @@ class FirmRenewalLookupTest extends NJILGA_TestCase {
             $this->assertTrue( mb_check_encoding( $n( $last ), 'UTF-8' ), "$last: the initial is valid UTF-8" );
         }
     }
+
+    // -------------------------------------------------------------------
+    // Accented firm names
+    // -------------------------------------------------------------------
+
+    /**
+     * "Muñoz & Muñoz LLP" used to reduce to "mu oz and mu oz", so the typed
+     * "Muñoz" was refused as two 2-letter words and the plain "Munoz"
+     * matched nothing: such a firm could not be found by name at all.
+     */
+    public function testAnAccentedFirmCanBeFoundBySpellingItEitherWay(): void {
+        foreach ( [ 'Muñoz & Muñoz LLP', 'Peña Law Group', 'Álvarez & Associés, P.C.' ] as $name ) {
+            $plain = strtr( $name, [ 'ñ' => 'n', 'Á' => 'A', 'é' => 'e' ] );
+            foreach ( [ $name, $plain ] as $typed ) {
+                $word = explode( ' ', $typed )[0];
+                $this->assertTrue( MyNJILGA_Firm_Renewal_Lookup::query_ok( $word ), "'$word' is a usable search" );
+                $this->assertTrue(
+                    MyNJILGA_Firm_Renewal_Lookup::name_matches( $name, MyNJILGA_Firm_Renewal_Lookup::tokens( $word ) ),
+                    "'$word' finds '$name'"
+                );
+            }
+        }
+    }
+
+    public function testAccentFoldingDoesNotMergeDifferentFirms(): void {
+        $this->assertFalse( MyNJILGA_Firm_Renewal_Lookup::name_matches( 'Muñoz & Muñoz LLP', MyNJILGA_Firm_Renewal_Lookup::tokens( 'Smith' ) ) );
+        $this->assertSame( 'munoz and munoz', MyNJILGA_Firm_Renewal_Lookup::match_key( 'Muñoz &amp; Muñoz LLP' ) );
+        $this->assertSame( 'smith and jones', MyNJILGA_Firm_Renewal_Lookup::match_key( 'Smith & Jones, LLP' ) );
+    }
 }

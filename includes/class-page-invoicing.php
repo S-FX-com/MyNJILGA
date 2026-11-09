@@ -695,7 +695,10 @@ class MyNJILGA_Page_Invoicing {
                 if ( $hasError ) {
                     return self::verdict( 'attention', 'error', [ 'Error', 'destructive' ], [ (string) $row->last_error, false ], true );
                 }
-                if ( $status === $T::STATUS_APPROVED && ! empty( $row->queued_at ) ) {
+                // Only while a job can still plausibly have it: a chunk that was
+                // killed leaves queued_at set for good, and the row must come
+                // back as Ready (selectable) rather than "Creating…" forever.
+                if ( $status === $T::STATUS_APPROVED && MyNJILGA_Invoice_Creator::is_actively_queued( (string) ( $row->queued_at ?? '' ), current_time( 'mysql' ) ) ) {
                     return self::verdict( 'ready', 'creating', [ 'Creating…', 'info' ], [ 'Complete', true ], false );
                 }
                 return self::verdict( 'ready', 'ready', [ 'Ready', 'success' ], [ 'Complete', true ], true );
