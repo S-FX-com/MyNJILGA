@@ -78,6 +78,17 @@ class ReconcilerScheduleTest extends NJILGA_TestCase {
         $this->assertFalse( MyNJILGA_Stripe_Reconciler::ensure_scheduled() );
     }
 
+    /** fetch_invoice()'s shape for an invoice Stripe has as paid: amount_due stays at the full amount, amount_remaining is 0. */
+    private function paidInvoice( int $total ): array {
+        return [
+            'stripe_status'          => 'paid',
+            'amount_due_cents'       => $total,
+            'amount_paid_cents'      => $total,
+            'amount_remaining_cents' => 0,
+            'total_cents'            => $total,
+        ];
+    }
+
     /**
      * A payment the webhook missed, settled by the reconciler, must leave the
      * row carrying the same money columns the webhook would have written — a
@@ -87,13 +98,31 @@ class ReconcilerScheduleTest extends NJILGA_TestCase {
     public function testMissedPaymentRowCarriesTheSameMoneyColumnsAsTheWebhook(): void {
         $this->assertSame(
             [ 'amount_paid_cents' => 37500, 'amount_due_cents' => 0, 'stripe_status' => 'paid', 'primary_method' => 'card' ],
-            MyNJILGA_Stripe_Reconciler::settled_row_fields( 'paid', 37500, 0, 'card' )
+            MyNJILGA_Stripe_Reconciler::settled_row_fields( $this->paidInvoice( 37500 ), 'card' )
         );
+    }
+
+    /**
+     * The trap: Stripe's amount_due is still the FULL amount on a paid
+     * invoice. The balance owed is amount_remaining (what the webhook
+     * writes), so the row must read $0 due — not the invoice total.
+     */
+    public function testBalanceOwedComesFromAmountRemainingNotAmountDue(): void {
+        $fields = MyNJILGA_Stripe_Reconciler::settled_row_fields( $this->paidInvoice( 12500 ), 'card' );
+        $this->assertSame( 0, $fields['amount_due_cents'], 'a paid invoice owes nothing' );
+        $this->assertSame( 12500, $fields['amount_paid_cents'] );
+    }
+
+    /** A gateway that doesn't supply amount_remaining: a paid invoice still owes nothing. */
+    public function testMissingRemainingFigureMeansNothingOwed(): void {
+        $fetched = $this->paidInvoice( 12500 );
+        unset( $fetched['amount_remaining_cents'] );
+        $this->assertSame( 0, MyNJILGA_Stripe_Reconciler::settled_row_fields( $fetched, 'card' )['amount_due_cents'] );
     }
 
     /** An unknown method is left out rather than blanking the one already on the row. */
     public function testUnknownMethodIsNotBlanked(): void {
-        $fields = MyNJILGA_Stripe_Reconciler::settled_row_fields( 'paid', 20000, 0, '' );
+        $fields = MyNJILGA_Stripe_Reconciler::settled_row_fields( $this->paidInvoice( 20000 ), '' );
         $this->assertFalse( array_key_exists( 'primary_method', $fields ) );
         $this->assertSame( 20000, $fields['amount_paid_cents'] );
     }

@@ -151,16 +151,24 @@ class MyNJILGA_Stripe_Reconciler {
 
     /**
      * PURE: the money columns a row carries once Stripe has it as paid —
-     * the same four the invoice.paid webhook writes. primary_method is left
-     * out when unknown rather than blanked.
+     * the same four the invoice.paid webhook writes, from the same Stripe
+     * fields. primary_method is left out when unknown rather than blanked.
      *
+     * The balance still owed is Stripe's amount_REMAINING, never
+     * amount_due: amount_due stays at the invoice's full amount after it is
+     * paid (fetch_invoice() exposes it as amount_due_cents), so writing it
+     * would leave a paid invoice carrying its whole balance as outstanding.
+     * An invoice Stripe reports as paid has nothing remaining, which is also
+     * the answer when a swapped-in gateway doesn't supply the figure.
+     *
+     * @param array<string,mixed> $fetched fetch_invoice()'s result.
      * @return array<string,mixed>
      */
-    public static function settled_row_fields( string $stripeStatus, int $amountPaidCents, int $amountDueCents, string $method ): array {
+    public static function settled_row_fields( array $fetched, string $method ): array {
         $fields = [
-            'amount_paid_cents' => $amountPaidCents,
-            'amount_due_cents'  => $amountDueCents,
-            'stripe_status'     => $stripeStatus,
+            'amount_paid_cents' => (int) ( $fetched['amount_paid_cents'] ?? 0 ),
+            'amount_due_cents'  => (int) ( $fetched['amount_remaining_cents'] ?? 0 ),
+            'stripe_status'     => (string) ( $fetched['stripe_status'] ?? '' ),
         ];
         if ( $method !== '' ) {
             $fields['primary_method'] = $method;
@@ -277,7 +285,7 @@ class MyNJILGA_Stripe_Reconciler {
             // Dashboard will say about this invoice forever. Without it the
             // row read "paid" with $0 paid and the full amount still due,
             // overstating Outstanding and understating Collected.
-            MyNJILGA_Dues_Invoice_Table::update_gateway_fields( $rowId, self::settled_row_fields( $stripeStatus, $stripeAmtPaid, $stripeAmtDue, $settledMethod ) );
+            MyNJILGA_Dues_Invoice_Table::update_gateway_fields( $rowId, self::settled_row_fields( $fetched, $settledMethod ) );
 
             return [ 'updated' => true, 'needs_attention' => false, 'note' => sprintf( '%s: found a missed payment — settled.', $name ) ];
         }
