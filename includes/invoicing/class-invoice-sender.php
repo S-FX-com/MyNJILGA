@@ -10,9 +10,15 @@
 class MyNJILGA_Invoice_Sender {
 
     /**
-     * @return array{ok:bool, error?:string}
+     * Build the email for an invoice row WITHOUT sending it: who it goes to,
+     * the subject, the body and the headers (CC / Reply-To per Settings) — or
+     * why it can't be built. send_for_row() sends exactly this, and the Launch
+     * Wizard shows and samples exactly this, so what is previewed is what goes
+     * out.
+     *
+     * @return array{ok:bool,error?:string,to?:string,subject?:string,body?:string,headers?:array<int,string>,bill_to?:array<string,mixed>,dues_year?:int,assessment?:bool,total?:string}
      */
-    public static function send_for_row( object $invoiceRow ): array {
+    public static function compose( object $invoiceRow ): array {
         if ( empty( $invoiceRow->hosted_invoice_url ) ) {
             return [ 'ok' => false, 'error' => 'No order on this row yet — create the invoice first.' ];
         }
@@ -71,10 +77,30 @@ class MyNJILGA_Invoice_Sender {
         $subject = $isAssess
             ? sprintf( '%d NJILGA %s Invoice', $duesYear, (string) ( $members[0]['assessment_label'] ?? 'Assessment' ) )
             : sprintf( '%d NJILGA Membership Dues Invoice%s', $duesYear, $firm !== '' ? ' — ' . $firm : '' );
-        $body    = implode( "\n\n", $blocks );
-        $headers = self::headers( $billTo['email'], $members );
 
-        if ( ! wp_mail( $billTo['email'], $subject, $body, $headers ) ) {
+        return [
+            'ok'         => true,
+            'to'         => (string) $billTo['email'],
+            'subject'    => $subject,
+            'body'       => implode( "\n\n", $blocks ),
+            'headers'    => self::headers( $billTo['email'], $members ),
+            'bill_to'    => $billTo,
+            'dues_year'  => $duesYear,
+            'assessment' => $isAssess,
+            'total'      => $total,
+        ];
+    }
+
+    /**
+     * @return array{ok:bool, error?:string}
+     */
+    public static function send_for_row( object $invoiceRow ): array {
+        $m = self::compose( $invoiceRow );
+        if ( empty( $m['ok'] ) ) {
+            return [ 'ok' => false, 'error' => (string) $m['error'] ];
+        }
+
+        if ( ! wp_mail( $m['to'], $m['subject'], $m['body'], $m['headers'] ) ) {
             return [ 'ok' => false, 'error' => "wp_mail() failed — check the site's mail configuration." ];
         }
 
@@ -82,22 +108,23 @@ class MyNJILGA_Invoice_Sender {
         MyNJILGA_Dues_Invoice_Table::clear_error( (int) $invoiceRow->id );
 
         $ccCount = 0;
-        foreach ( $headers as $h ) {
+        foreach ( $m['headers'] as $h ) {
             if ( stripos( $h, 'Cc:' ) === 0 ) {
                 $ccCount = count( array_filter( explode( ',', substr( $h, 3 ) ) ) );
             }
         }
+        $billTo = $m['bill_to'];
         MyNJILGA_Invoicing_Notes::log(
             (int) $invoiceRow->fluentcrm_company_id,
             'Dues invoice sent',
             sprintf(
                 '%d %s invoice sent to %s (%s)%s — total %s.',
-                $duesYear,
-                $isAssess ? 'assessment' : 'dues',
+                (int) $m['dues_year'],
+                $m['assessment'] ? 'assessment' : 'dues',
                 $billTo['name'],
                 $billTo['email'],
                 $ccCount > 0 ? sprintf( ' with %d CC', $ccCount ) : '',
-                $total
+                $m['total']
             )
         );
 

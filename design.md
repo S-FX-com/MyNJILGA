@@ -371,6 +371,23 @@ nothing; the confirm is `action_form()` with a `confirm()` text; the result
 comes back as a `callout()` after a redirect. Lay a form's inline controls out
 with `njilga-inline-fields` (each a `njilga-field`).
 
+### Wizard stepper
+
+A multi-step flow (the Launch Wizard) is a row of `njilga-steps` links — one
+`njilga-step` per step, each holding an `njilga-step-num` badge and an
+`njilga-step-body` (`njilga-step-title` plus an optional `pill()` for that
+step's state). `is-current` outlines the step you are on; `is-done` turns its
+number green. Steps are plain GET links, never JavaScript, so a step is a URL
+that can be bookmarked and resumed; every state change is an `action_form()`
+or a `njilga-` form posting to `admin-post.php`. The stepper is five columns
+on desktop and two below 1100px.
+
+A checklist is a boxed `njilga-table` whose rows are a `pill()` (OK / Check /
+Fix / Confirm), a `njilga-check-title` with an optional `njilga-check-detail`
+beneath it, and a fix link. A literal message (an email) is shown in
+`njilga-emailsample` with its headers in `njilga-emailmeta`; a short activity
+log is a `njilga-timeline` list.
+
 ---
 
 ## 4. The Invoicing workspace
