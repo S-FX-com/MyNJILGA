@@ -340,6 +340,16 @@ class LaunchChecksTest extends NJILGA_TestCase {
         $this->assertFalse( in_array( 'nothing_ready', $ids, true ) );
     }
 
+    public function testTheChecklistSaysWhetherTheEmailWordingIsCustom(): void {
+        $by = $this->byId( $this->goodFacts( [ 'email_custom' => true ] ) );
+        $this->assertSame( 'info', $by['wording']['status'] );
+        $this->assertSame( 'The invoice email uses your own wording', $by['wording']['title'] );
+        $by = $this->byId( $this->goodFacts( [ 'email_custom' => false ] ) );
+        $this->assertSame( 'The invoice email uses the standard wording', $by['wording']['title'] );
+        $this->assertFalse( isset( $this->byId( $this->goodFacts( [ 'email_custom' => null ] ) )['wording'] ), 'unknown is not claimed either way' );
+        $this->assertFalse( isset( $this->byId( $this->goodFacts() )['wording'] ), 'a facts array without it (older callers) is fine' );
+    }
+
     public function testASuccessfulPreviewRaisesNoWarnings(): void {
         $rows   = [ $this->invoiceRow( 1, 'draft' ), $this->invoiceRow( 2, 'draft' ) ];
         $checks = MyNJILGA_Launch_Checks::review_checks( MyNJILGA_Launch_Checks::review( $rows ), 2027 );

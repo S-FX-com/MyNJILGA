@@ -16,11 +16,19 @@ class MyNJILGA_Invoice_Sender {
      * Wizard shows and samples exactly this, so what is previewed is what goes
      * out.
      *
-     * @return array{ok:bool,error?:string,to?:string,subject?:string,body?:string,headers?:array<int,string>,bill_to?:array<string,mixed>,dues_year?:int,assessment?:bool,total?:string}
+     * $preview = true builds the email for an invoice that has not been
+     * created yet, with a placeholder where the payment link will be (the
+     * Launch Wizard's preview and sample). Sending never uses it.
+     *
+     * @return array{ok:bool,error?:string,to?:string,subject?:string,body?:string,headers?:array<int,string>,bill_to?:array<string,mixed>,dues_year?:int,assessment?:bool,total?:string,placeholder?:bool}
      */
-    public static function compose( object $invoiceRow ): array {
+    public static function compose( object $invoiceRow, bool $preview = false ): array {
+        $placeholder = false;
         if ( empty( $invoiceRow->hosted_invoice_url ) ) {
-            return [ 'ok' => false, 'error' => 'No order on this row yet — create the invoice first.' ];
+            if ( ! $preview ) {
+                return [ 'ok' => false, 'error' => 'No order on this row yet — create the invoice first.' ];
+            }
+            $placeholder = true;
         }
 
         $snapshot = MyNJILGA_Dues_Snapshot::decode( $invoiceRow );
@@ -39,7 +47,7 @@ class MyNJILGA_Invoice_Sender {
             return [ 'ok' => false, 'error' => 'Bill-to contact not found or has no email on file.' ];
         }
 
-        $link = (string) ( $invoiceRow->hosted_invoice_url ?? '' );
+        $link = $placeholder ? MyNJILGA_Invoice_Email::PLACEHOLDER_LINK : (string) ( $invoiceRow->hosted_invoice_url ?? '' );
         if ( $link === '' ) {
             return [ 'ok' => false, 'error' => 'Could not build a payment link for this order.' ];
         }
@@ -53,41 +61,34 @@ class MyNJILGA_Invoice_Sender {
 
         $covers = MyNJILGA_Dues_Roster::email_summary( $members, $duesYear, $kind );
 
-        $blocks = [ sprintf( 'Hi %s,', $billTo['name'] ) ];
-        if ( $isAssess ) {
-            $blocks[] = sprintf( 'Your %d NJILGA %s invoice totals %s.', $duesYear, (string) ( $members[0]['assessment_label'] ?? 'assessment' ), $total );
-        } else {
-            $blocks[] = sprintf(
-                '%s %d NJILGA membership dues invoice totals %s.',
-                $firm !== '' ? $firm . "'s" : 'Your',
-                $duesYear,
-                $total
-            );
-        }
-        if ( $covers !== '' ) {
-            $blocks[] = $covers;
-        }
-        $blocks[] = 'Pay online here: ' . $link;
-        $remittanceAddress = trim( (string) MyNJILGA_Stripe_Connection::setting( 'remittance_address', '' ) );
-        if ( $remittanceAddress !== '' ) {
-            $blocks[] = 'Pay online at the link above, or mail a check to: ' . $remittanceAddress;
-        }
-        $blocks[] = "Thank you,\nNJILGA";
-
-        $subject = $isAssess
-            ? sprintf( '%d NJILGA %s Invoice', $duesYear, (string) ( $members[0]['assessment_label'] ?? 'Assessment' ) )
-            : sprintf( '%d NJILGA Membership Dues Invoice%s', $duesYear, $firm !== '' ? ' — ' . $firm : '' );
+        $tpl = MyNJILGA_Invoice_Email::settings();
+        $msg = MyNJILGA_Invoice_Email::build( [
+            'is_assessment'    => $isAssess,
+            'year'             => $duesYear,
+            'firm'             => $firm,
+            'total'            => $total,
+            'name'             => (string) $billTo['name'],
+            'first_name'       => (string) $billTo['first_name'],
+            'assessment_label' => (string) ( $members[0]['assessment_label'] ?? 'assessment' ),
+            'covers'           => $covers,
+            'link'             => $link,
+            'remittance'       => (string) MyNJILGA_Stripe_Connection::setting( 'remittance_address', '' ),
+            'subject_tpl'      => $tpl['subject'],
+            'intro_tpl'        => $tpl['intro'],
+            'closing_tpl'      => $tpl['closing'],
+        ] );
 
         return [
             'ok'         => true,
             'to'         => (string) $billTo['email'],
-            'subject'    => $subject,
-            'body'       => implode( "\n\n", $blocks ),
+            'subject'    => $msg['subject'],
+            'body'       => $msg['body'],
             'headers'    => self::headers( $billTo['email'], $members ),
             'bill_to'    => $billTo,
             'dues_year'  => $duesYear,
             'assessment' => $isAssess,
             'total'      => $total,
+            'placeholder' => $placeholder,
         ];
     }
 

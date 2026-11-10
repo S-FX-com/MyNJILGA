@@ -107,6 +107,25 @@ class MyNJILGA_Page_Settings {
                 'warning'
             );
         }
+        if ( ! empty( $_GET['email_tag_rejected'] ) ) {
+            $labels = [ 'subject' => 'subject', 'intro' => 'opening', 'closing' => 'sign-off' ];
+            $lines  = [];
+            foreach ( explode( ',', (string) wp_unslash( $_GET['email_tag_rejected'] ) ) as $pair ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+                $bits = explode( ':', $pair, 2 );
+                $f    = sanitize_key( (string) ( $bits[0] ?? '' ) );
+                if ( isset( $labels[ $f ], $bits[1] ) && sanitize_key( (string) $bits[1] ) !== '' ) {
+                    $lines[] = sprintf( 'the %s has <code>{%s}</code>', esc_html( $labels[ $f ] ), esc_html( sanitize_key( (string) $bits[1] ) ) );
+                }
+            }
+            MyNJILGA_Admin_UI::callout(
+                sprintf(
+                    '<strong>Invoice email wording not saved:</strong> %s, which isn&rsquo;t a merge tag — it would have been emailed to firms as literal text. The previous wording was kept; check the tag names (%s) and save again. The rest of your changes were saved.',
+                    implode( '; ', $lines ),
+                    implode( ', ', array_map( static function ( $t ) { return '<code>{' . esc_html( $t ) . '}</code>'; }, array_keys( MyNJILGA_Invoice_Email::TAGS ) ) )
+                ),
+                'warning'
+            );
+        }
         if ( isset( $_GET['role_sync'] ) ) {
             $n = (int) $_GET['role_sync'];
             MyNJILGA_Admin_UI::callout(
@@ -488,6 +507,22 @@ class MyNJILGA_Page_Settings {
         printf( '<div class="njilga-field"><label for="g-replyto">Reply-To</label><input type="email" id="g-replyto" name="general[send_reply_to]" value="%s" class="regular-text" placeholder="dues@njilga.org"></div>', esc_attr( (string) $g['send_reply_to'] ) );
         echo '</td></tr>';
 
+        // Invoice email wording.
+        echo '<tr><th scope="row">Invoice email wording</th><td>';
+        printf( '<div class="njilga-field"><label for="g-em-subject">Subject</label><input type="text" id="g-em-subject" name="general[email_subject]" value="%s" class="large-text" maxlength="%d" placeholder="%s"></div>', esc_attr( (string) $g['email_subject'] ), (int) MyNJILGA_Invoice_Email::MAX_SUBJECT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'subject' ) ) );
+        printf( '<div class="njilga-field"><label for="g-em-intro">Opening (the greeting and the sentence giving the total)</label><textarea id="g-em-intro" name="general[email_intro]" rows="4" class="large-text" maxlength="%d" placeholder="%s">%s</textarea></div>', (int) MyNJILGA_Invoice_Email::MAX_TEXT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'intro' ) ), esc_textarea( (string) $g['email_intro'] ) );
+        printf( '<div class="njilga-field"><label for="g-em-closing">Sign-off</label><textarea id="g-em-closing" name="general[email_closing]" rows="3" class="large-text" maxlength="%d" placeholder="%s">%s</textarea></div>', (int) MyNJILGA_Invoice_Email::MAX_TEXT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'closing' ) ), esc_textarea( (string) $g['email_closing'] ) );
+        printf(
+            '<p class="njilga-help">Leave a box blank to use the standard wording (shown greyed out). The list of who the invoice covers, the payment link and the mail-a-check address are always added for you, so they can\'t be edited away. Read exactly what a firm will get — and send yourself a sample — in <a href="%s">Launch Wizard → Send</a>.</p>',
+            esc_url( add_query_arg( [ 'page' => MyNJILGA_Admin_Menu::SLUG_LAUNCH, 'step' => 5 ], admin_url( 'admin.php' ) ) )
+        );
+        echo '<p class="njilga-help"><strong>Merge tags</strong> you can use in any of the three:</p><ul class="njilga-timeline">';
+        foreach ( MyNJILGA_Invoice_Email::TAGS as $tag => $what ) {
+            printf( '<li><code>{%s}</code> — %s</li>', esc_html( $tag ), esc_html( $what ) );
+        }
+        echo '</ul><p class="njilga-help">The same wording is used for every invoice email, including a separate assessment invoice if you bill assessments separately — use <code>{invoice}</code> to name which one it is.</p>';
+        echo '</td></tr>';
+
         // Downgrade.
         echo '<tr><th scope="row">Downgrade sweep</th><td>';
         printf( '<label class="njilga-check-label"><input type="checkbox" name="general[downgrade_remove_roles]" value="1"%s> <span>Remove WordPress membership roles (every role mapped below, now or before) from members of invoices that were never paid</span></label>', checked( ! empty( $g['downgrade_remove_roles'] ), true, false ) );
@@ -807,6 +842,20 @@ class MyNJILGA_Page_Settings {
         }
         $gen['application_success_text'] = sanitize_textarea_field( (string) ( $g['application_success_text'] ?? $defaults['general']['application_success_text'] ) );
         $gen['send_reply_to']            = sanitize_email( (string) ( $g['send_reply_to'] ?? '' ) );
+        // Invoice email wording: plain text; a merge tag we don't know (a typo) is refused, never emailed.
+        $emailRejected = [];
+        foreach ( MyNJILGA_Invoice_Email::FIELDS as $field => $key ) {
+            $clean = MyNJILGA_Invoice_Email::clean( $field, (string) ( $g[ $key ] ?? '' ) );
+            $bad   = MyNJILGA_Invoice_Email::unknown_tags( $clean );
+            if ( $bad ) {
+                foreach ( $bad as $tag ) {
+                    $emailRejected[] = $field . ':' . $tag;
+                }
+                $gen[ $key ] = (string) ( $current['general'][ $key ] ?? '' );
+            } else {
+                $gen[ $key ] = $clean;
+            }
+        }
         $gen['send_cc_mode']             = array_key_exists( (string) ( $g['send_cc_mode'] ?? '' ), MyNJILGA_Dues_Settings::cc_mode_labels() ) ? (string) $g['send_cc_mode'] : MyNJILGA_Dues_Settings::CC_OWNER_ONLY;
         $gen['mid_year_join_policy']     = array_key_exists( (string) ( $g['mid_year_join_policy'] ?? '' ), MyNJILGA_Dues_Settings::join_policy_labels() ) ? (string) $g['mid_year_join_policy'] : MyNJILGA_Dues_Settings::JOIN_FREE_UNTIL_NEXT_CYCLE;
         $gen['downgrade_remove_roles']   = ! empty( $g['downgrade_remove_roles'] );
@@ -964,6 +1013,9 @@ class MyNJILGA_Page_Settings {
         $args   = [ 'saved' => '1' ];
         if ( $screened['rejected'] ) {
             $args['member_tag_rejected'] = implode( ',', $screened['rejected'] );
+        }
+        if ( $emailRejected ) {
+            $args['email_tag_rejected'] = implode( ',', $emailRejected );
         }
         $queued = MyNJILGA_Role_Sync::after_settings_change( $current['categories'], $roleSignature );
         if ( $queued !== null ) {
