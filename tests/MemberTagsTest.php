@@ -140,4 +140,92 @@ class MemberTagsTest extends NJILGA_TestCase {
         $this->assertSame( [], $out['rejected'] );
         $this->assertSame( $cats, $out['categories'] );
     }
+
+    // ----- a category's OWN tag as its member tag -------------------------------
+
+    /** Every category's member tag is its own tag: "make sure it is on them after they pay". */
+    private function ownTags(): array {
+        return $this->categories( [
+            'past_president'        => 'past-president',
+            'senior_trustee'        => 'senior-trustee',
+            'law_student'           => 'law-student',
+            'emerging_professional' => 'emerging-professional',
+            'professional'          => 'professional',
+        ] );
+    }
+
+    private function protected_for( array $cats ): array {
+        return MyNJILGA_Member_Tags::reserved_slugs( $cats, $this->general(), $this->qualifiers() );
+    }
+
+    /**
+     * What was typed into Settings: each category's own tag in its own row.
+     * That is accepted — including the two that are also assessment
+     * qualifiers (senior-trustee, past-president) — because granting a
+     * category its OWN tag cannot change what anyone is charged.
+     */
+    public function testACategorysOwnTagIsAccepted(): void {
+        $cats = $this->ownTags();
+        $out  = MyNJILGA_Member_Tags::screen( $cats, $this->protected_for( $cats ) );
+        $this->assertSame( [], $out['rejected'] );
+        $this->assertSame( $cats, $out['categories'] );
+    }
+
+    /** ...but another category's tag is still refused, even when the row's own tag is fine elsewhere. */
+    public function testAnotherCategorysTagIsStillRefused(): void {
+        $cats = $this->ownTags();
+        $cats[2]['member_tag'] = 'professional';        // Law Student asking to hand out Professional
+        $cats[4]['member_tag'] = 'senior-trustee';      // Professional asking to hand out Senior Trustee (exempt + assessment!)
+        $out  = MyNJILGA_Member_Tags::screen( $cats, $this->protected_for( $cats ) );
+        $rejected = $out['rejected'];
+        sort( $rejected );
+        $this->assertSame( [ 'professional', 'senior-trustee' ], $rejected );
+        $byKey = array_column( $out['categories'], 'member_tag', 'key' );
+        $this->assertSame( '', $byKey['law_student'] );
+        $this->assertSame( '', $byKey['professional'] );
+        $this->assertSame( 'past-president', $byKey['past_president'], 'the rows that were fine are untouched' );
+    }
+
+    /** Granting the category's own tag adds it and takes NOTHING away. */
+    public function testOwnTagsAreAddedAndNeverSwappedAway(): void {
+        $cats = $this->ownTags();
+        // Holds Past President AND Professional: Past President (first in Order) decides.
+        $plan = MyNJILGA_Member_Tags::plan( $cats, [ 'past-president' ], 'professional', $this->protected_for( $cats ) );
+        $this->assertSame( 'past-president', $plan['add'] );
+        $this->assertSame( [], $plan['remove'], 'the other categories\' tags are pricing inputs, not ours to remove' );
+    }
+
+    /** An untagged contact billed under the default category gets that category's tag after paying. */
+    public function testAnUntaggedContactIsGivenTheDefaultCategorysTag(): void {
+        $cats = $this->ownTags();
+        $plan = MyNJILGA_Member_Tags::plan( $cats, [], 'professional', $this->protected_for( $cats ) );
+        $this->assertSame( 'professional', $plan['add'] );
+        $this->assertSame( [], $plan['remove'] );
+    }
+
+    /**
+     * The downgrade sweep: with own tags as member tags there is nothing it may
+     * remove. Taking `law-student` off a lapsed student would bill them as the
+     * default category next year; taking `past-president` off would end their
+     * exemption.
+     */
+    public function testTheSweepNeverRemovesPricingTags(): void {
+        $cats = $this->ownTags();
+        $this->assertSame( [], MyNJILGA_Member_Tags::removable( $cats, $this->protected_for( $cats ) ) );
+    }
+
+    /** A mix: separate "member" tags are still swapped and swept; the pricing ones are not. */
+    public function testSeparateMemberTagsAreStillSwappedWhileOwnTagsAreKept(): void {
+        $cats = $this->categories( [ 'professional' => 'professional', 'law_student' => 'student-member' ] );
+        $prot = $this->protected_for( $cats );
+        $this->assertSame( [ 'student-member' ], MyNJILGA_Member_Tags::removable( $cats, $prot ) );
+
+        $asProfessional = MyNJILGA_Member_Tags::plan( $cats, [ 'professional' ], 'professional', $prot );
+        $this->assertSame( 'professional', $asProfessional['add'] );
+        $this->assertSame( [ 'student-member' ], $asProfessional['remove'] );
+
+        $asStudent = MyNJILGA_Member_Tags::plan( $cats, [ 'law-student' ], 'professional', $prot );
+        $this->assertSame( 'student-member', $asStudent['add'] );
+        $this->assertSame( [], $asStudent['remove'], '`professional` is a pricing tag: never removed' );
+    }
 }

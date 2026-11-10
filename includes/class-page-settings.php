@@ -101,7 +101,7 @@ class MyNJILGA_Page_Settings {
             $refused = array_filter( array_map( 'sanitize_title', explode( ',', (string) wp_unslash( $_GET['member_tag_rejected'] ) ) ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
             MyNJILGA_Admin_UI::callout(
                 sprintf(
-                    '<strong>Member tag not saved:</strong> %s already means something to pricing or billing (a category, paid/unpaid or assessment tag), so it can&rsquo;t also be a member tag — paying would change who is charged what. Pick a different tag; the rest of your changes were saved.',
+                    '<strong>Member tag not saved:</strong> %s belongs to a <em>different</em> category, or is a paid/unpaid or assessment tag. Handing it out on payment would change who is charged what. A category&rsquo;s <em>own</em> tag is fine; use that or a separate tag. The rest of your changes were saved.',
                     implode( ', ', array_map( static function ( $t ) { return '<code>' . esc_html( $t ) . '</code>'; }, $refused ) )
                 ),
                 'warning'
@@ -594,7 +594,7 @@ class MyNJILGA_Page_Settings {
     private static function render_categories( array $s, array $tags, array $roles ): void {
         MyNJILGA_Admin_UI::section(
             'Membership categories',
-            'Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> follows the category: granted on payment, and swapped when a paid member\'s category tag or this mapping changes (Setup → WordPress role sync). <strong>Member tag</strong> (optional) is the FluentCRM tag added to a member of the category when they pay, and removed by the downgrade sweep — the Tag slug says who is in the category, the Member tag marks who has paid. It must be a different tag from the category, paid/unpaid and assessment tags.'
+            'Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> follows the category: granted on payment, and swapped when a paid member\'s category tag or this mapping changes (Setup → WordPress role sync). <strong>Member tag</strong> (optional) is the FluentCRM tag added to a member of the category when they pay, and removed by the downgrade sweep — the Tag slug says who is in the category, the Member tag marks who has paid. A category\'s own tag is fine (it is added after payment if they don\'t already have it, and is never removed); anything else must not be another category\'s tag or a paid/unpaid or assessment tag.'
         );
 
         // Stripe bills inline line items, so the Price column IS the

@@ -95,7 +95,14 @@ Everything the engine needs lives in **My NJILGA → Settings**, stored as one o
 | Emerging Professional Membership | `emerging-professional` | $50 (flat) | no | `professional` |
 | Professional Membership | `professional` | tiers: 1st Member $125 · Members 2–5 $75 · Members 6+ $0 | **yes** | `professional` |
 
-**Member tag (optional, per category).** A column beside **Role** where you pick the FluentCRM tag a paid member of that category should carry (e.g. `professional-member`). It is added when they pay — a dues invoice, an online join, or a free-until-next-cycle approval — and taken away by the downgrade sweep; a member who changes category has the old category's member tag removed the next time they pay. Several categories may share one tag. The **Tag slug** column says who is *in* a category (pricing reads it); the Member tag marks who has *paid*, so a tag that pricing or billing already reads — a category's own tag, the paid/unpaid/inactive/pending/rejected tags, an assessment-qualifying tag — is refused on save and blanked (otherwise paying would change who is charged what). Blank by default, so nothing changes until you set one. Existing members get the tag at their next payment; a mid-year category change is not swapped instantly the way the WordPress role is.
+**Member tag (optional, per category).** A column beside **Role** where you pick the FluentCRM tag a paid member of that category should carry. It is added when they pay — a dues invoice, an online join, or a free-until-next-cycle approval — and taken away by the downgrade sweep; a member who changes category has the old category's member tag removed the next time they pay. Several categories may share one tag. Blank by default, so nothing changes until you set one.
+
+Two kinds of tag work here:
+
+- **A separate "member" tag** (e.g. `professional-member`): added on payment, swapped if they change category, removed by the sweep.
+- **The category's own tag** (e.g. `professional` on the Professional row): added after payment if the member doesn't already carry it — for example someone billed under the default category — and **never removed**. The category tag is what pricing reads, so taking it off a lapsed member would change what they are billed next year (a student billed as Professional, a Past President losing their exemption).
+
+Anything else that pricing or billing already reads — *another* category's tag, or the paid/unpaid/inactive/pending/rejected, pre-law or assessment-qualifying tags — is refused on save and blanked, because handing it out on payment would change who is charged what. Existing members get the tag at their next payment; a mid-year category change is not swapped instantly the way the WordPress role is.
 
 **Assessment:** Trustee Dinner Assessment, $200, one product; qualifying tags in order `officer`, `trustees`, `senior-trustee`, `past-president`.
 
@@ -178,7 +185,7 @@ Note the one thing this costs: **Stripe's "Mark as paid" settles the whole invoi
 
 ### Downgrade sweep
 
-Manual, from the Invoicing page, via a **confirmation screen** showing the exact invoices, firms, and members it will touch (and how many are protected by a paid invoice elsewhere or by already carrying `Dues Paid {year}`). Applies `Unpaid Dues {year}` + `unpaid-dues`, removes `dues-paid` and any category Member tag, removes every WordPress membership role if the setting says so, marks rows downgraded, leaves a Company Note.
+Manual, from the Invoicing page, via a **confirmation screen** showing the exact invoices, firms, and members it will touch (and how many are protected by a paid invoice elsewhere or by already carrying `Dues Paid {year}`). Applies `Unpaid Dues {year}` + `unpaid-dues`, removes `dues-paid` and any separate (non-pricing) Member tag, removes every WordPress membership role if the setting says so, marks rows downgraded, leaves a Company Note.
 
 ### WordPress role sync
 
