@@ -5,12 +5,20 @@
  * a member when they pay and taken away again when the downgrade sweep
  * lapses them.
  *
- * It is the OUTPUT of paying, never an input: pricing and the role are
- * decided by the category's own tag (the "Tag slug" column). A member tag
- * that was also a category, paid/unpaid, inactive or assessment-qualifying
- * tag would feed straight back into pricing — hand the whole firm the $200
- * dinner assessment, say — so reserved_slugs() lists the tags that may not
- * be used, and Settings refuses them on save.
+ * It is the OUTPUT of paying: pricing and the role are decided by the
+ * category's own tag (the "Tag slug" column). Two rules keep the output from
+ * feeding back into pricing:
+ *
+ *   1. A member tag may be the category's OWN tag ("make sure a paid
+ *      Professional carries `professional`") — but not another category's,
+ *      nor a paid/unpaid/inactive/assessment-qualifying tag, which would
+ *      change who is charged what (e.g. hand every payer the $200 dinner
+ *      assessment). reserved_slugs() lists those; Settings refuses them.
+ *   2. This feature NEVER REMOVES a tag that pricing, billing or the role
+ *      logic reads. Taking `law-student` off a lapsed student would bill
+ *      them as the default category next year; taking `past-president` off
+ *      would end their exemption. Only genuinely separate "member" tags are
+ *      swapped or taken away.
  *
  * Which category a contact is in follows MyNJILGA_Role_Sync exactly: the
  * first category, in Settings order, whose tag they carry; else the default
@@ -74,15 +82,29 @@ class MyNJILGA_Member_Tags {
      *
      * @param array<int,array<string,mixed>> $categories Ordered category rows.
      * @param array<int,string>              $heldSlugs  Category tag slugs the contact carries.
+     * @param array<int,string>              $protected  Tags that must never be removed (reserved_slugs()).
      * @return array{add:string,remove:array<int,string>} 'add' is '' when there is nothing to add.
      */
-    public static function plan( array $categories, array $heldSlugs, string $defaultKey ): array {
+    public static function plan( array $categories, array $heldSlugs, string $defaultKey, array $protected = [] ): array {
         $cat = self::category_for( $categories, $heldSlugs, $defaultKey );
         $add = $cat ? (string) ( $cat['member_tag'] ?? '' ) : '';
         return [
             'add'    => $add,
-            'remove' => array_values( array_diff( self::managed( $categories ), $add === '' ? [] : [ $add ] ) ),
+            'remove' => array_values( array_diff( self::removable( $categories, $protected ), $add === '' ? [] : [ $add ] ) ),
         ];
+    }
+
+    /**
+     * The member tags this feature is allowed to take away: every configured
+     * one EXCEPT those pricing, billing or the role logic read (a category's
+     * own tag used as its member tag is added, but never removed).
+     *
+     * @param array<int,array<string,mixed>> $categories
+     * @param array<int,string>              $protected  From reserved_slugs().
+     * @return array<int,string>
+     */
+    public static function removable( array $categories, array $protected ): array {
+        return array_values( array_diff( self::managed( $categories ), $protected ) );
     }
 
     /**
@@ -112,6 +134,8 @@ class MyNJILGA_Member_Tags {
 
     /**
      * Blank every member tag that is reserved, and say which were refused.
+     * A category's OWN tag is not refused — it is the one reserved tag a
+     * category may hand out, and it is never removed (see removable()).
      *
      * @param array<int,array<string,mixed>> $categories
      * @param array<int,string>              $reserved   From reserved_slugs().
@@ -122,7 +146,7 @@ class MyNJILGA_Member_Tags {
         $rejected = [];
         foreach ( $categories as $i => $cat ) {
             $slug = (string) ( $cat['member_tag'] ?? '' );
-            if ( $slug !== '' && isset( $reserved[ $slug ] ) ) {
+            if ( $slug !== '' && isset( $reserved[ $slug ] ) && $slug !== (string) ( $cat['tag'] ?? '' ) ) {
                 $rejected[ $slug ]            = $slug;
                 $categories[ $i ]['member_tag'] = '';
             }
@@ -154,11 +178,16 @@ class MyNJILGA_Member_Tags {
                     break; // The first match in Order decides.
                 }
             }
-            $plan = self::plan( $categories, $held, (string) MyNJILGA_Dues_Settings::general( 'default_category', '' ) );
+            $plan = self::plan( $categories, $held, (string) MyNJILGA_Dues_Settings::general( 'default_category', '' ), self::protected_slugs( $categories ) );
+            // Only touch a tag when the contact's state actually differs:
+            // attaching what they already hold (their own category tag, in
+            // the common case) would fire FluentCRM's tag events for nothing.
             foreach ( $plan['remove'] as $slug ) {
-                MyNJILGA_Tags::detach_slug( $contact, $slug );
+                if ( MyNJILGA_Tags::has_slug( $contact, $slug ) ) {
+                    MyNJILGA_Tags::detach_slug( $contact, $slug );
+                }
             }
-            if ( $plan['add'] !== '' ) {
+            if ( $plan['add'] !== '' && ! MyNJILGA_Tags::has_slug( $contact, $plan['add'] ) ) {
                 MyNJILGA_Tags::attach_slug( $contact, $plan['add'] );
             }
             return true;
@@ -174,12 +203,29 @@ class MyNJILGA_Member_Tags {
      */
     public static function revoke( $contact ): bool {
         try {
-            foreach ( self::managed( MyNJILGA_Dues_Settings::categories() ) as $slug ) {
-                MyNJILGA_Tags::detach_slug( $contact, $slug );
+            $categories = MyNJILGA_Dues_Settings::categories();
+            foreach ( self::removable( $categories, self::protected_slugs( $categories ) ) as $slug ) {
+                if ( MyNJILGA_Tags::has_slug( $contact, $slug ) ) {
+                    MyNJILGA_Tags::detach_slug( $contact, $slug );
+                }
             }
             return true;
         } catch ( \Throwable $e ) {
             return false;
         }
+    }
+
+    /**
+     * The tags this feature must never remove, from the live settings.
+     *
+     * @param array<int,array<string,mixed>> $categories
+     * @return array<int,string>
+     */
+    private static function protected_slugs( array $categories ): array {
+        return self::reserved_slugs(
+            $categories,
+            (array) ( MyNJILGA_Dues_Settings::get()['general'] ?? [] ),
+            (array) ( MyNJILGA_Dues_Settings::assessment()['qualifiers'] ?? [] )
+        );
     }
 }
