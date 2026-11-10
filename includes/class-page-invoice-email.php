@@ -31,6 +31,9 @@ class MyNJILGA_Page_Invoice_Email {
     /** The `general` settings this tab owns (tests/SettingsTabsTest.php checks every setting has exactly one home). */
     const KEYS = [ 'send_cc_mode', 'send_cc_emails', 'send_reply_to', 'email_subject', 'email_intro', 'email_closing' ];
 
+    /** The longest an email address can be (RFC 5321). A longer one is rejected, never truncated. */
+    const MAX_ADDRESS = 254;
+
     /** How long unsaved edits are kept, in seconds. */
     const DRAFT_TTL = 1800;
 
@@ -65,7 +68,8 @@ class MyNJILGA_Page_Invoice_Email {
      */
     public static function typed_address( string $raw ): string {
         $raw = trim( $raw );
-        return ( $raw !== '' && is_email( $raw ) && sanitize_email( $raw ) === $raw ) ? $raw : '';
+        // Over 254 characters is not an address (RFC 5321), however it looks: reject it, never shorten it.
+        return ( $raw !== '' && strlen( $raw ) <= self::MAX_ADDRESS && is_email( $raw ) && sanitize_email( $raw ) === $raw ) ? $raw : '';
     }
 
     /**
@@ -380,8 +384,10 @@ class MyNJILGA_Page_Invoice_Email {
             'closing'   => MyNJILGA_Invoice_Email::clean( 'closing', (string) ( $in['closing'] ?? '' ) ),
             // EXACTLY as typed, never run through sanitize_text_field(): that deletes percent-encoded octets, so the valid
             // address "john%20doe@x.com" would become "johndoe@x.com" and the test would go to someone else. It is
-            // validated by typed_address() when a test is sent and escaped where it is shown.
-            'to'        => substr( trim( (string) ( $in['to'] ?? '' ) ), 0, 254 ),
+            // validated by typed_address() when a test is sent and escaped where it is shown. The cap below only keeps
+            // the stored draft small: typed_address() rejects anything over MAX_ADDRESS, so cutting a string that is
+            // already far longer than that can never turn an invalid address into a valid one.
+            'to'        => substr( trim( (string) ( $in['to'] ?? '' ) ), 0, 1000 ),
             'firm'      => ( $firm !== '' && ( ctype_digit( $firm ) || $firm === MyNJILGA_Invoice_Email::SAMPLE_FIRM ) ) ? $firm : MyNJILGA_Invoice_Email::SAMPLE_FIRM,
         ];
     }
