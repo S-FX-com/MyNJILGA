@@ -1111,8 +1111,7 @@ class MyNJILGA_Page_Launch {
             $user = wp_get_current_user();
             $raw  = (string) $user->user_email;
         }
-        $to = sanitize_email( $raw );
-        return ( $to !== '' && is_email( $to ) ) ? $to : '';
+        return MyNJILGA_Page_Invoice_Email::typed_address( $raw );
     }
 
     private static function guard( string $action ): void {
@@ -1151,6 +1150,12 @@ class MyNJILGA_Page_Launch {
 
     /** @param array<string,mixed> $args */
     private static function back( int $year, int $step, array $args = [] ): void {
+        // add_query_arg() does not encode values: a "+" in an address would come back as a space, a "#" would cut the URL off.
+        foreach ( $args as $k => $val ) {
+            if ( is_string( $val ) ) {
+                $args[ $k ] = rawurlencode( $val );
+            }
+        }
         wp_safe_redirect( self::url( $year, $step, $args ) );
         exit;
     }
