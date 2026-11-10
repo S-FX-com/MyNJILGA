@@ -57,6 +57,18 @@ class MyNJILGA_Page_Invoice_Email {
     }
 
     /**
+     * A typed email address exactly as typed — or '' when it isn't one valid
+     * address. WordPress's sanitize_email() on its own REPAIRS what it is
+     * given ("john doe@x.com" becomes "johndoe@x.com"), which would mail a
+     * different address from the one the person typed, so the address must
+     * already be valid before it is used.
+     */
+    public static function typed_address( string $raw ): string {
+        $raw = trim( $raw );
+        return ( $raw !== '' && is_email( $raw ) && sanitize_email( $raw ) === $raw ) ? $raw : '';
+    }
+
+    /**
      * The test message's banner: it can never be mistaken for a real invoice email.
      *
      * @param array<string,mixed> $m compose()'s result
@@ -135,12 +147,14 @@ class MyNJILGA_Page_Invoice_Email {
         }
         $problems = self::wording_problems( $v );
         if ( $problems ) {
-            MyNJILGA_Admin_UI::callout( self::problems_html( $problems, 'The wording below has' ) . ' It would be emailed to firms as literal text, so <em>Save changes</em> and <em>Send test email</em> will refuse until it is fixed.', 'warning' );
+            MyNJILGA_Admin_UI::callout( '<strong>Unknown merge tag:</strong> ' . self::problems_html( $problems ) . ' — it would be emailed to firms as literal text, so <em>Save changes</em> and <em>Send test email</em> will refuse until it is fixed. The tags that work: ' . self::valid_tags_html() . '.', 'warning' );
         }
 
         printf( '<form method="post" action="%s">', esc_url( admin_url( 'admin-post.php' ) ) );
         printf( '<input type="hidden" name="action" value="%s">', esc_attr( self::ACTION_SUBMIT ) );
         wp_nonce_field( self::ACTION_SUBMIT );
+        // Pressing Enter in a field presses a form's FIRST submit button. Make that one the harmless Preview, never Save.
+        echo '<button type="submit" name="do" value="preview" class="njilga-visually-hidden" tabindex="-1" aria-hidden="true">Preview</button>';
 
         self::render_recipients( $v );
         self::render_wording( $v );
@@ -164,7 +178,7 @@ class MyNJILGA_Page_Invoice_Email {
                 MyNJILGA_Admin_UI::callout( '<strong>Saved.</strong> Firms get this wording from the next invoice email on.', 'success' );
                 break;
             case 'refused':
-                MyNJILGA_Admin_UI::callout( '<strong>' . esc_html( $why !== '' ? $why : 'Nothing was done' ) . ':</strong> ' . self::problems_html( $bad, 'the wording has' ) . ' Your edits are still in the boxes below.', 'error' );
+                MyNJILGA_Admin_UI::callout( '<strong>' . esc_html( $why !== '' ? $why : 'Nothing was done' ) . '.</strong> Unknown merge tag: ' . self::problems_html( $bad ) . '. The tags that work: ' . self::valid_tags_html() . '. Your edits are still in the boxes below.', 'error' );
                 break;
             case 'test_sent':
                 MyNJILGA_Admin_UI::callout( sprintf( '<strong>Test email sent%s.</strong> It was built from what is in the boxes below, saved or not. Check that inbox (and spam) — only a person can confirm it arrived.', $to !== '' ? ' to ' . esc_html( $to ) : '' ), 'success' );
@@ -178,8 +192,12 @@ class MyNJILGA_Page_Invoice_Email {
         }
     }
 
-    /** "the wording has {frim}, {tota1}" for a list of "field:tag". @param array<int,string> $problems */
-    private static function problems_html( array $problems, string $lead ): string {
+    /**
+     * "{frim} (subject), {sign} (sign-off)" for a list of "field:tag".
+     *
+     * @param array<int,string> $problems
+     */
+    private static function problems_html( array $problems ): string {
         $labels = [ 'subject' => 'subject', 'intro' => 'opening', 'closing' => 'sign-off' ];
         $parts  = [];
         foreach ( $problems as $p ) {
@@ -187,18 +205,15 @@ class MyNJILGA_Page_Invoice_Email {
             $f    = sanitize_key( (string) ( $bits[0] ?? '' ) );
             $t    = sanitize_key( (string) ( $bits[1] ?? '' ) );
             if ( isset( $labels[ $f ] ) && $t !== '' ) {
-                $parts[] = sprintf( 'the %s has <code>{%s}</code>', esc_html( $labels[ $f ] ), esc_html( $t ) );
+                $parts[] = sprintf( '<code>{%s}</code> (%s)', esc_html( $t ), esc_html( $labels[ $f ] ) );
             }
         }
-        if ( ! $parts ) {
-            return '';
-        }
-        return sprintf(
-            '%s %s, which isn&rsquo;t a merge tag (the ones that work: %s).',
-            esc_html( $lead ),
-            implode( '; ', $parts ),
-            implode( ', ', array_map( static function ( $t ) { return '<code>{' . esc_html( $t ) . '}</code>'; }, array_keys( MyNJILGA_Invoice_Email::TAGS ) ) )
-        );
+        return implode( ', ', $parts );
+    }
+
+    /** The merge tags that work, as code. */
+    private static function valid_tags_html(): string {
+        return implode( ', ', array_map( static function ( $t ) { return '<code>{' . esc_html( $t ) . '}</code>'; }, array_keys( MyNJILGA_Invoice_Email::TAGS ) ) );
     }
 
     /** @param array<string,string> $v */
@@ -314,10 +329,12 @@ class MyNJILGA_Page_Invoice_Email {
         check_admin_referer( self::ACTION_SUBMIT );
 
         $in = wp_unslash( $_POST );
-        $do = sanitize_key( (string) ( $in['do'] ?? 'save' ) );
+        $do = sanitize_key( (string) ( $in['do'] ?? '' ) );
         $v  = self::parse_post( $in );
 
-        if ( $do === 'preview' ) {
+        // Only an explicit Save saves, and only an explicit Test sends. Anything else — Preview, no button at all
+        // (some browsers/clients omit it), an unknown value — is a harmless preview, so wording can't go live by accident.
+        if ( $do !== 'save' && $do !== 'test' ) {
             self::store_draft( $v );
             self::back( [ 'draft' => '1', 'firm' => $v['firm'] ] );
         }
@@ -361,7 +378,7 @@ class MyNJILGA_Page_Invoice_Email {
             'subject'   => MyNJILGA_Invoice_Email::clean( 'subject', (string) ( $in['subject'] ?? '' ) ),
             'intro'     => MyNJILGA_Invoice_Email::clean( 'intro', (string) ( $in['intro'] ?? '' ) ),
             'closing'   => MyNJILGA_Invoice_Email::clean( 'closing', (string) ( $in['closing'] ?? '' ) ),
-            'to'        => sanitize_email( trim( (string) ( $in['to'] ?? '' ) ) ),
+            'to'        => sanitize_text_field( trim( (string) ( $in['to'] ?? '' ) ) ), // as typed; validated by typed_address() when a test is sent
             'firm'      => ( $firm !== '' && ( ctype_digit( $firm ) || $firm === MyNJILGA_Invoice_Email::SAMPLE_FIRM ) ) ? $firm : MyNJILGA_Invoice_Email::SAMPLE_FIRM,
         ];
     }
@@ -372,14 +389,14 @@ class MyNJILGA_Page_Invoice_Email {
      * @param array<string,string> $v
      */
     private static function send_test( array $v ): void {
-        $raw = trim( (string) ( $_POST['to'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput
-        $to  = $v['to'];
-        if ( $to === '' && $raw === '' ) {
-            $user = wp_get_current_user();
-            $to   = sanitize_email( (string) $user->user_email );
-        }
         self::store_draft( $v ); // keep the edits across the redirect, whatever happens next
-        if ( $to === '' || ! is_email( $to ) ) {
+        if ( $v['to'] === '' ) {
+            $user = wp_get_current_user();
+            $to   = self::typed_address( (string) $user->user_email );
+        } else {
+            $to = self::typed_address( $v['to'] );
+        }
+        if ( $to === '' ) {
             self::back( [ 'draft' => '1', 'firm' => $v['firm'], 'msg' => 'error', 'detail' => 'That doesn\'t look like a valid email address to send the test to.' ] );
         }
 
@@ -401,6 +418,12 @@ class MyNJILGA_Page_Invoice_Email {
 
     /** Redirect to this tab and stop. @param array<string,mixed> $args */
     private static function back( array $args = [] ): void {
+        // add_query_arg() does not encode values: a "+" would come back as a space, a "#" would cut the URL off.
+        foreach ( $args as $k => $val ) {
+            if ( is_string( $val ) ) {
+                $args[ $k ] = rawurlencode( $val );
+            }
+        }
         wp_safe_redirect( self::url( $args ) );
         exit;
     }

@@ -399,6 +399,8 @@ class MyNJILGA_Admin_UI {
 .njilga-linkcard-title{display:block;font-size:15px;font-weight:600;margin-bottom:4px}
 .njilga-linkcard-desc{display:block;color:var(--muted-fg);font-size:13px;line-height:1.5}
 
+.njilga-visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+
 /* --- Launch Wizard ------------------------------------------------------- */
 .njilga-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:6px 0 22px}
 .njilga-step{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;background:var(--bg);

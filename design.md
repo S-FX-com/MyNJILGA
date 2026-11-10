@@ -281,6 +281,13 @@ tab is unknown or that lacks the structure its tab edits, and pin "every
 setting has exactly one owner" in a test. A tab with its own actions (a
 preview, a test send) gets its own class and handler, as Invoice Email does.
 
+**A form with several submit buttons needs a harmless first one.** Pressing
+Enter in a text field presses the form's *first* submit button, so if that
+is Save, typing an address and hitting Enter saves. Put a visually hidden
+`<button class="njilga-visually-hidden" tabindex="-1" aria-hidden="true">`
+that does the safe thing (Preview) first in the form, and have the handler
+treat anything but an explicit Save as the safe action.
+
 ### Danger zone
 
 ```php
