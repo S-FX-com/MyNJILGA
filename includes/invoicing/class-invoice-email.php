@@ -220,6 +220,39 @@ class MyNJILGA_Invoice_Email {
         return [ 'subject' => $subject, 'body' => implode( "\n\n", $blocks ) ];
     }
 
+    // -------------------------------------------------------------------------
+    // The example firm used by "Send test" and the wording preview
+    // -------------------------------------------------------------------------
+
+    /** What the firm picker calls the built-in example firm. */
+    const SAMPLE_FIRM = 'sample';
+
+    /**
+     * An invoice row for a made-up firm, shaped exactly like a real one, so
+     * a test email and the wording preview go through the SAME
+     * MyNJILGA_Invoice_Sender::compose() a real send does — what you test is
+     * what firms get. It has no payment link (compose() shows a flagged
+     * placeholder for a preview) and a bill-to email that can never be a
+     * real address.
+     */
+    public static function sample_row( int $year ): object {
+        $members = [
+            [ 'contact_id' => 0, 'name' => 'Ann Able', 'email' => 'ann.able@examplefirm.test', 'category' => 'professional', 'category_label' => 'Professional Membership', 'tier_label' => '1st Member', 'dues_cents' => 12500, 'assessment_cents' => 0 ],
+            [ 'contact_id' => 0, 'name' => 'Bob Baker', 'email' => 'bob.baker@examplefirm.test', 'category' => 'professional', 'category_label' => 'Professional Membership', 'tier_label' => 'Members 2–5', 'dues_cents' => 7500, 'assessment_cents' => 0 ],
+        ];
+        $person  = [ 'contact_id' => 0, 'name' => 'Owen Owner', 'first_name' => 'Owen', 'last_name' => 'Owner', 'email' => 'owen.owner@examplefirm.test' ];
+        $snap    = [
+            'version' => 2, 'dues_year' => $year, 'billing_mode' => 'firm', 'invoice_kind' => 'combined',
+            'company' => [ 'id' => 0, 'name' => 'Example Firm LLP' ],
+            'owner' => $person, 'bill_to' => $person, 'members' => $members,
+        ];
+        return (object) [
+            'id' => 0, 'fluentcrm_company_id' => 0, 'fluentcrm_owner_contact_id' => 0, 'bill_to_contact_id' => 0,
+            'dues_year' => $year, 'invoice_kind' => 'combined', 'status' => 'draft',
+            'total_amount_cents' => 20000, 'hosted_invoice_url' => '', 'roster_snapshot' => json_encode( $snap ),
+        ];
+    }
+
     /** Whether any of the three pieces has been customised. @param array<string,string> $tpl field => text */
     public static function is_custom( array $tpl ): bool {
         foreach ( array_keys( self::FIELDS ) as $field ) {

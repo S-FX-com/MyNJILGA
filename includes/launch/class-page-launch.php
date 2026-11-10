@@ -525,7 +525,7 @@ class MyNJILGA_Page_Launch {
      *
      * @return array<int,object>
      */
-    private static function preview_rows( int $year, bool $live ): array {
+    public static function preview_rows( int $year, bool $live ): array {
         $rows = MyNJILGA_Dues_Invoice_Table::get_by_year( $year, self::PREVIEW_STATUSES, $live );
         $rows = array_values( array_filter( (array) $rows, static function ( $r ) {
             return (string) ( $r->invoice_kind ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN;
@@ -534,11 +534,38 @@ class MyNJILGA_Page_Launch {
         return $rows;
     }
 
+    /**
+     * Print a composed email the way a firm will read it: To / Cc / Reply-To / Subject, then the body.
+     * Shared with the Invoice Email tab's preview.
+     *
+     * @param array<string,mixed> $m MyNJILGA_Invoice_Sender::compose()'s result (ok = true).
+     */
+    public static function render_message( array $m ): void {
+        $cc    = '';
+        $reply = '';
+        foreach ( (array) ( $m['headers'] ?? [] ) as $h ) {
+            if ( stripos( $h, 'Cc:' ) === 0 ) {
+                $cc = trim( substr( $h, 3 ) );
+            }
+            if ( stripos( $h, 'Reply-To:' ) === 0 ) {
+                $reply = trim( substr( $h, 9 ) );
+            }
+        }
+        printf(
+            '<p class="njilga-emailmeta"><strong>To:</strong> %s<br>%s%s<strong>Subject:</strong> %s</p><div class="njilga-emailsample">%s</div>',
+            esc_html( (string) $m['to'] ),
+            $cc !== '' ? '<strong>Cc:</strong> ' . esc_html( $cc ) . '<br>' : '',
+            $reply !== '' ? '<strong>Reply-To:</strong> ' . esc_html( $reply ) . '<br>' : '',
+            esc_html( (string) $m['subject'] ),
+            esc_html( (string) $m['body'] )
+        );
+    }
+
     /** B. Read the exact email a firm will get, and send yourself (or anyone) a marked sample. */
     private static function render_sample( int $year, bool $live ): void {
         MyNJILGA_Admin_UI::section(
             'B. See exactly what a firm will receive',
-            sprintf( 'Built by the same code that sends the real email. Pick any firm — even one whose invoice isn\'t created yet — to read its email, and send a copy marked SAMPLE to any address you like (it never goes to the firm). To change the wording: <a href="%s">Settings → Dues &amp; Billing → Invoice email wording</a>.', esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) )
+            sprintf( 'Built by the same code that sends the real email. Pick any firm — even one whose invoice isn\'t created yet — to read its email, and send a copy marked SAMPLE to any address you like (it never goes to the firm). To change the wording or send a test with your edits: <a href="%s">Settings → Invoice Email</a>.', esc_url( add_query_arg( 'tab', 'email', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) ) )
         );
 
         $rows = self::preview_rows( $year, $live );
@@ -580,24 +607,7 @@ class MyNJILGA_Page_Launch {
         if ( ! empty( $m['placeholder'] ) ) {
             MyNJILGA_Admin_UI::callout( 'This firm\'s invoice hasn\'t been created yet, so the payment link below is a placeholder; everything else is what it will say.', 'info' );
         }
-        $cc = '';
-        $reply = '';
-        foreach ( (array) $m['headers'] as $h ) {
-            if ( stripos( $h, 'Cc:' ) === 0 ) {
-                $cc = trim( substr( $h, 3 ) );
-            }
-            if ( stripos( $h, 'Reply-To:' ) === 0 ) {
-                $reply = trim( substr( $h, 9 ) );
-            }
-        }
-        printf(
-            '<p class="njilga-emailmeta"><strong>To:</strong> %s<br>%s%s<strong>Subject:</strong> %s</p><div class="njilga-emailsample">%s</div>',
-            esc_html( (string) $m['to'] ),
-            $cc !== '' ? '<strong>Cc:</strong> ' . esc_html( $cc ) . '<br>' : '',
-            $reply !== '' ? '<strong>Reply-To:</strong> ' . esc_html( $reply ) . '<br>' : '',
-            esc_html( (string) $m['subject'] ),
-            esc_html( (string) $m['body'] )
-        );
+        self::render_message( $m );
 
         $user = wp_get_current_user();
         self::open_form( self::ACTION_SAMPLE, $year, 5 );

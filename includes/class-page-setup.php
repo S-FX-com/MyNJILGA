@@ -661,8 +661,8 @@ class MyNJILGA_Page_Setup {
         MyNJILGA_Admin_UI::section(
             'WordPress role sync',
             sprintf(
-                'A paid member\'s WordPress role follows their category (<a href="%s">Settings → Membership categories</a>): granted on payment, swapped when their category tag or this mapping changes, removed by the downgrade sweep. Only the managed roles below are ever removed — WordPress\'s own roles never are.',
-                esc_url( add_query_arg( 'tab', 'dues', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) )
+                'A paid member\'s WordPress role follows their category (<a href="%s">Settings → Categories &amp; Pricing</a>): granted on payment, swapped when their category tag or this mapping changes, removed by the downgrade sweep. Only the managed roles below are ever removed — WordPress\'s own roles never are.',
+                esc_url( add_query_arg( 'tab', 'categories', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) )
             )
         );
 

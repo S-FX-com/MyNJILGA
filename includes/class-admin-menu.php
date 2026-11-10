@@ -86,7 +86,7 @@ class MyNJILGA_Admin_Menu {
         $appsLabel = 'Applications' . ( $pending > 0 ? sprintf( ' <span class="awaiting-mod count-%1$d"><span class="pending-count">%1$d</span></span>', $pending ) : '' );
         add_submenu_page( self::SLUG_ROOT, 'Applications', $appsLabel, 'manage_options', self::SLUG_APPLICATIONS, [ 'MyNJILGA_Page_Applications', 'render' ] );
 
-        add_submenu_page( self::SLUG_ROOT, 'Dues & Billing Settings', 'Settings', 'manage_options', self::SLUG_SETTINGS, [ 'MyNJILGA_Page_Settings', 'render' ] );
+        add_submenu_page( self::SLUG_ROOT, 'Settings', 'Settings', 'manage_options', self::SLUG_SETTINGS, [ 'MyNJILGA_Page_Settings', 'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Setup',     'Setup',     'manage_options', self::SLUG_SETUP,     [ 'MyNJILGA_Page_Setup',      'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Shortcodes', 'Shortcodes', 'manage_options', self::SLUG_SHORTCODES, [ 'MyNJILGA_Page_Shortcodes', 'render' ] );
         // Tools: one-off data jobs (PMPro Migrator, Historical Invoice

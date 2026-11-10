@@ -228,7 +228,7 @@ class MyNJILGA_Page_Shortcodes {
                 esc_html( (string) MyNJILGA_Dues_Settings::general( 'pending_tag', 'pending-approval' ) ),
                 esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_APPLICATIONS ) ),
                 esc_html( MyNJILGA_Dues_Settings::join_policy_labels()[ $policy ] ?? $policy ),
-                esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) )
+                esc_url( add_query_arg( 'tab', 'applications', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) )
             )
         );
         self::single_line_table( '[' . MyNJILGA_Application_Form::SHORTCODE . ']', $hits );

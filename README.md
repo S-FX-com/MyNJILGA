@@ -29,7 +29,7 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for the whole a
 | **Launch Wizard** | Opens a dues year in five steps — readiness checks, open the year, review the preview, create the invoices, then test the email and schedule the rest to go out in paced batches. See [Launch Wizard](#launch-wizard). |
 | **Payments** | Cross-year Stripe payments ledger — see [The Payments ledger](#the-payments-ledger) below. |
 | **Applications** | Enrollment review queue — see [Enrollment gate](#enrollment-gate) — and the **Online joins** tab — see [Online joining](#online-joining). |
-| **Settings** | **Dues & Billing** — category mapping, assessment, per-firm billing mode, all switches. **Payments** tab — Stripe connection, mode, and payment settings. |
+| **Settings** | Seven tabs, each its own small form that saves only what it shows: **Categories & Pricing** (the category table, tiers, default category, assessment), **Tags & Billing** (the tags billing reads and writes, per-firm billing modes), **Invoice Email** (recipients, wording, preview, **Send test**), **Online Joining**, **Applications**, **Payments** (Stripe connection, mode, payment defaults) and **Advanced** (batch size, the downgrade sweep, Reset). See [Settings tabs](#settings-tabs). |
 | **Setup** | Environment checks, tag checklist, **tag-slug audit** and **product-mapping audit** for the settings, plus Stripe connection health and a recent-API-activity log. |
 | **Shortcodes** | Every shortcode the plugin provides — a ready-to-paste `[njilga_join]` line per membership category, `[njilga_firm_dues_status]`, `[njilga_firm_renewal_lookup]`, `[njilga_my_membership]`, `[njilga_membership_application]` — with copy buttons and the pages that use each one now. |
 | **Tools** | One-off data jobs: the **PMPro Migrator** and the **Historical Invoice Import** (see [Tools](#tools)), plus the import log with an **Undo** for every run. Both create reference history that shows on the [Dues History](#dues-history) tab of a FluentCRM contact or company. |
@@ -83,6 +83,22 @@ An annual, admin-driven batch process (**My NJILGA → Invoicing**), billed thro
 **FluentCRM tags are the source of truth for who owes what. WordPress roles are a downstream effect of payment, never an input to pricing.**
 
 **Flow:** Generate Preview → Create Invoices (per firm or in bulk; approves the frozen roster and creates the Stripe invoice in one step, Action Scheduler ~25 per job, per-row failure isolation) → Send (email + CC policy + Company Note) → Paid (automatic, driven by Stripe's `invoice.paid` webhook, with a daily reconciler as a safety net) → end-of-year Downgrade Sweep (manual, behind a confirmation screen). An invoice can also be cancelled outright with **Void**, a row action on the Invoicing table. A payment that arrives outside Stripe — a check in the post — is closed out in the **Stripe Dashboard** with its own "Mark as paid", which fires the same `invoice.paid` webhook and settles membership exactly as an online payment does. Firms that can't be billed yet — no Owner, no members, nothing billable — are surfaced under **Needs Attention** rather than blocking the main list.
+
+### Settings tabs
+
+**My NJILGA → Settings** is split into tabs (`?tab=categories|billing|email|joining|applications|payments|advanced`; the old `?tab=dues` link opens the first). Each tab is a separate form that **saves only its own settings** and carries every other tab's values over untouched — saving Tags & Billing can never touch the category table. A post that doesn't carry what its tab edits (a form left open from before the tabs existed, or a tampered one) saves nothing and says so. `tests/SettingsTabsTest.php` asserts that every setting belongs to exactly one tab, so a new setting can't be added without a home (or saved by two tabs).
+
+| Tab | Holds |
+|---|---|
+| **Categories & Pricing** | The default category, the ordered category table (tag → price → role → member tag → tier-eligible, with the per-rank tier table) and the assessment. |
+| **Tags & Billing** | Inactive / paid / unpaid tags, the per-year tag patterns, and per-firm billing-mode overrides. |
+| **Invoice Email** | Who is copied, Reply-To, the subject / opening / sign-off wording, a preview and **Send test** — see [Invoice email wording](#invoice-email-wording). |
+| **Online Joining** | Everything about `[njilga_join]` (see [Online joining](#online-joining)). |
+| **Applications** | The application form's tags, notification, success message, and the mid-year join policy. |
+| **Payments** | The Stripe connection (see [Connecting Stripe](#connecting-stripe)). |
+| **Advanced** | Invoice creation batch size, whether the downgrade sweep removes WordPress roles, and **Reset to defaults** (every tab except Payments, including your email wording and firm overrides). |
+
+Saving a tab re-checks every category's member tag against the final settings (changing the paid tag on one tab can newly collide with a member tag saved on another); a colliding one is blanked and reported.
 
 ### Settings → Dues & Billing (spec §3)
 
@@ -162,7 +178,7 @@ Each line carries `line_meta` with `contact_id`, `dues_year`, `kind`, `category`
 
 ### Invoice email wording
 
-The invoice email can be reworded in **Settings → Dues & Billing → Invoice email wording**: the **subject**, the **opening** (the greeting and the "your invoice totals $X" sentence) and the **sign-off**. Leave a box blank for the standard wording (shown as the greyed placeholder) — which is exactly what the email said before this was editable, byte for byte. Plain text only.
+The invoice email is edited on **Settings → Invoice Email** — recipients (Cc policy and Reply-To), and the wording: the **subject**, the **opening** (the greeting and the "your invoice totals $X" sentence) and the **sign-off**. Leave a box blank for the standard wording (shown as the greyed placeholder) — which is exactly what the email said before this was editable, byte for byte. Plain text only.
 
 | Merge tag | Becomes |
 |---|---|
@@ -172,7 +188,9 @@ The invoice email can be reworded in **Settings → Dues & Billing → Invoice e
 | `{name}` / `{first_name}` | The bill-to contact's full / first name (first word of the name if no first name is on file) |
 | `{invoice}` | `membership dues invoice`, or the assessment's name followed by `invoice` |
 
-What stays system-generated and **cannot be edited away**: the list of who the invoice covers and what each is charged, the payment link, and the mail-a-check address (Settings → Payments). Saving refuses a typo like `{frim}` — it would otherwise be emailed to firms as literal text — keeps the previous wording for that field, and says which tag it didn't recognise. The same wording is used for every invoice email, including a separate assessment invoice if you bill assessments separately, so use `{invoice}` to name which one it is. Preview the result, and send yourself a sample, in **Launch Wizard → Send**.
+What stays system-generated and **cannot be edited away**: the list of who the invoice covers and what each is charged, the payment link, and the mail-a-check address (Settings → Payments). Saving refuses a typo like `{frim}` — it would otherwise be emailed to firms as literal text — keeps the previous wording for that field, and says which tag it didn't recognise. The same wording is used for every invoice email, including a separate assessment invoice if you bill assessments separately, so use `{invoice}` to name which one it is. 
+
+**Preview and Send test.** The tab's one form has three buttons: **Save changes**, **Preview** and **Send test email**. Preview and the test both use what is in the boxes *right now* — saved or not — and are built by `MyNJILGA_Invoice_Sender::compose()` (with the unsaved settings passed as an override), i.e. through the same code a real send uses, so what you test is what firms get. Pick an **example firm** (made-up roster and a placeholder payment link) or any of the year's real invoices — even one not created yet — and type any address to send the test to (blank = yours). A test goes **only** to that address: it is marked `[TEST]`, opens with a banner saying nobody else received it, has no Cc, and changes nothing on any invoice. Your unsaved edits survive the redirect after a preview, a test or a refused save in a short-lived per-user draft (30 minutes), so testing never costs you your typing; **Save** refuses a typo'd merge tag and sends nothing to anyone. The Launch Wizard's step 5 still previews each firm's email and sends a `[SAMPLE]` copy.
 
 ### Frozen snapshot (spec §5)
 
@@ -204,7 +222,7 @@ Manual, from the Invoicing page, via a **confirmation screen** showing the exact
 
 ### WordPress role sync
 
-A paid member's WordPress role follows their category (Settings → Membership categories), through `MyNJILGA_Role_Sync`. It's granted on payment and on login/registration, and **swapped** — the new category's role added, every other membership role removed — when a paid member's category tag changes in FluentCRM (instantly, via FluentCRM's tag hooks) or when staff change the mapping in Settings (a background resync of everyone carrying the paid tag). Setup → **WordPress role sync** shows the mapping, the managed roles, the last run, and a **Review role changes** screen that lists what a full sync would change before applying it.
+A paid member's WordPress role follows their category (Settings → Categories & Pricing), through `MyNJILGA_Role_Sync`. It's granted on payment and on login/registration, and **swapped** — the new category's role added, every other membership role removed — when a paid member's category tag changes in FluentCRM (instantly, via FluentCRM's tag hooks) or when staff change the mapping in Settings (a background resync of everyone carrying the paid tag). Setup → **WordPress role sync** shows the mapping, the managed roles, the last run, and a **Review role changes** screen that lists what a full sync would change before applying it.
 
 Only *managed* roles are ever removed — every role the category map uses or has used, plus the legacy `professional` — never WordPress's own `administrator`, `editor`, `author`, `contributor` or `subscriber`. Contacts not paid for the current or next dues year are left alone (non-payment is the downgrade sweep's job), and a category mapped to a role the site doesn't define leaves its members untouched.
 
@@ -242,7 +260,7 @@ Toolbar filters (dues year, status, payment method) narrow the underlying row se
 | Step | What it does |
 |---|---|
 | **1 Check** | A live readiness checklist, grouped: *Payments* (Live mode, key connected, hardening), *Background jobs* (Action Scheduler available, the daily reconciler scheduled, no stuck webhook events), *Dues settings* (every category's tag exists in FluentCRM and the pricing ladder has no gaps/overlaps, what each category is charged, who is billed when untagged, joiners' dues year, batch size) and *Invoice emails* (who receives, Reply-To, check address, due date, whether a test email has been sent). **Fix** = will cause real problems; **Check** = worth a look; **Confirm** = can't be read from here (e.g. that Stripe's own invoice emails are off), so it is for a person to check once. Every probe is isolated: one that fails shows as "couldn't check" instead of breaking the page. |
-| **2 Open** | Sets *Joins cover next year from* (the same `MM-DD` setting as Settings → Dues & Billing, validated) and generates the preview. Generating is safe to repeat and never touches an invoice already created. |
+| **2 Open** | Sets *Joins cover next year from* (the same `MM-DD` setting as Settings → Online Joining, validated) and generates the preview. Generating is safe to repeat and never touches an invoice already created. |
 | **3 Review** | The preview in numbers (ready, need attention, nothing to bill, already created) with verdicts, and the list of firms a person must fix — chiefly firms with **no Owner**. Empty and fully-exempt firms are counted, not listed. |
 | **4 Create** | Tick a few **pilot firms** and create just those, check them in the Stripe Dashboard, then create the rest. Same eligibility as the Invoicing page (draft/approved rows of this year and the active Stripe mode, gateway ready) and the same background batches. Creating does not email anyone. |
 | **5 Send** | **A.** Send a plain test email to any address you type (it defaults to yours; the wizard remembers that mail works). **B.** Read the exact invoice email a chosen firm will get — built by the same `MyNJILGA_Invoice_Sender::compose()` that sends the real one — and send a copy marked `[SAMPLE]` to any address you like (never to the firm, no Cc, and it doesn't mark anything sent). It works for a firm whose invoice isn't created yet too (the payment link is a placeholder), and in Test mode. **C.** Optionally send a few firms now. **D.** Schedule the rest. |
@@ -503,7 +521,8 @@ my-njilga/
 │   ├── class-page-*.php                  ← Dashboard, Reports, Members, Trustees, Companies, Firms
 │   ├── class-page-invoicing.php          ← Invoicing dashboard + admin-post handlers
 │   ├── class-page-payments.php           ← Payments ledger (by invoice / firm / member / aging)
-│   ├── class-page-settings.php           ← Dues & Billing settings UI + Payments (Stripe) tab
+│   ├── class-page-settings.php           ← Settings: the tab strip, the per-tab forms and their save handler (each tab saves only its own settings) + Payments (Stripe) tab
+│   ├── class-page-invoice-email.php      ← Settings → Invoice Email: recipients, wording, preview, Send test (draft kept across redirects)
 │   ├── class-page-applications.php       ← Enrollment review queue
 │   ├── class-page-setup.php              ← Environment, tag/product audit, Stripe health + API log
 │   ├── class-firm-status-page.php        ← [njilga_firm_dues_status]
