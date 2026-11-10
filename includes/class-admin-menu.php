@@ -15,6 +15,7 @@ class MyNJILGA_Admin_Menu {
     const SLUG_COMPANIES  = 'my-njilga-companies';
     const SLUG_FIRMS      = 'my-njilga-firms';
     const SLUG_INVOICING    = 'my-njilga-invoicing';
+    const SLUG_LAUNCH       = 'my-njilga-launch';
     const SLUG_PAYMENTS     = 'my-njilga-payments';
     const SLUG_APPLICATIONS = 'my-njilga-applications';
     const SLUG_SETTINGS     = 'my-njilga-settings';
@@ -64,6 +65,7 @@ class MyNJILGA_Admin_Menu {
         add_submenu_page( self::SLUG_ROOT, 'Dashboard', 'Dashboard', 'manage_options', self::SLUG_ROOT,      [ 'MyNJILGA_Page_Dashboard',  'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Reports',   'Reports',   'manage_options', self::SLUG_REPORTS,   [ 'MyNJILGA_Page_Reports',    'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Invoicing', 'Invoicing', 'manage_options', self::SLUG_INVOICING, [ 'MyNJILGA_Page_Invoicing',  'render' ] );
+        add_submenu_page( self::SLUG_ROOT, 'Launch Wizard', 'Launch Wizard', 'manage_options', self::SLUG_LAUNCH, [ 'MyNJILGA_Page_Launch', 'render' ] );
         add_submenu_page( self::SLUG_ROOT, 'Payments',  'Payments',  'manage_options', self::SLUG_PAYMENTS,  [ 'MyNJILGA_Page_Payments',  'render' ] );
 
         // Applications: the enrollment review queue, with a pending-count

@@ -26,6 +26,7 @@ A WordPress plugin that gives NJILGA admins a one-stop dashboard for the whole a
 | **Companies** | FluentCRM Companies that have at least one contact, grouped into **1 / 2–5 / 6+ Active Members** buckets and a **No Active Members** bucket. Companies with no contacts at all are not listed, only counted in a note. |
 | **Membership by Firm** | Every FluentCRM Company with ≥1 contact, listed with its contacts. Exports to formatted Excel. |
 | **Invoicing** | Annual dues invoicing — see [Dues Invoicing](#dues-invoicing) below. |
+| **Launch Wizard** | Opens a dues year in five steps — readiness checks, open the year, review the preview, create the invoices, then test the email and schedule the rest to go out in paced batches. See [Launch Wizard](#launch-wizard). |
 | **Payments** | Cross-year Stripe payments ledger — see [The Payments ledger](#the-payments-ledger) below. |
 | **Applications** | Enrollment review queue — see [Enrollment gate](#enrollment-gate) — and the **Online joins** tab — see [Online joining](#online-joining). |
 | **Settings** | **Dues & Billing** — category mapping, assessment, per-firm billing mode, all switches. **Payments** tab — Stripe connection, mode, and payment settings. |
@@ -217,6 +218,35 @@ Created, sent, paid, downgraded, application approved/rejected — each leaves a
 | **Aging** | Outstanding balances bucketed by days past due (Not Yet Due / 0–30 / 31–60 / 61–90 / 90+), one boxed table per bucket. |
 
 Toolbar filters (dues year, status, payment method) narrow the underlying row set that all four views draw from; switching tabs just changes which view is on screen. Exports both a CSV (By Invoice / By Firm / Aging) and a formatted `.xls` (By Firm / Aging) of exactly what's on screen.
+
+---
+
+## Launch Wizard
+
+**My NJILGA → Launch Wizard** walks one dues year from "is the site ready?" to "every invoice emailed", in five steps. Each step is its own URL (`?step=1…5`), so it can be left and resumed; the stepper shows where each one stands. It adds no new way to bill anyone — it drives the same preview, the same Invoice Creator and the same Invoice Sender the Invoicing page uses — it adds the checks, the order, and the schedule.
+
+| Step | What it does |
+|---|---|
+| **1 Check** | A live readiness checklist, grouped: *Payments* (Live mode, key connected, hardening), *Background jobs* (Action Scheduler available, the daily reconciler scheduled, no stuck webhook events), *Dues settings* (every category's tag exists in FluentCRM and the pricing ladder has no gaps/overlaps, what each category is charged, who is billed when untagged, joiners' dues year, batch size) and *Invoice emails* (who receives, Reply-To, check address, due date, whether a test email has been sent). **Fix** = will cause real problems; **Check** = worth a look; **Confirm** = can't be read from here (e.g. that Stripe's own invoice emails are off), so it is for a person to check once. Every probe is isolated: one that fails shows as "couldn't check" instead of breaking the page. |
+| **2 Open** | Sets *Joins cover next year from* (the same `MM-DD` setting as Settings → Dues & Billing, validated) and generates the preview. Generating is safe to repeat and never touches an invoice already created. |
+| **3 Review** | The preview in numbers (ready, need attention, nothing to bill, already created) with verdicts, and the list of firms a person must fix — chiefly firms with **no Owner**. Empty and fully-exempt firms are counted, not listed. |
+| **4 Create** | Tick a few **pilot firms** and create just those, check them in the Stripe Dashboard, then create the rest. Same eligibility as the Invoicing page (draft/approved rows of this year and the active Stripe mode, gateway ready) and the same background batches. Creating does not email anyone. |
+| **5 Send** | **A.** Send yourself a test email (and the wizard remembers that mail works). **B.** Read the exact invoice email a chosen firm will get — built by the same `MyNJILGA_Invoice_Sender::compose()` that sends the real one — and send yourself a copy marked `[SAMPLE]` (to you only: no firm address, no Cc). **C.** Optionally send a few firms now. **D.** Schedule the rest. |
+
+### Scheduled sending
+
+Pick a start time (site timezone), **emails per batch** (1–200), **minutes between batches** (5–1440), and optionally *weekdays only* and an *only between* hours window (DST-safe). *Preview the timing* shows the first and last batch before anything is scheduled; scheduling needs a ticked confirmation that you've read the sample.
+
+The schedule is one Action Scheduler action per year (`njilga_launch_send_batch`, group `njilga-dues`, args `[ year ]`) that re-queues itself after each batch. It is built to fail visibly rather than quietly:
+
+- **Only `created`, unsent, Live-mode invoices are sent**, each re-read fresh just before sending, so an invoice already sent, paid or voided (by hand, by a pilot, by the Invoicing page) is never emailed again.
+- **One batch at a time** (an atomic lock); a stray or duplicate firing between batches does nothing until the next batch is due; **Send the next batch now** is the explicit override.
+- **Stripe leaving Live mode, or not being ready, stops it**: a mode change halts the send; "not ready" delays 15 minutes and retries.
+- **Five mail-system failures in a row halt it**; a firm with no email on file is set aside (one retry) without stopping everyone else. A failed row records its error on the firm's Invoicing row.
+- **A next batch that can't be scheduled halts it** rather than stalling silently. Any unexpected error halts it too.
+- Halting, completing and failing each **email the person who scheduled it**. **Pause**, **Resume** and **Cancel** are always available; progress and a log are shown on step 5. Nothing is ever emailed twice.
+
+Test mode: the wizard builds and previews everything but will not send or schedule, because a Test-mode invoice would put a test payment link in front of a real contact.
 
 ---
 
@@ -513,6 +543,10 @@ my-njilga/
 │   │   ├── class-invoice-stats.php       ← Dashboard invoice figures: one GROUP BY, mode-scoped, parity-tested against the Payments ledger
 │   │   ├── class-downgrade-sweep.php     ← preview() + run()
 │   │   └── class-invoicing-notes.php     ← FluentCRM Company Note helper
+│   ├── launch/                           ← Launch Wizard (open a year, check, create, schedule the emails)
+│   │   ├── class-launch-checks.php       ← Readiness verdicts + preview review (pure evaluators, unit-tested) + the facts gatherer
+│   │   ├── class-launch-schedule.php     ← Send scheduling: options/window math + the batch runner (ports-injected, unit-tested) + Action Scheduler glue
+│   │   └── class-page-launch.php         ← The five-step page + its admin-post handlers
 │   └── enrollment/
 │       ├── class-applications-table.php  ← njilga_membership_applications
 │       ├── class-application-stats.php   ← Dashboard application + online-join figures

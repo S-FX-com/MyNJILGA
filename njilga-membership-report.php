@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, a member-facing dues status and membership overview, a public firm renewal lookup, a Dues History tab on FluentCRM contacts and companies, and tools to bring earlier years' dues in from PMPro or a spreadsheet — driven entirely from FluentCRM tags on the local install.
- * Version:     3.11.1
+ * Version:     3.12.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -82,6 +82,9 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-member-tags.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
+require_once NJILGA_REPORT_DIR . 'includes/launch/class-launch-schedule.php';
+require_once NJILGA_REPORT_DIR . 'includes/launch/class-launch-checks.php';
+require_once NJILGA_REPORT_DIR . 'includes/launch/class-page-launch.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-payments.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-settings.php';
 
@@ -178,6 +181,11 @@ MyNJILGA_Stripe_Webhook::register();
 // scheduler's worker can find the hook.
 MyNJILGA_Stripe_Reconciler::register();
 
+// Launch Wizard — the scheduled, paced send of the invoice emails. Its
+// Action Scheduler hook must be registered on every request so the
+// scheduler's worker can find it.
+MyNJILGA_Launch_Schedule::register();
+
 // Role sync: a paid member's WordPress role follows their category. Hooks
 // FluentCRM's tag events and its Action Scheduler chunk on every request.
 MyNJILGA_Role_Sync::register();
@@ -267,6 +275,22 @@ add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SEND,      [ 'MyNJIL
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_DOWNGRADE, [ 'MyNJILGA_Page_Invoicing', 'handle_downgrade' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SYNC,      [ 'MyNJILGA_Page_Invoicing', 'handle_sync' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_VOID,      [ 'MyNJILGA_Page_Invoicing', 'handle_void' ] );
+
+// Launch Wizard — open the year, create, test, send and schedule. Handlers
+// take no parameters (WordPress passes '' to an argument-less action).
+foreach ( [
+    MyNJILGA_Page_Launch::ACTION_CUTOVER  => 'handle_cutover',
+    MyNJILGA_Page_Launch::ACTION_PREVIEW  => 'handle_preview',
+    MyNJILGA_Page_Launch::ACTION_CREATE   => 'handle_create',
+    MyNJILGA_Page_Launch::ACTION_MAILTEST => 'handle_mailtest',
+    MyNJILGA_Page_Launch::ACTION_SAMPLE   => 'handle_sample',
+    MyNJILGA_Page_Launch::ACTION_SEND_NOW => 'handle_send_now',
+    MyNJILGA_Page_Launch::ACTION_SCHEDULE => 'handle_schedule',
+    MyNJILGA_Page_Launch::ACTION_CONTROL  => 'handle_control',
+] as $njilgaLaunchAction => $njilgaLaunchHandler ) {
+    add_action( 'admin_post_' . $njilgaLaunchAction, [ 'MyNJILGA_Page_Launch', $njilgaLaunchHandler ] );
+}
+unset( $njilgaLaunchAction, $njilgaLaunchHandler );
 
 // Dues & Billing settings.
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_SAVE,  [ 'MyNJILGA_Page_Settings', 'handle_save' ] );

@@ -399,6 +399,28 @@ class MyNJILGA_Admin_UI {
 .njilga-linkcard-title{display:block;font-size:15px;font-weight:600;margin-bottom:4px}
 .njilga-linkcard-desc{display:block;color:var(--muted-fg);font-size:13px;line-height:1.5}
 
+/* --- Launch Wizard ------------------------------------------------------- */
+.njilga-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:6px 0 22px}
+.njilga-step{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;background:var(--bg);
+  border:1px solid var(--border);border-radius:var(--radius-card);color:inherit;
+  transition:border-color .12s,background .12s}
+.njilga-step:hover{border-color:var(--ring);background:var(--hover);text-decoration:none;color:inherit}
+.njilga-step.is-current{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary)}
+.njilga-step-num{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+  border-radius:999px;background:var(--muted);color:var(--muted-fg);font-size:12.5px;font-weight:700;flex:0 0 auto}
+.njilga-step.is-current .njilga-step-num{background:var(--primary);color:var(--primary-fg)}
+.njilga-step.is-done .njilga-step-num{background:var(--success-bg);color:var(--success-fg)}
+.njilga-step-body{display:flex;flex-direction:column;gap:5px;min-width:0}
+.njilga-step-title{font-size:14px;font-weight:600}
+@media (max-width:1100px){.njilga-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.njilga-check-title{font-weight:600}
+.njilga-check-detail{color:var(--muted-fg);font-size:13px;line-height:1.55;margin-top:3px;max-width:820px}
+.njilga-emailsample{white-space:pre-wrap;word-break:break-word;background:var(--muted);border:1px solid var(--border);
+  border-radius:var(--radius-control);padding:14px 16px;font-size:13px;line-height:1.55;max-width:780px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.njilga-emailmeta{font-size:13px;line-height:1.7;margin:0 0 8px}
+.njilga-timeline li{margin:4px 0;font-size:13px}
+
 /* --- Tabs ---------------------------------------------------------------- */
 .njilga-tabs{display:flex;gap:4px;padding:10px 12px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
 .njilga-tabs-bare{padding-left:0;padding-right:0;margin-bottom:18px}
@@ -417,7 +439,7 @@ class MyNJILGA_Admin_UI {
 .njilga-search{position:relative;flex:1 1 260px;max-width:380px}
 .njilga-search .njilga-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted-fg)}
 .njilga-ui input[type=text],.njilga-ui input[type=email],.njilga-ui input[type=number],
-.njilga-ui input[type=url],.njilga-ui input[type=search],.njilga-ui input[type=date],.njilga-ui textarea{
+.njilga-ui input[type=url],.njilga-ui input[type=search],.njilga-ui input[type=date],.njilga-ui input[type=datetime-local],.njilga-ui textarea{
   height:38px;padding:0 12px;border:1px solid var(--border);border-radius:var(--radius-control);
   font-size:13.5px;background:var(--bg);color:var(--fg);font-family:inherit;max-width:100%}
 .njilga-ui textarea{height:auto;padding:9px 12px;line-height:1.5;resize:vertical}
