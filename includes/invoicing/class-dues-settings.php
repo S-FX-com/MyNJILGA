@@ -123,6 +123,7 @@ class MyNJILGA_Dues_Settings {
                     'tag'                  => 'past-president',
                     'price_cents'          => 0,
                     'role'                 => 'professional',
+                    'member_tag'           => '',
                     'tier_eligible'        => false,
                     'applicant_selectable' => false,
                     'tiers'                => [],
@@ -133,6 +134,7 @@ class MyNJILGA_Dues_Settings {
                     'tag'                  => 'senior-trustee',
                     'price_cents'          => 0,
                     'role'                 => 'professional',
+                    'member_tag'           => '',
                     'tier_eligible'        => false,
                     'applicant_selectable' => false,
                     'tiers'                => [],
@@ -143,6 +145,7 @@ class MyNJILGA_Dues_Settings {
                     'tag'                  => 'law-student',
                     'price_cents'          => 3000, // Confirmed by NJILGA 2026-08: students currently pay $30 (may become free later).
                     'role'                 => 'professional',
+                    'member_tag'           => '',
                     'tier_eligible'        => false,
                     'applicant_selectable' => true,
                     'tiers'                => [],
@@ -153,6 +156,7 @@ class MyNJILGA_Dues_Settings {
                     'tag'                  => 'emerging-professional',
                     'price_cents'          => 5000, // Confirmed by NJILGA 2026-08: $50, flat (non-tier).
                     'role'                 => 'professional',
+                    'member_tag'           => '',
                     'tier_eligible'        => false,
                     'applicant_selectable' => true,
                     'tiers'                => [],
@@ -163,6 +167,7 @@ class MyNJILGA_Dues_Settings {
                     'tag'                  => 'professional',
                     'price_cents'          => 12500,
                     'role'                 => 'professional',
+                    'member_tag'           => '',
                     'tier_eligible'        => true,
                     'applicant_selectable' => true,
                     'tiers'                => [
@@ -314,6 +319,7 @@ class MyNJILGA_Dues_Settings {
         ];
         foreach ( $s['categories'] as $cat ) {
             $slugs[] = $cat['tag'];
+            $slugs[] = $cat['member_tag'] ?? '';
         }
         foreach ( $s['assessment']['qualifiers'] as $q ) {
             $slugs[] = $q['tag'];
@@ -489,6 +495,8 @@ class MyNJILGA_Dues_Settings {
             'tag'                  => sanitize_title( (string) ( $cat['tag'] ?? '' ) ),
             'price_cents'          => max( 0, (int) ( $cat['price_cents'] ?? 0 ) ),
             'role'                 => sanitize_key( (string) ( $cat['role'] ?? '' ) ),
+            // Optional FluentCRM tag added when a member of this category pays (see MyNJILGA_Member_Tags).
+            'member_tag'           => sanitize_title( (string) ( $cat['member_tag'] ?? '' ) ),
             'tier_eligible'        => ! empty( $cat['tier_eligible'] ),
             'applicant_selectable' => ! empty( $cat['applicant_selectable'] ),
             'tiers'                => $tiers,

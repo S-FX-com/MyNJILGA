@@ -89,6 +89,8 @@ class MyNJILGA_Downgrade_Sweep {
                 }
                 MyNJILGA_Tags::attach_slug( $contact, $unpaidTag );
                 MyNJILGA_Tags::detach_slug( $contact, $paidTag );
+                // The member tag means "has paid", so it goes with the paid tag.
+                MyNJILGA_Member_Tags::revoke( $contact );
 
                 // Every membership role, not just the one frozen into this
                 // (possibly old) snapshot — the mapping may have changed since.

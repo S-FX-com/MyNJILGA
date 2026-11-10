@@ -126,6 +126,10 @@ class MyNJILGA_Payment_Listener {
             MyNJILGA_Tags::attach_slug( $contact, $paidTag );
             MyNJILGA_Tags::detach_slug( $contact, $unpaidTag );
 
+            // The category's "Member tag" (Settings), if it has one. Isolated:
+            // a tag that can't be applied never stops the payment settling.
+            MyNJILGA_Member_Tags::grant( $contact );
+
             $result        = self::role_step( $contact );
             $roleResults[] = $result;
             if ( MyNJILGA_Role_Sync::holds_role( $result ) ) {

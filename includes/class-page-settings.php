@@ -97,6 +97,16 @@ class MyNJILGA_Page_Settings {
         if ( ! empty( $_GET['reset'] ) ) {
             MyNJILGA_Admin_UI::callout( 'Settings reset to the seeded defaults.', 'success' );
         }
+        if ( ! empty( $_GET['member_tag_rejected'] ) ) {
+            $refused = array_filter( array_map( 'sanitize_title', explode( ',', (string) wp_unslash( $_GET['member_tag_rejected'] ) ) ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+            MyNJILGA_Admin_UI::callout(
+                sprintf(
+                    '<strong>Member tag not saved:</strong> %s already means something to pricing or billing (a category, paid/unpaid or assessment tag), so it can&rsquo;t also be a member tag — paying would change who is charged what. Pick a different tag; the rest of your changes were saved.',
+                    implode( ', ', array_map( static function ( $t ) { return '<code>' . esc_html( $t ) . '</code>'; }, $refused ) )
+                ),
+                'warning'
+            );
+        }
         if ( isset( $_GET['role_sync'] ) ) {
             $n = (int) $_GET['role_sync'];
             MyNJILGA_Admin_UI::callout(
@@ -584,7 +594,7 @@ class MyNJILGA_Page_Settings {
     private static function render_categories( array $s, array $tags, array $roles ): void {
         MyNJILGA_Admin_UI::section(
             'Membership categories',
-            'Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> follows the category: granted on payment, and swapped when a paid member\'s category tag or this mapping changes (Setup → WordPress role sync).'
+            'Rows are matched in <strong>Order</strong> — a contact carrying two category tags belongs to the first one listed (so exempt categories come before Professional). <strong>Tier-eligible</strong> categories are ranked alphabetically within the firm and priced by rank using the tier table; everything else is flat-priced and never occupies a paid slot. <strong>Role</strong> follows the category: granted on payment, and swapped when a paid member\'s category tag or this mapping changes (Setup → WordPress role sync). <strong>Member tag</strong> (optional) is the FluentCRM tag added to a member of the category when they pay, and removed by the downgrade sweep — the Tag slug says who is in the category, the Member tag marks who has paid. It must be a different tag from the category, paid/unpaid and assessment tags.'
         );
 
         // Stripe bills inline line items, so the Price column IS the
@@ -592,11 +602,11 @@ class MyNJILGA_Page_Settings {
         MyNJILGA_Admin_UI::callout( 'Prices are billed as inline line items on the Stripe invoice — the amounts below are exactly what the firm is charged.', 'info' );
 
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
-                <th style="width:70px">Order</th><th style="min-width:200px">Label</th><th style="min-width:180px">Tag slug</th><th style="width:100px">Price ($)</th><th>Role</th><th style="width:80px">Tier-eligible</th><th style="width:90px">Applicant may pick</th><th style="width:60px">Delete</th>
+                <th style="width:70px">Order</th><th style="min-width:200px">Label</th><th style="min-width:180px">Tag slug</th><th style="width:100px">Price ($)</th><th>Role</th><th class="njilga-col-wide">Member tag</th><th style="width:80px">Tier-eligible</th><th style="width:90px">Applicant may pick</th><th style="width:60px">Delete</th>
               </tr></thead><tbody>';
 
         $rows = $s['categories'];
-        $rows[] = [ 'key' => '', 'label' => '', 'tag' => '', 'price_cents' => 0, 'role' => '', 'tier_eligible' => false, 'applicant_selectable' => true, 'tiers' => [] ];
+        $rows[] = [ 'key' => '', 'label' => '', 'tag' => '', 'price_cents' => 0, 'role' => '', 'member_tag' => '', 'tier_eligible' => false, 'applicant_selectable' => true, 'tiers' => [] ];
         foreach ( $rows as $i => $cat ) {
             $isNew = $cat['key'] === '';
             $n     = "categories[$i]";
@@ -606,6 +616,8 @@ class MyNJILGA_Page_Settings {
             printf( '<td><input type="text" list="njilga-tags" name="%s[tag]" value="%s" class="njilga-full">%s</td>', $n, esc_attr( $cat['tag'] ), self::tag_check( $cat['tag'] ) );
             printf( '<td><input type="number" step="0.01" min="0" name="%s[price]" value="%s" style="width:92px"></td>', $n, esc_attr( number_format( $cat['price_cents'] / 100, 2, '.', '' ) ) );
             printf( '<td>%s</td>', self::role_select( "{$n}[role]", $cat['role'], $roles ) );
+            $memberTag = (string) ( $cat['member_tag'] ?? '' );
+            printf( '<td><input type="text" list="njilga-tags" name="%s[member_tag]" value="%s" class="njilga-full" placeholder="— none —">%s</td>', $n, esc_attr( $memberTag ), self::tag_check( $memberTag ) );
             printf( '<td class="njilga-col-center"><input type="checkbox" name="%s[tier_eligible]" value="1"%s></td>', $n, checked( ! empty( $cat['tier_eligible'] ), true, false ) );
             printf( '<td class="njilga-col-center"><input type="checkbox" name="%s[applicant_selectable]" value="1"%s></td>', $n, checked( ! empty( $cat['applicant_selectable'] ), true, false ) );
             printf( '<td class="njilga-col-center">%s</td>', $isNew ? '' : sprintf( '<input type="checkbox" name="%s[delete]" value="1">', $n ) );
@@ -621,7 +633,7 @@ class MyNJILGA_Page_Settings {
                 ];
             }
             $tiers[] = [ 'key' => '', 'label' => '', 'from' => 0, 'to' => 0, 'price_cents' => 0 ];
-            echo '<tr><td></td><td colspan="7" style="padding:0 14px 12px"><details class="njilga-details" style="margin:0"' . ( ! empty( $cat['tier_eligible'] ) ? ' open' : '' ) . '><summary>' . MyNJILGA_Admin_UI::icon( 'sliders' ) . ' Tier pricing by rank (used only when Tier-eligible is checked)</summary>';
+            echo '<tr><td></td><td colspan="8" style="padding:0 14px 12px"><details class="njilga-details" style="margin:0"' . ( ! empty( $cat['tier_eligible'] ) ? ' open' : '' ) . '><summary>' . MyNJILGA_Admin_UI::icon( 'sliders' ) . ' Tier pricing by rank (used only when Tier-eligible is checked)</summary>';
             echo '<div class="njilga-card njilga-table-boxed" style="margin-top:8px;max-width:940px"><div class="njilga-tablewrap"><table class="njilga-table njilga-table-compact"><thead><tr><th>Tier label</th><th style="width:90px">From rank</th><th style="width:110px">To rank (0 = open)</th><th style="width:100px">Price ($)</th></tr></thead><tbody>';
             foreach ( $tiers as $j => $t ) {
                 $tn = "{$n}[tiers][$j]";
@@ -874,6 +886,7 @@ class MyNJILGA_Page_Settings {
                 'tag'                  => sanitize_title( (string) ( $row['tag'] ?? '' ) ),
                 'price_cents'          => self::dollars_to_cents( $row['price'] ?? 0 ),
                 'role'                 => sanitize_key( (string) ( $row['role'] ?? '' ) ),
+                'member_tag'           => sanitize_title( (string) ( $row['member_tag'] ?? '' ) ),
                 'tier_eligible'        => ! empty( $row['tier_eligible'] ),
                 'applicant_selectable' => ! empty( $row['applicant_selectable'] ),
                 'tiers'                => $tiers,
@@ -930,6 +943,13 @@ class MyNJILGA_Page_Settings {
             }
         }
 
+        // A member tag is something paying GRANTS; it must not be a tag that
+        // pricing, billing or the role logic already READS (a category's own
+        // tag, paid/unpaid, an assessment qualifier…), or paying would change
+        // who is charged what. Refused ones are blanked and reported.
+        $screened   = MyNJILGA_Member_Tags::screen( $categories, MyNJILGA_Member_Tags::reserved_slugs( $categories, $gen, (array) ( $assessment['qualifiers'] ?? [] ) ) );
+        $categories = $screened['categories'];
+
         MyNJILGA_Dues_Settings::save( [
             'general'        => $gen,
             'categories'     => $categories,
@@ -942,6 +962,9 @@ class MyNJILGA_Page_Settings {
         MyNJILGA_Membership_Stats::flush();
 
         $args   = [ 'saved' => '1' ];
+        if ( $screened['rejected'] ) {
+            $args['member_tag_rejected'] = implode( ',', $screened['rejected'] );
+        }
         $queued = MyNJILGA_Role_Sync::after_settings_change( $current['categories'], $roleSignature );
         if ( $queued !== null ) {
             $args['role_sync'] = $queued;

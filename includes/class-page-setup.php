@@ -298,6 +298,7 @@ class MyNJILGA_Page_Setup {
         $add( (string) $s['general']['join_prelaw_tag'], 'Online join: undergraduate (pre-law)' );
         foreach ( $s['categories'] as $cat ) {
             $add( (string) $cat['tag'], 'Category: ' . $cat['label'] );
+            $add( (string) ( $cat['member_tag'] ?? '' ), 'Member tag (added on payment): ' . $cat['label'] );
         }
         foreach ( $s['assessment']['qualifiers'] as $q ) {
             $add( (string) $q['tag'], 'Assessment qualifier: ' . $q['label'] );

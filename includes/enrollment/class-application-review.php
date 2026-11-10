@@ -107,6 +107,7 @@ class MyNJILGA_Application_Review {
                     if ( $yearTagId ) {
                         $contact->attachTags( [ $yearTagId ] );
                     }
+                    MyNJILGA_Member_Tags::grant( $contact ); // Marked current, so the category's member tag too.
                     $granted = MyNJILGA_Role_Sync::holds_role( MyNJILGA_Role_Sync::sync_contact( $contact ) );
                     $outcome = sprintf( 'marked current for %d at no charge%s; first invoice will be the %d batch', $year, $granted ? ', WordPress role granted' : ' (no linked WordPress account yet — role will apply when they have one and pay)', $year + 1 );
                     break;
