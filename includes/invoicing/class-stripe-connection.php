@@ -258,6 +258,18 @@ class MyNJILGA_Stripe_Connection {
     }
 
     /**
+     * PURE: whether a stored value is an unencrypted Stripe secret as pasted
+     * (secret/restricted API key or webhook signing secret) — what an install
+     * holds for any key connected before NJILGA_STRIPE_KEY was defined.
+     * Ciphertext is base64 and never contains an underscore, so the two
+     * cannot be confused.
+     */
+    public static function is_legacy_plaintext_secret( string $stored ): bool {
+        // \z, not $ — `$` would also accept a trailing newline.
+        return (bool) preg_match( '/^(?:(?:sk|rk)_(?:test|live)_|whsec_)[A-Za-z0-9]+\z/', $stored );
+    }
+
+    /**
      * Decrypts a stored secret. Returns '' for "nothing stored", the
      * plaintext string on success, or null when a value IS stored but
      * cannot be decrypted (wrong/rotated NJILGA_STRIPE_KEY, corrupt
@@ -275,6 +287,16 @@ class MyNJILGA_Stripe_Connection {
             // that legitimately can't be recovered, but we can't tell
             // the difference here without trying, so we hand it back as
             // given rather than guess.
+            return $stored;
+        }
+
+        // A secret saved BEFORE NJILGA_STRIPE_KEY was defined is still the
+        // plain Stripe string. It can't be mistaken for ciphertext (the
+        // underscore is outside the base64 alphabet), and treating it as
+        // corrupt would make the webhook answer 400 to every event and every
+        // Stripe call fail the moment the constant is added to wp-config.php.
+        // It is re-encrypted the next time it is saved.
+        if ( self::is_legacy_plaintext_secret( $stored ) ) {
             return $stored;
         }
 
@@ -742,6 +764,20 @@ class MyNJILGA_Stripe_Connection {
                 return [];
             }
             return [ 'No webhook endpoint on file — payments will not update automatically until one is configured.' ];
+        }
+
+        // The endpoint's id alone proves nothing: every delivery is verified
+        // against its signing secret, and without one the receiver answers
+        // 400 to everything — no payment would ever settle, while this page
+        // reported a healthy connection. That is exactly the state left when
+        // a key is connected and the site's endpoint already exists in Stripe
+        // (Stripe reveals a signing secret only when the endpoint is created).
+        $webhookSecret = self::decrypted_webhook_secret( $mode );
+        if ( $webhookSecret === null ) {
+            return [ 'The stored webhook signing secret could not be decrypted — check NJILGA_STRIPE_KEY in wp-config.php, then paste the secret again under Settings > Payments.' ];
+        }
+        if ( $webhookSecret === '' ) {
+            return [ 'This site\'s webhook endpoint exists in Stripe, but its signing secret is not on file here — Stripe\'s payment notices would all be rejected, so payments would not update. Paste the secret (Stripe Dashboard → Developers → Webhooks → the endpoint → Signing secret) under Settings > Payments.' ];
         }
 
         $epResp = ( new MyNJILGA_Stripe_Client( $secretKey ) )->request( 'GET', '/webhook_endpoints/' . rawurlencode( $webhookId ) );

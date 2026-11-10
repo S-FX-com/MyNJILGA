@@ -266,6 +266,35 @@ class StripeGatewayTest extends NJILGA_TestCase {
         $this->assertSame( 'njilga-inv-99-2028-live', $client->calls[0]['opts']['idempotency_key'] );
     }
 
+    /**
+     * Stripe replays a key's first result for 24h — including a draft we
+     * have since deleted as abandoned. So the attempt after an abandoned
+     * draft must carry a different key, on the create AND on the add_lines /
+     * finalize calls derived from it; attempt 0 stays the original key.
+     */
+    public function testRetryAfterAnAbandonedDraftUsesAFreshKeyFamily(): void {
+        $this->assertSame( 'njilga-inv-99-2028-live', MyNJILGA_Stripe_Invoice_Gateway::idempotency_key( 99, 2028, 'live' ) );
+        $this->assertSame( 'njilga-inv-99-2028-live', MyNJILGA_Stripe_Invoice_Gateway::idempotency_key( 99, 2028, 'live', 0 ) );
+        $this->assertSame( 'njilga-inv-99-2028-live-r1', MyNJILGA_Stripe_Invoice_Gateway::idempotency_key( 99, 2028, 'live', 1 ) );
+        $this->assertSame( 'njilga-inv-99-2028-live-r2', MyNJILGA_Stripe_Invoice_Gateway::idempotency_key( 99, 2028, 'live', 2 ) );
+
+        $client = new FakeStripeClientForGatewayTest();
+        $client->queue_response( [ 'body' => [ 'id' => 'in_9' ] ] );
+        $client->queue_response( [ 'body' => [] ] );
+        $client->queue_response( [ 'body' => [ 'id' => 'in_9' ] ] );
+
+        ( new MyNJILGA_Stripe_Invoice_Gateway( $client ) )->create_order( 'cus_1', $this->sample_line_items( 1 ), $this->sample_context( [
+            'invoice_row_id'      => 99,
+            'dues_year'           => 2028,
+            'mode'                => 'live',
+            'idempotency_attempt' => 1,
+        ] ) );
+
+        $this->assertSame( 'njilga-inv-99-2028-live-r1', $client->calls[0]['opts']['idempotency_key'] );
+        $this->assertSame( 'njilga-inv-99-2028-live-r1-lines-0', $client->calls[1]['opts']['idempotency_key'] );
+        $this->assertSame( 'njilga-inv-99-2028-live-r1-finalize', $client->calls[2]['opts']['idempotency_key'] );
+    }
+
     // -------------------------------------------------------------------
     // (d) >50 line items chunks add_lines calls at 50
     // -------------------------------------------------------------------

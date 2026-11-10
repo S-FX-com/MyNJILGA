@@ -33,6 +33,36 @@ class MyNJILGA_Invoice_Creator {
     // Batch scheduling
     // -------------------------------------------------------------------------
 
+    /** How long a row may sit "queued" before it is assumed to have been dropped (seconds). */
+    const QUEUE_STALE_AFTER = 3600;
+
+    /**
+     * PURE: whether a row's queued_at still means "a background job has this".
+     *
+     * queued_at is cleared only when a row is created, errors, or is sent
+     * back to draft. If a chunk is killed mid-run (PHP time limit, fatal,
+     * dead worker) Action Scheduler marks the action failed and never
+     * retries it, so every row it hadn't reached stayed "Creating…" with no
+     * button, and schedule() skipped it as already queued. After an hour a
+     * queued mark is treated as dropped, so the row is offered again —
+     * re-queuing is safe: run_chunk() re-checks each row's status and the
+     * Stripe create carries an idempotency key.
+     *
+     * @param string $queuedAt  The row's queued_at (site time, 'Y-m-d H:i:s'), '' when never queued.
+     * @param string $nowMysql  Site "now" in the same format.
+     */
+    public static function is_actively_queued( string $queuedAt, string $nowMysql ): bool {
+        if ( $queuedAt === '' || $queuedAt === '0000-00-00 00:00:00' ) {
+            return false;
+        }
+        $queued = strtotime( $queuedAt );
+        $now    = strtotime( $nowMysql );
+        if ( $queued === false || $now === false ) {
+            return true; // Can't tell — leave it alone rather than double-queue.
+        }
+        return ( $now - $queued ) < self::QUEUE_STALE_AFTER;
+    }
+
     /**
      * Queue creation for the given approved rows. Uses Action Scheduler
      * when available (chunked), else runs inline right now.
@@ -47,7 +77,7 @@ class MyNJILGA_Invoice_Creator {
         $eligible = [];
         foreach ( $rowIds as $id ) {
             $row = MyNJILGA_Dues_Invoice_Table::get( $id );
-            if ( $row && $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_APPROVED && empty( $row->queued_at ) ) {
+            if ( $row && $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_APPROVED && ! self::is_actively_queued( (string) ( $row->queued_at ?? '' ), current_time( 'mysql' ) ) ) {
                 $eligible[] = $id;
             }
         }

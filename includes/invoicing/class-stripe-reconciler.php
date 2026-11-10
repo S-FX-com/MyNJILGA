@@ -150,6 +150,33 @@ class MyNJILGA_Stripe_Reconciler {
     }
 
     /**
+     * PURE: the money columns a row carries once Stripe has it as paid —
+     * the same four the invoice.paid webhook writes, from the same Stripe
+     * fields. primary_method is left out when unknown rather than blanked.
+     *
+     * The balance still owed is Stripe's amount_REMAINING, never
+     * amount_due: amount_due stays at the invoice's full amount after it is
+     * paid (fetch_invoice() exposes it as amount_due_cents), so writing it
+     * would leave a paid invoice carrying its whole balance as outstanding.
+     * An invoice Stripe reports as paid has nothing remaining, which is also
+     * the answer when a swapped-in gateway doesn't supply the figure.
+     *
+     * @param array<string,mixed> $fetched fetch_invoice()'s result.
+     * @return array<string,mixed>
+     */
+    public static function settled_row_fields( array $fetched, string $method ): array {
+        $fields = [
+            'amount_paid_cents' => (int) ( $fetched['amount_paid_cents'] ?? 0 ),
+            'amount_due_cents'  => (int) ( $fetched['amount_remaining_cents'] ?? 0 ),
+            'stripe_status'     => (string) ( $fetched['stripe_status'] ?? '' ),
+        ];
+        if ( $method !== '' ) {
+            $fields['primary_method'] = $method;
+        }
+        return $fields;
+    }
+
+    /**
      * Reconciles ONE invoice row against Stripe. Public so the per-row
      * "Refresh" path and sync_year() share exactly this logic — see the
      * class docblock's design notes for what each divergence does.
@@ -224,8 +251,10 @@ class MyNJILGA_Stripe_Reconciler {
                 MyNJILGA_Dues_Invoice_Table::update_gateway_fields( $rowId, [
                     'paid_off_stripe_cents' => (int) ( $invoiceRow->paid_off_stripe_cents ?? 0 ) + $offStripeCents,
                 ] );
+                $settledMethod = 'other';
             } else {
-                $detail  = self::best_effort_payment_detail( $fetched );
+                $detail        = self::best_effort_payment_detail( $fetched );
+                $settledMethod = (string) $detail['method'];
                 $payment = [
                     'stripe_object_id' => self::best_effort_object_id( $fetched, $invoiceId ),
                     'kind'             => MyNJILGA_Dues_Payments_Table::KIND_PAYMENT,
@@ -249,6 +278,14 @@ class MyNJILGA_Stripe_Reconciler {
             // MyNJILGA_Payment_Listener::settle() directly, so there
             // remains exactly one place that decides settlement.
             do_action( 'njilga_stripe_invoice_paid', $invoiceId, $payment );
+
+            // What the webhook records after settling, and for the same
+            // reason: a settled row is terminal and never re-synced, so
+            // whatever is written here is what the Payments ledger and the
+            // Dashboard will say about this invoice forever. Without it the
+            // row read "paid" with $0 paid and the full amount still due,
+            // overstating Outstanding and understating Collected.
+            MyNJILGA_Dues_Invoice_Table::update_gateway_fields( $rowId, self::settled_row_fields( $fetched, $settledMethod ) );
 
             return [ 'updated' => true, 'needs_attention' => false, 'note' => sprintf( '%s: found a missed payment — settled.', $name ) ];
         }
@@ -566,11 +603,19 @@ class MyNJILGA_Stripe_Reconciler {
     public static function register(): void {
         add_action( self::HOOK_DAILY, [ __CLASS__, 'run_daily' ] );
 
-        // Reuses MyNJILGA_Invoice_Creator's Action Scheduler group — the
-        // same 'njilga-dues' string every other background job in this
-        // plugin runs under — rather than retyping the literal.
-        if ( function_exists( 'as_schedule_recurring_action' ) && ! as_has_scheduled_action( self::HOOK_DAILY, null, MyNJILGA_Invoice_Creator::AS_GROUP ) ) {
-            as_schedule_recurring_action( time() + 300, DAY_IN_SECONDS, self::HOOK_DAILY, [], MyNJILGA_Invoice_Creator::AS_GROUP );
+        // register() runs while this plugin's file is being included —
+        // BEFORE Action Scheduler exists. AS defines its functions at
+        // plugins_loaded:1, and even then as_has_scheduled_action() and
+        // as_schedule_recurring_action() refuse to do anything (false / 0)
+        // until its data store is up on `init`. Scheduling from here
+        // therefore never happened: the guard below simply read "no
+        // Action Scheduler yet" and the daily reconcile, the join sweep and
+        // the event-log prune were never queued. AS announces readiness
+        // with `action_scheduler_init`, so schedule from that — and right
+        // away if it has somehow already fired.
+        add_action( 'action_scheduler_init', [ __CLASS__, 'ensure_scheduled' ] );
+        if ( did_action( 'action_scheduler_init' ) ) {
+            self::ensure_scheduled();
         }
         // No inline fallback when Action Scheduler isn't available at all
         // — there's no reasonable substitute for a genuinely recurring
@@ -578,6 +623,50 @@ class MyNJILGA_Stripe_Reconciler {
         // "the manual Sync button is the only reconciliation path,"
         // matching how other Action-Scheduler-optional code in this
         // plugin already behaves.
+    }
+
+    /**
+     * Queue the daily job once. Idempotent — runs on every request after
+     * Action Scheduler is ready, and does nothing while one is already
+     * scheduled. The two Action Scheduler calls are parameters only so a
+     * test can supply them.
+     *
+     * Reuses MyNJILGA_Invoice_Creator's Action Scheduler group — the same
+     * 'njilga-dues' string every other background job in this plugin runs
+     * under — rather than retyping the literal.
+     *
+     * @param callable|null $hasScheduled fn( string $hook, string $group ): bool
+     * @param callable|null $schedule     fn( int $firstRun, int $interval, string $hook, string $group ): int|string|false
+     * @return bool Whether the job is (now) scheduled.
+     */
+    public static function ensure_scheduled( ?callable $hasScheduled = null, ?callable $schedule = null ): bool {
+        if ( $hasScheduled === null ) {
+            if ( ! function_exists( 'as_has_scheduled_action' ) ) {
+                return false;
+            }
+            $hasScheduled = static function ( string $hook, string $group ): bool {
+                return (bool) as_has_scheduled_action( $hook, null, $group );
+            };
+        }
+        if ( $schedule === null ) {
+            if ( ! function_exists( 'as_schedule_recurring_action' ) ) {
+                return false;
+            }
+            $schedule = static function ( int $firstRun, int $interval, string $hook, string $group ) {
+                return as_schedule_recurring_action( $firstRun, $interval, $hook, [], $group );
+            };
+        }
+
+        try {
+            $group = MyNJILGA_Invoice_Creator::AS_GROUP;
+            if ( $hasScheduled( self::HOOK_DAILY, $group ) ) {
+                return true;
+            }
+            return (bool) $schedule( time() + 300, 86400, self::HOOK_DAILY, $group );
+        } catch ( \Throwable $e ) {
+            // Never let housekeeping scheduling break a page load.
+            return false;
+        }
     }
 
     /**

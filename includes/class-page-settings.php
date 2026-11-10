@@ -191,6 +191,9 @@ class MyNJILGA_Page_Settings {
         if ( ! empty( $get['webhook_saved'] ) ) {
             MyNJILGA_Admin_UI::callout( 'Webhook secret saved.', 'success' );
         }
+        if ( ! empty( $get['webhook_invalid'] ) ) {
+            MyNJILGA_Admin_UI::callout( 'That doesn&rsquo;t look like a Stripe webhook signing secret (it starts <code>whsec_</code>), so nothing was changed. Copy it from Stripe Dashboard &rarr; Developers &rarr; Webhooks &rarr; the endpoint &rarr; Signing secret.', 'warning' );
+        }
         if ( ! empty( $get['pmt_saved'] ) ) {
             MyNJILGA_Admin_UI::callout( 'Payment settings saved.', 'success' );
         }
@@ -1033,6 +1036,13 @@ class MyNJILGA_Page_Settings {
         $secret = trim( (string) ( $in['webhook_secret'] ?? '' ) );
 
         if ( $mode === MyNJILGA_Stripe_Connection::MODE_TEST || $mode === MyNJILGA_Stripe_Connection::MODE_LIVE ) {
+            // A blank or malformed value must never replace a working
+            // secret: a stored secret that isn't Stripe's makes the receiver
+            // reject every delivery, and a blank one wipes the good one.
+            if ( preg_match( '/^whsec_[A-Za-z0-9]+\z/', $secret ) !== 1 ) {
+                wp_safe_redirect( self::payments_url( [ 'webhook_invalid' => '1' ] ) );
+                exit;
+            }
             MyNJILGA_Stripe_Connection::save_manual_webhook_secret( $mode, $secret );
         }
 

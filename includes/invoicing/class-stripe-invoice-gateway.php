@@ -356,7 +356,15 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway, MyNJI
                 $createParams['days_until_due'] = $daysUntilDue;
             }
 
-            $idempotencyKey = sprintf( 'njilga-inv-%d-%d-%s', $invoiceRowId, $duesYear, $mode );
+            // The key makes a retry after a LOST RESPONSE return the invoice the
+            // first call already made instead of making a second. But Stripe
+            // replays a key's first result for 24 hours — including after we
+            // have deleted that draft as abandoned — so once a draft has been
+            // cleaned up the next attempt must use a fresh key (see
+            // abandon_draft()), or every retry would replay a deleted invoice
+            // and fail until the key expired.
+            $attempt        = isset( $context['idempotency_attempt'] ) ? max( 0, (int) $context['idempotency_attempt'] ) : self::stored_attempt( $invoiceRowId );
+            $idempotencyKey = self::idempotency_key( $invoiceRowId, $duesYear, $mode, $attempt );
 
             $createResp = $client->request( 'POST', '/invoices', $createParams, [
                 'idempotency_key' => $idempotencyKey,
@@ -385,7 +393,7 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway, MyNJI
                     'idempotency_key' => $idempotencyKey . '-lines-' . $i,
                 ] );
                 if ( ! $addResp['ok'] ) {
-                    return $this->abandon_draft( $client, $invoiceId, $addResp['error'] !== '' ? $addResp['error'] : 'Stripe rejected one or more invoice line items.' );
+                    return $this->abandon_draft( $client, $invoiceId, $addResp['error'] !== '' ? $addResp['error'] : 'Stripe rejected one or more invoice line items.', $invoiceRowId );
                 }
             }
 
@@ -393,7 +401,7 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway, MyNJI
                 'idempotency_key' => $idempotencyKey . '-finalize',
             ] );
             if ( ! $finalizeResp['ok'] ) {
-                return $this->abandon_draft( $client, $invoiceId, $finalizeResp['error'] !== '' ? $finalizeResp['error'] : 'Stripe could not finalize the invoice.' );
+                return $this->abandon_draft( $client, $invoiceId, $finalizeResp['error'] !== '' ? $finalizeResp['error'] : 'Stripe could not finalize the invoice.', $invoiceRowId );
             }
 
             $body    = $finalizeResp['body'];
@@ -469,12 +477,47 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway, MyNJI
      *
      * @return array{ok:false,error:string}
      */
-    private function abandon_draft( MyNJILGA_Stripe_Client $client, string $invoiceId, string $error ): array {
+    private function abandon_draft( MyNJILGA_Stripe_Client $client, string $invoiceId, string $error, int $invoiceRowId = 0 ): array {
         $deleteResp = $client->request( 'DELETE', '/invoices/' . rawurlencode( $invoiceId ) );
         if ( ! $deleteResp['ok'] ) {
             $error .= sprintf( ' Additionally, automatic cleanup of the orphaned draft invoice (%s) failed — it may need to be deleted manually in the Stripe Dashboard.', $invoiceId );
+        } else {
+            // The draft this attempt's idempotency key points at no longer
+            // exists, so a retry must not be handed that key's cached
+            // result. (When the delete FAILED the draft is still there, and
+            // replaying the key resumes it — which is what we want then.)
+            self::bump_attempt( $invoiceRowId );
         }
         return [ 'ok' => false, 'error' => $error ];
+    }
+
+    /**
+     * PURE: the Stripe idempotency key for creating a row's invoice. Attempt
+     * 0 is the original key, unchanged; every abandoned draft moves the next
+     * attempt onto a new one.
+     */
+    public static function idempotency_key( int $invoiceRowId, int $duesYear, string $mode, int $attempt = 0 ): string {
+        $key = sprintf( 'njilga-inv-%d-%d-%s', $invoiceRowId, $duesYear, $mode );
+        return $attempt > 0 ? $key . '-r' . $attempt : $key;
+    }
+
+    private static function attempt_option( int $invoiceRowId ): string {
+        return 'njilga_inv_attempt_' . $invoiceRowId;
+    }
+
+    /** How many drafts for this row have been abandoned so far (0 outside WordPress). */
+    private static function stored_attempt( int $invoiceRowId ): int {
+        if ( $invoiceRowId <= 0 || ! function_exists( 'get_option' ) ) {
+            return 0;
+        }
+        return max( 0, (int) get_option( self::attempt_option( $invoiceRowId ), 0 ) );
+    }
+
+    private static function bump_attempt( int $invoiceRowId ): void {
+        if ( $invoiceRowId <= 0 || ! function_exists( 'update_option' ) ) {
+            return;
+        }
+        update_option( self::attempt_option( $invoiceRowId ), self::stored_attempt( $invoiceRowId ) + 1, false );
     }
 
     // -------------------------------------------------------------------------

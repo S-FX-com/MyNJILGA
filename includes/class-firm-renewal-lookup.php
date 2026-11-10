@@ -465,6 +465,37 @@ class MyNJILGA_Firm_Renewal_Lookup {
         return false;
     }
 
+    /** Accented letters → the plain letters a visitor types, for the fallback when WordPress's remove_accents() isn't loaded. */
+    private const ACCENT_MAP = [
+        'À' => 'A', 'Á' => 'A', 'Â' => 'A', 'Ã' => 'A', 'Ä' => 'A', 'Å' => 'A', 'Æ' => 'AE', 'Ç' => 'C',
+        'È' => 'E', 'É' => 'E', 'Ê' => 'E', 'Ë' => 'E', 'Ì' => 'I', 'Í' => 'I', 'Î' => 'I', 'Ï' => 'I',
+        'Ñ' => 'N', 'Ò' => 'O', 'Ó' => 'O', 'Ô' => 'O', 'Õ' => 'O', 'Ö' => 'O', 'Ø' => 'O',
+        'Ù' => 'U', 'Ú' => 'U', 'Û' => 'U', 'Ü' => 'U', 'Ý' => 'Y', 'ß' => 'ss',
+        'à' => 'a', 'á' => 'a', 'â' => 'a', 'ã' => 'a', 'ä' => 'a', 'å' => 'a', 'æ' => 'ae', 'ç' => 'c',
+        'è' => 'e', 'é' => 'e', 'ê' => 'e', 'ë' => 'e', 'ì' => 'i', 'í' => 'i', 'î' => 'i', 'ï' => 'i',
+        'ñ' => 'n', 'ò' => 'o', 'ó' => 'o', 'ô' => 'o', 'õ' => 'o', 'ö' => 'o', 'ø' => 'o',
+        'ù' => 'u', 'ú' => 'u', 'û' => 'u', 'ü' => 'u', 'ý' => 'y', 'ÿ' => 'y',
+        'Ł' => 'L', 'ł' => 'l', 'Š' => 'S', 'š' => 's', 'Ž' => 'Z', 'ž' => 'z', 'Ć' => 'C', 'ć' => 'c',
+        'Č' => 'C', 'č' => 'c', 'Ś' => 'S', 'ś' => 's', 'Ń' => 'N', 'ń' => 'n', 'Ź' => 'Z', 'ź' => 'z', 'Ż' => 'Z', 'ż' => 'z',
+    ];
+
+    /**
+     * PURE (given a PHP without WordPress): a firm name or a typed query
+     * reduced for matching — accents folded to their plain letters, then
+     * the same rule the rest of the plugin applies to firm names.
+     *
+     * Without the folding, "Muñoz & Muñoz LLP" reduced to "mu oz and mu oz"
+     * (the ñ became a space), so the visitor's "Muñoz" was refused as two
+     * 2-letter words and the unaccented "Munoz" matched nothing: a firm with
+     * an accented name could not be found on the public page at all. Both
+     * sides now go through here, so either spelling finds it.
+     */
+    public static function match_key( string $text ): string {
+        $text = html_entity_decode( $text, ENT_QUOTES, 'UTF-8' );
+        $text = function_exists( 'remove_accents' ) ? remove_accents( $text ) : strtr( $text, self::ACCENT_MAP );
+        return MyNJILGA_Historical_Import::firm_key( $text );
+    }
+
     /**
      * The search words: the query reduced the way firm names are
      * ("Smith & Jones, LLP" → smith, jones), minus "and" and single
@@ -473,7 +504,7 @@ class MyNJILGA_Firm_Renewal_Lookup {
      * @return array<int,string>
      */
     public static function tokens( string $query ): array {
-        $key = MyNJILGA_Historical_Import::firm_key( $query );
+        $key = self::match_key( $query );
         $out = [];
         foreach ( explode( ' ', $key ) as $t ) {
             if ( strlen( $t ) >= 2 && $t !== 'and' ) {
@@ -507,7 +538,7 @@ class MyNJILGA_Firm_Renewal_Lookup {
         if ( ! $tokens ) {
             return false;
         }
-        $key = MyNJILGA_Historical_Import::firm_key( $name );
+        $key = self::match_key( $name );
         foreach ( $tokens as $t ) {
             if ( strpos( $key, $t ) === false ) {
                 return false;
@@ -521,8 +552,8 @@ class MyNJILGA_Firm_Renewal_Lookup {
      * 2 = it contains it — so the likeliest firm is listed first.
      */
     public static function rank( string $name, string $query ): int {
-        $key = MyNJILGA_Historical_Import::firm_key( $name );
-        $q   = MyNJILGA_Historical_Import::firm_key( $query );
+        $key = self::match_key( $name );
+        $q   = self::match_key( $query );
         if ( $q === '' ) {
             return 2;
         }
