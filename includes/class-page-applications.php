@@ -50,7 +50,7 @@ class MyNJILGA_Page_Applications {
             '<p class="njilga-section-desc">Applicants submitted through <code>[njilga_membership_application]</code> land here. They\'re FluentCRM contacts tagged <code>%s</code>, not attached to any firm, so they can\'t be invoiced until approved. On approval: attached to the firm (created if new; made Owner if the firm has none), category tag applied, then the mid-year join policy runs — currently <strong>%s</strong> (<a href="%s">change</a>).</p>',
             esc_html( (string) MyNJILGA_Dues_Settings::general( 'pending_tag' ) ),
             esc_html( MyNJILGA_Dues_Settings::join_policy_labels()[ $policy ] ?? $policy ),
-            esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) )
+            esc_url( add_query_arg( 'tab', 'applications', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) )
         );
 
         self::render_pending();

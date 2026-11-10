@@ -1,25 +1,77 @@
 <?php
 /**
- * My NJILGA → Settings → Dues & Billing (spec §3).
+ * My NJILGA → Settings (spec §3).
  *
- * One big server-rendered form, saved through admin-post. Sections:
- *   1. General switches (default category, inactive tag, evergreen tags,
- *      CC policy, downgrade behaviour, mid-year join policy, enrollment).
- *   2. Category mapping table — ORDERED (precedence), each row:
- *      tag → price → WP role → tier-eligible flag,
- *      with the per-rank tier table for tier-eligible categories.
- *   3. Assessment mapping — one product, ordered qualifying tags.
- *   4. Per-firm billing-mode overrides.
+ * One page, one tab per concern (?tab=…). Each tab is its own small form,
+ * saved through admin-post, and a tab saves ONLY what it shows — every other
+ * setting is carried over untouched (see TAB_KEYS and handle_save()):
  *
- * Next to every mapped tag and product the page shows a live check
- * (does the tag exist? does the variation exist, is it published, does
- * its price match?), so the "confirm the exact slugs against the live
- * instance" setup step is a glance at this page, not a database query.
+ *   categories    The category table (ORDERED: precedence; tag → price → WP
+ *                 role → tier-eligible, with the per-rank tier table), the
+ *                 default category, and the assessment.
+ *   billing       The tags billing reads and writes (inactive/paid/unpaid and
+ *                 the per-year patterns) and per-firm billing-mode overrides.
+ *   email         The invoice email: recipients, wording, preview, send test
+ *                 (MyNJILGA_Page_Invoice_Email owns the form and its handler).
+ *   joining       Online joining ([njilga_join]).
+ *   applications  The application form and the mid-year join policy.
+ *   payments      The Stripe connection (its own handlers, below).
+ *   advanced      Invoice batch size, the downgrade sweep, and Reset.
+ *
+ * Next to every mapped tag the page shows a live check (does the tag exist in
+ * FluentCRM?), so the "confirm the exact slugs against the live instance"
+ * setup step is a glance at this page, not a database query.
  */
 class MyNJILGA_Page_Settings {
 
     const ACTION_SAVE  = 'my_njilga_settings_save';
     const ACTION_RESET = 'my_njilga_settings_reset';
+
+    /** The tabs, in order: slug => label. */
+    const TABS = [
+        'categories'   => 'Categories & Pricing',
+        'billing'      => 'Tags & Billing',
+        'email'        => 'Invoice Email',
+        'joining'      => 'Online Joining',
+        'applications' => 'Applications',
+        'payments'     => 'Payments',
+        'advanced'     => 'Advanced',
+    ];
+
+    /** What each tab's page header says. */
+    const TAB_BLURBS = [
+        'categories'   => 'Who belongs to which membership category, what each is charged, and the assessment. FluentCRM tags decide the category; WordPress roles follow payment and are never an input to pricing. Prices are exactly what the Stripe invoice charges.',
+        'billing'      => 'The FluentCRM tags billing reads and writes, and any firm that is billed differently from the default.',
+        'email'        => 'Who receives the dues invoice email, what it says, and a way to send yourself a test of exactly what you have typed.',
+        'joining'      => 'Joining and paying online through the [njilga_join] shortcode.',
+        'applications' => 'The membership application form, and what happens when one is approved.',
+        'payments'     => 'Connect Stripe, choose which mode is active, and set the defaults every Stripe invoice uses.',
+        'advanced'     => 'How many invoices are created per background job, what the downgrade sweep removes, and resetting everything.',
+    ];
+
+    /**
+     * The `general` settings each tab owns, so a tab saves exactly its own and
+     * leaves every other tab's values alone. The categories tab also owns the
+     * `categories` and `assessment` structures and `default_category`; the
+     * billing tab owns `firm_overrides`; the email tab's keys live in
+     * MyNJILGA_Page_Invoice_Email::KEYS. tests/SettingsTabsTest.php asserts
+     * that every general setting belongs to exactly one tab, so a new setting
+     * can't be added without a home (or saved by two tabs).
+     */
+    const TAB_KEYS = [
+        'categories'   => [ 'default_category' ],
+        'billing'      => [ 'inactive_tag', 'paid_tag', 'unpaid_tag', 'year_paid_tag_pattern', 'year_unpaid_tag_pattern', 'assessment_paid_pattern' ],
+        'joining'      => [
+            'join_enabled', 'join_notify_email', 'join_max_colleagues', 'join_firm_match', 'join_next_year_from', 'join_allow_ach',
+            'join_stripe_invoice', 'join_invite_expiry_days', 'join_prelaw_tag', 'join_municipalities', 'join_success_text',
+            'cf_attorney_id', 'cf_bar_admission_date', 'cf_municipality', 'cf_nj_county', 'cf_school', 'cf_student_status', 'cf_mailing_phone',
+        ],
+        'applications' => [ 'mid_year_join_policy', 'pending_tag', 'rejected_tag', 'application_notify_email', 'application_success_text' ],
+        'advanced'     => [ 'downgrade_remove_roles', 'batch_size' ],
+    ];
+
+    /** The tabs handle_save() serves (email and payments have their own handlers). */
+    const SAVE_TABS = [ 'categories', 'billing', 'joining', 'applications', 'advanced' ];
 
     // Payments tab (Stripe connection/credential layer — see
     // includes/invoicing/class-stripe-connection.php).
@@ -33,11 +85,10 @@ class MyNJILGA_Page_Settings {
     // -------------------------------------------------------------------------
 
     /**
-     * Tab switcher at the very top of the page (spec: mirrors
-     * MyNJILGA_Page_Firms::render_scope_tabs() — a URL query arg,
-     * MyNJILGA_Admin_UI::nav_tabs()). ?tab=dues (default) is the existing
-     * Dues & Billing form; ?tab=payments is the Stripe connection screen.
-     * The two tabs render entirely different content/forms, never both.
+     * The tab strip is MyNJILGA_Admin_UI::nav_tabs() over a ?tab= query arg
+     * (the mechanism MyNJILGA_Page_Firms::render_scope_tabs() also uses): each
+     * tab renders an entirely different form, never two at once. A link from
+     * before the tabs existed (?tab=dues) lands on the first tab.
      */
     public static function render(): void {
         if ( ! current_user_can( 'manage_options' ) ) {
@@ -48,49 +99,52 @@ class MyNJILGA_Page_Settings {
 
         MyNJILGA_Admin_UI::styles();
         echo '<div class="wrap njilga-ui">';
+        MyNJILGA_Admin_UI::page_header( 'Settings', self::TAB_BLURBS[ $tab ] );
+        self::render_settings_tabs( $tab );
 
         if ( $tab === 'payments' ) {
-            MyNJILGA_Admin_UI::page_header( 'Payments', 'Connect Stripe, choose which mode is active, and set the defaults every Stripe invoice uses.' );
-            self::render_settings_tabs( $tab );
-
             $view = isset( $_GET['view'] ) ? sanitize_key( wp_unslash( (string) $_GET['view'] ) ) : '';
             if ( $view === 'switch-mode' ) {
                 self::render_switch_mode_confirm();
             } else {
                 self::render_payments_tab();
             }
-
-            echo '</div>';
-            return;
+        } elseif ( $tab === 'email' ) {
+            MyNJILGA_Page_Invoice_Email::render_tab();
+        } else {
+            self::render_dues_tab( $tab );
         }
 
-        MyNJILGA_Admin_UI::page_header(
-            'Dues & Billing Settings',
-            'FluentCRM tags are the source of truth for who owes what; WordPress roles are a downstream effect of payment, never an input to pricing. Prices below (in dollars) are exactly what the Stripe invoice charges — each one becomes an inline line item.'
-        );
-        self::render_settings_tabs( $tab );
-        self::render_dues_tab();
         echo '</div>';
     }
 
     private static function current_tab(): string {
         $tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( (string) $_GET['tab'] ) ) : '';
-        return $tab === 'payments' ? 'payments' : 'dues';
+        if ( $tab === 'dues' ) {
+            return 'categories'; // the one tab this used to have
+        }
+        return isset( self::TABS[ $tab ] ) ? $tab : 'categories';
+    }
+
+    /** Where a tab lives. @param array<string,mixed> $args */
+    public static function tab_url( string $tab, array $args = [] ): string {
+        $args['page'] = MyNJILGA_Admin_Menu::SLUG_SETTINGS;
+        $args['tab']  = $tab;
+        return add_query_arg( $args, admin_url( 'admin.php' ) );
     }
 
     private static function render_settings_tabs( string $active ): void {
-        $base = MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS );
-        MyNJILGA_Admin_UI::nav_tabs( [
-            [ 'label' => 'Dues & Billing', 'url' => add_query_arg( 'tab', 'dues', $base ), 'active' => $active === 'dues' ],
-            [ 'label' => 'Payments',       'url' => add_query_arg( 'tab', 'payments', $base ), 'active' => $active === 'payments' ],
-        ] );
+        $tabs = [];
+        foreach ( self::TABS as $slug => $label ) {
+            $tabs[] = [ 'label' => $label, 'url' => self::tab_url( $slug ), 'active' => $active === $slug ];
+        }
+        MyNJILGA_Admin_UI::nav_tabs( $tabs );
     }
 
-    private static function render_dues_tab(): void {
-        $s     = MyNJILGA_Dues_Settings::get();
-        $tags  = MyNJILGA_Members_Data::fluentcrm_active() ? MyNJILGA_Tags::all_tags() : [];
-        $roles = self::wp_roles();
-
+    private static function render_notices(): void {
+        if ( ! empty( $_GET['stale'] ) ) {
+            MyNJILGA_Admin_UI::callout( '<strong>Nothing was saved.</strong> That form is out of date (this page was reorganised into tabs while it was open). Make your change again here.', 'warning' );
+        }
         if ( ! empty( $_GET['saved'] ) ) {
             MyNJILGA_Admin_UI::callout( 'Settings saved.', 'success' );
         }
@@ -107,25 +161,6 @@ class MyNJILGA_Page_Settings {
                 'warning'
             );
         }
-        if ( ! empty( $_GET['email_tag_rejected'] ) ) {
-            $labels = [ 'subject' => 'subject', 'intro' => 'opening', 'closing' => 'sign-off' ];
-            $lines  = [];
-            foreach ( explode( ',', (string) wp_unslash( $_GET['email_tag_rejected'] ) ) as $pair ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-                $bits = explode( ':', $pair, 2 );
-                $f    = sanitize_key( (string) ( $bits[0] ?? '' ) );
-                if ( isset( $labels[ $f ], $bits[1] ) && sanitize_key( (string) $bits[1] ) !== '' ) {
-                    $lines[] = sprintf( 'the %s has <code>{%s}</code>', esc_html( $labels[ $f ] ), esc_html( sanitize_key( (string) $bits[1] ) ) );
-                }
-            }
-            MyNJILGA_Admin_UI::callout(
-                sprintf(
-                    '<strong>Invoice email wording not saved:</strong> %s, which isn&rsquo;t a merge tag — it would have been emailed to firms as literal text. The previous wording was kept; check the tag names (%s) and save again. The rest of your changes were saved.',
-                    implode( '; ', $lines ),
-                    implode( ', ', array_map( static function ( $t ) { return '<code>{' . esc_html( $t ) . '}</code>'; }, array_keys( MyNJILGA_Invoice_Email::TAGS ) ) )
-                ),
-                'warning'
-            );
-        }
         if ( isset( $_GET['role_sync'] ) ) {
             $n = (int) $_GET['role_sync'];
             MyNJILGA_Admin_UI::callout(
@@ -138,32 +173,60 @@ class MyNJILGA_Page_Settings {
                 'info'
             );
         }
+    }
 
+    /** One of the five Dues & Billing tabs that save through handle_save(). */
+    private static function render_dues_tab( string $tab ): void {
+        $s     = MyNJILGA_Dues_Settings::get();
+        $tags  = MyNJILGA_Members_Data::fluentcrm_active() ? MyNJILGA_Tags::all_tags() : [];
+
+        self::render_notices();
         self::render_tag_datalist( $tags );
 
         printf( '<form method="post" action="%s">', esc_url( admin_url( 'admin-post.php' ) ) );
         printf( '<input type="hidden" name="action" value="%s">', esc_attr( self::ACTION_SAVE ) );
+        printf( '<input type="hidden" name="tab" value="%s">', esc_attr( $tab ) );
         wp_nonce_field( self::ACTION_SAVE );
 
-        self::render_general( $s, $tags );
-        self::render_joining( $s, $tags );
-        self::render_categories( $s, $tags, $roles );
-        self::render_assessment( $s, $tags );
-        self::render_firm_overrides( $s );
+        switch ( $tab ) {
+            case 'billing':
+                self::render_tag_settings( $s, $tags );
+                self::render_firm_overrides( $s );
+                break;
+            case 'joining':
+                self::render_joining( $s, $tags );
+                break;
+            case 'applications':
+                self::render_applications( $s, $tags );
+                break;
+            case 'advanced':
+                self::render_advanced( $s );
+                break;
+            default: // categories
+                self::render_default_category( $s );
+                self::render_categories( $s, $tags, self::wp_roles() );
+                self::render_assessment( $s, $tags );
+        }
 
-        echo '<div class="njilga-actions" style="margin-top:24px"><button type="submit" class="njilga-btn njilga-btn-primary njilga-btn-lg">Save Settings</button></div>';
+        echo '<div class="njilga-actions"><button type="submit" class="njilga-btn njilga-btn-primary njilga-btn-lg">Save changes</button></div>';
         echo '</form>';
 
+        if ( $tab === 'advanced' ) {
+            self::render_reset_card();
+        }
+    }
+
+    private static function render_reset_card(): void {
         echo '<div class="njilga-danger-card" style="max-width:640px">';
         echo '<div class="njilga-danger-head">' . MyNJILGA_Admin_UI::icon( 'alert' ) . '<h2>Reset settings</h2></div>';
-        echo '<p>Restores every Dues &amp; Billing setting to the seeded defaults. Per-firm billing overrides are cleared too. Invoices already generated are not touched.</p>';
+        echo '<p>Restores every setting on the Categories &amp; Pricing, Tags &amp; Billing, Invoice Email, Online Joining, Applications and Advanced tabs to the seeded defaults. Per-firm billing overrides and your email wording are cleared too. The Stripe connection (Payments) and invoices already generated are not touched.</p>';
         echo MyNJILGA_Admin_UI::action_form(
             self::ACTION_RESET,
             'Reset to defaults',
             [],
             'danger',
             '',
-            'Reset every Dues & Billing setting to the seeded defaults? Firm overrides are cleared too.'
+            'Reset every Dues & Billing setting (all tabs except Payments) to the seeded defaults? Firm overrides and the email wording are cleared too.'
         );
         echo '</div>';
     }
@@ -477,65 +540,43 @@ class MyNJILGA_Page_Settings {
     // Sections
     // -------------------------------------------------------------------------
 
-    private static function render_general( array $s, array $tags ): void {
+    private static function render_default_category( array $s ): void {
         $g = $s['general'];
-        MyNJILGA_Admin_UI::section( 'General', 'Global switches: the fallback category, the evergreen and per-year tags, email policy, and enrollment.' );
+        MyNJILGA_Admin_UI::section( 'Default category', 'Who is billed when a contact carries none of the category tags in the table below.' );
         echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
-
-        // Default category.
         echo '<tr><th scope="row"><label for="g-default_category">Default category</label></th><td>';
         echo '<select id="g-default_category" name="general[default_category]" class="njilga-select"><option value="">— Not billed (list as an exception) —</option>';
         foreach ( $s['categories'] as $cat ) {
             printf( '<option value="%s"%s>%s</option>', esc_attr( $cat['key'] ), selected( $g['default_category'], $cat['key'], false ), esc_html( $cat['label'] ) );
         }
         echo '</select><p class="njilga-help">Contacts carrying none of the category tags below fall into this category. Seeded to Professional so an untagged roster bills the way it does today.</p></td></tr>';
+        echo '</tbody></table></div>';
+    }
 
+    private static function render_tag_settings( array $s, array $tags ): void {
+        $g = $s['general'];
+        MyNJILGA_Admin_UI::section( 'Tags', 'The FluentCRM tags billing reads (inactive) and writes (paid, unpaid and the per-year ones).' );
+        echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
         self::text_row( 'general[inactive_tag]', 'Inactive override tag', $g['inactive_tag'], 'Tag slug. A contact carrying it is billed nothing this cycle — no dues, no assessment — whatever else they carry.', $tags );
         self::text_row( 'general[paid_tag]', 'Evergreen "paid" tag', $g['paid_tag'], 'Applied to every member of a paid dues invoice; read by every report in this plugin.', $tags );
         self::text_row( 'general[unpaid_tag]', 'Evergreen "unpaid" tag', $g['unpaid_tag'], 'Applied by the downgrade sweep; removed on payment.', $tags );
         self::text_row( 'general[year_paid_tag_pattern]', 'Year paid tag pattern', $g['year_paid_tag_pattern'], 'Created on demand. {year} is replaced, e.g. "Dues Paid 2027".' );
         self::text_row( 'general[year_unpaid_tag_pattern]', 'Year unpaid tag pattern', $g['year_unpaid_tag_pattern'], 'Applied by the downgrade sweep.' );
         self::text_row( 'general[assessment_paid_pattern]', 'Assessment paid tag pattern', $g['assessment_paid_pattern'], 'Applied when an assessment-only invoice (split-assessment billing) is paid.' );
+        echo '</tbody></table></div>';
+    }
 
-        // CC mode.
-        echo '<tr><th scope="row">Invoice email recipients</th><td><div class="njilga-radio-list">';
-        foreach ( MyNJILGA_Dues_Settings::cc_mode_labels() as $val => $label ) {
-            printf( '<label class="njilga-check-label"><input type="radio" name="general[send_cc_mode]" value="%s"%s> <span>%s</span></label>', esc_attr( $val ), checked( $g['send_cc_mode'], $val, false ), esc_html( $label ) );
-        }
-        echo '</div>';
-        printf( '<div class="njilga-field"><label for="g-cc">Fixed CC list</label><textarea id="g-cc" name="general[send_cc_emails]" rows="2" class="large-text" placeholder="treasurer@njilga.org, admin@njilga.org">%s</textarea></div>', esc_textarea( (string) $g['send_cc_emails'] ) );
-        printf( '<div class="njilga-field"><label for="g-replyto">Reply-To</label><input type="email" id="g-replyto" name="general[send_reply_to]" value="%s" class="regular-text" placeholder="dues@njilga.org"></div>', esc_attr( (string) $g['send_reply_to'] ) );
-        echo '</td></tr>';
+    private static function render_applications( array $s, array $tags ): void {
+        $g = $s['general'];
+        MyNJILGA_Admin_UI::section( 'Applications', 'The <code>[njilga_membership_application]</code> form and the review queue under Applications.' );
+        echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
 
-        // Invoice email wording.
-        echo '<tr><th scope="row">Invoice email wording</th><td>';
-        printf( '<div class="njilga-field"><label for="g-em-subject">Subject</label><input type="text" id="g-em-subject" name="general[email_subject]" value="%s" class="large-text" maxlength="%d" placeholder="%s"></div>', esc_attr( (string) $g['email_subject'] ), (int) MyNJILGA_Invoice_Email::MAX_SUBJECT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'subject' ) ) );
-        printf( '<div class="njilga-field"><label for="g-em-intro">Opening (the greeting and the sentence giving the total)</label><textarea id="g-em-intro" name="general[email_intro]" rows="4" class="large-text" maxlength="%d" placeholder="%s">%s</textarea></div>', (int) MyNJILGA_Invoice_Email::MAX_TEXT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'intro' ) ), esc_textarea( (string) $g['email_intro'] ) );
-        printf( '<div class="njilga-field"><label for="g-em-closing">Sign-off</label><textarea id="g-em-closing" name="general[email_closing]" rows="3" class="large-text" maxlength="%d" placeholder="%s">%s</textarea></div>', (int) MyNJILGA_Invoice_Email::MAX_TEXT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'closing' ) ), esc_textarea( (string) $g['email_closing'] ) );
-        printf(
-            '<p class="njilga-help">Leave a box blank to use the standard wording (shown greyed out). The list of who the invoice covers, the payment link and the mail-a-check address are always added for you, so they can\'t be edited away. Read exactly what a firm will get — and send yourself a sample — in <a href="%s">Launch Wizard → Send</a>.</p>',
-            esc_url( add_query_arg( [ 'page' => MyNJILGA_Admin_Menu::SLUG_LAUNCH, 'step' => 5 ], admin_url( 'admin.php' ) ) )
-        );
-        echo '<p class="njilga-help"><strong>Merge tags</strong> you can use in any of the three:</p><ul class="njilga-timeline">';
-        foreach ( MyNJILGA_Invoice_Email::TAGS as $tag => $what ) {
-            printf( '<li><code>{%s}</code> — %s</li>', esc_html( $tag ), esc_html( $what ) );
-        }
-        echo '</ul><p class="njilga-help">The same wording is used for every invoice email, including a separate assessment invoice if you bill assessments separately — use <code>{invoice}</code> to name which one it is.</p>';
-        echo '</td></tr>';
-
-        // Downgrade.
-        echo '<tr><th scope="row">Downgrade sweep</th><td>';
-        printf( '<label class="njilga-check-label"><input type="checkbox" name="general[downgrade_remove_roles]" value="1"%s> <span>Remove WordPress membership roles (every role mapped below, now or before) from members of invoices that were never paid</span></label>', checked( ! empty( $g['downgrade_remove_roles'] ), true, false ) );
-        echo '<p class="njilga-help">Tags are always applied; this only controls the role. Runs manually, behind a confirmation screen, from the Invoicing page.</p></td></tr>';
-
-        // Mid-year join policy.
         echo '<tr><th scope="row">Mid-year join policy</th><td><div class="njilga-radio-list">';
         foreach ( MyNJILGA_Dues_Settings::join_policy_labels() as $val => $label ) {
             printf( '<label class="njilga-check-label"><input type="radio" name="general[mid_year_join_policy]" value="%s"%s> <span>%s</span></label>', esc_attr( $val ), checked( $g['mid_year_join_policy'], $val, false ), esc_html( $label ) );
         }
         echo '</div><p class="njilga-help">Applied when an application is approved (Applications page). Final policy is still to be confirmed by NJILGA (spec §3.5) — the default is "free until next cycle".</p></td></tr>';
 
-        // Enrollment.
         self::text_row( 'general[pending_tag]', 'Pending-approval tag', $g['pending_tag'], 'Applied to an applicant on submission; removed on approval/rejection. Contacts carrying it are never invoiced.', $tags );
         self::text_row( 'general[rejected_tag]', 'Rejected tag', $g['rejected_tag'], 'Applied when an application is rejected.', $tags );
         self::text_row( 'general[application_notify_email]', 'Notify staff on new application', $g['application_notify_email'], 'Comma-separated. Blank = the site admin email.' );
@@ -543,8 +584,18 @@ class MyNJILGA_Page_Settings {
         printf( '<textarea id="g-success" name="general[application_success_text]" rows="2" class="large-text">%s</textarea>', esc_textarea( (string) $g['application_success_text'] ) );
         echo '<p class="njilga-help">Shown to the applicant after the <code>[njilga_membership_application]</code> form is submitted.</p></td></tr>';
 
-        self::text_row( 'general[batch_size]', 'Invoice creation batch size', (string) (int) $g['batch_size'], 'Invoices created per background job (Action Scheduler). Default 25.' );
+        echo '</tbody></table></div>';
+    }
 
+    private static function render_advanced( array $s ): void {
+        $g = $s['general'];
+        MyNJILGA_Admin_UI::section( 'Invoice creation and the downgrade sweep' );
+        echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
+        self::text_row( 'general[batch_size]', 'Invoice creation batch size', (string) (int) $g['batch_size'], 'Invoices created per background job (Action Scheduler). Default 25; 10 is a safer start on slow hosting.' );
+
+        echo '<tr><th scope="row">Downgrade sweep</th><td>';
+        printf( '<label class="njilga-check-label"><input type="checkbox" name="general[downgrade_remove_roles]" value="1"%s> <span>Remove WordPress membership roles (every role mapped on Categories &amp; Pricing, now or before) from members of invoices that were never paid</span></label>', checked( ! empty( $g['downgrade_remove_roles'] ), true, false ) );
+        echo '<p class="njilga-help">Tags are always applied; this only controls the role. Runs manually, behind a confirmation screen, from the Invoicing page.</p></td></tr>';
         echo '</tbody></table></div>';
     }
 
@@ -820,70 +871,138 @@ class MyNJILGA_Page_Settings {
     // admin-post handlers
     // -------------------------------------------------------------------------
 
+    /**
+     * Save ONE tab. Each tab's form posts a hidden `tab`, and only that tab's
+     * settings are read from the post — everything else (the other tabs'
+     * general keys, and the categories / assessment / firm-override structures
+     * it doesn't show) is carried over from what is stored, so saving the
+     * billing tab can never wipe the category table.
+     *
+     * A post whose tab is unknown, or that lacks the structure its tab edits
+     * (a form from before the tabs existed, or a tampered one), saves nothing.
+     */
     public static function handle_save(): void {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( 'Access denied.' );
         }
         check_admin_referer( self::ACTION_SAVE );
 
-        $current  = MyNJILGA_Dues_Settings::get();
-        $defaults = MyNJILGA_Dues_Settings::defaults();
-        $in       = wp_unslash( $_POST );
+        $in  = wp_unslash( $_POST );
+        $tab = sanitize_key( (string) ( $in['tab'] ?? '' ) );
+        if ( ! in_array( $tab, self::SAVE_TABS, true )
+            || ( $tab === 'categories' && ! isset( $in['categories'], $in['assessment'] ) )
+            || ( $tab === 'billing' && ! isset( $in['firm_overrides'] ) )
+        ) {
+            self::back( 'categories', [ 'stale' => '1' ] );
+        }
+
+        $current       = MyNJILGA_Dues_Settings::get();
+        $defaults      = MyNJILGA_Dues_Settings::defaults();
         $roleSignature = MyNJILGA_Role_Sync::current_signature();
 
-        // --- General
-        $g    = (array) ( $in['general'] ?? [] );
-        $gen  = $current['general'];
-        foreach ( [ 'default_category', 'inactive_tag', 'paid_tag', 'unpaid_tag', 'pending_tag', 'rejected_tag' ] as $k ) {
-            $gen[ $k ] = sanitize_title( (string) ( $g[ $k ] ?? '' ) );
-        }
-        foreach ( [ 'year_paid_tag_pattern', 'year_unpaid_tag_pattern', 'assessment_paid_pattern', 'application_notify_email', 'send_cc_emails' ] as $k ) {
-            $gen[ $k ] = sanitize_text_field( (string) ( $g[ $k ] ?? '' ) );
-        }
-        $gen['application_success_text'] = sanitize_textarea_field( (string) ( $g['application_success_text'] ?? $defaults['general']['application_success_text'] ) );
-        $gen['send_reply_to']            = sanitize_email( (string) ( $g['send_reply_to'] ?? '' ) );
-        // Invoice email wording: plain text; a merge tag we don't know (a typo) is refused, never emailed.
-        $emailRejected = [];
-        foreach ( MyNJILGA_Invoice_Email::FIELDS as $field => $key ) {
-            $clean = MyNJILGA_Invoice_Email::clean( $field, (string) ( $g[ $key ] ?? '' ) );
-            $bad   = MyNJILGA_Invoice_Email::unknown_tags( $clean );
-            if ( $bad ) {
-                foreach ( $bad as $tag ) {
-                    $emailRejected[] = $field . ':' . $tag;
+        $g          = (array) ( $in['general'] ?? [] );
+        $gen        = $current['general'];
+        $categories = $current['categories'];
+        $assessment = $current['assessment'];
+        $overrides  = $current['firm_overrides'];
+
+        switch ( $tab ) {
+            case 'categories':
+                $categories              = self::read_categories( $in, $defaults );
+                $assessment              = self::read_assessment( $in, $defaults );
+                $gen['default_category'] = sanitize_title( (string) ( $g['default_category'] ?? '' ) );
+                break;
+
+            case 'billing':
+                foreach ( [ 'inactive_tag', 'paid_tag', 'unpaid_tag' ] as $k ) {
+                    $gen[ $k ] = sanitize_title( (string) ( $g[ $k ] ?? '' ) );
                 }
-                $gen[ $key ] = (string) ( $current['general'][ $key ] ?? '' );
-            } else {
-                $gen[ $key ] = $clean;
-            }
-        }
-        $gen['send_cc_mode']             = array_key_exists( (string) ( $g['send_cc_mode'] ?? '' ), MyNJILGA_Dues_Settings::cc_mode_labels() ) ? (string) $g['send_cc_mode'] : MyNJILGA_Dues_Settings::CC_OWNER_ONLY;
-        $gen['mid_year_join_policy']     = array_key_exists( (string) ( $g['mid_year_join_policy'] ?? '' ), MyNJILGA_Dues_Settings::join_policy_labels() ) ? (string) $g['mid_year_join_policy'] : MyNJILGA_Dues_Settings::JOIN_FREE_UNTIL_NEXT_CYCLE;
-        $gen['downgrade_remove_roles']   = ! empty( $g['downgrade_remove_roles'] );
-        $gen['batch_size']               = max( 1, min( 200, (int) ( $g['batch_size'] ?? 25 ) ) );
+                foreach ( [ 'year_paid_tag_pattern', 'year_unpaid_tag_pattern', 'assessment_paid_pattern' ] as $k ) {
+                    $gen[ $k ] = sanitize_text_field( (string) ( $g[ $k ] ?? '' ) );
+                    if ( $gen[ $k ] === '' ) {
+                        $gen[ $k ] = $defaults['general'][ $k ];
+                    }
+                }
+                $overrides = self::read_overrides( $in );
+                break;
 
-        // --- Online joining
-        $gen['join_enabled']            = ! empty( $g['join_enabled'] );
-        $gen['join_allow_ach']          = ! empty( $g['join_allow_ach'] );
-        $gen['join_stripe_invoice']     = ! empty( $g['join_stripe_invoice'] );
-        $gen['join_notify_email']       = sanitize_text_field( (string) ( $g['join_notify_email'] ?? '' ) );
-        $gen['join_max_colleagues']     = max( 0, min( 99, (int) ( $g['join_max_colleagues'] ?? 10 ) ) );
-        $gen['join_invite_expiry_days'] = max( 1, min( 365, (int) ( $g['join_invite_expiry_days'] ?? 30 ) ) );
-        $gen['join_firm_match']         = ( (string) ( $g['join_firm_match'] ?? '' ) ) === 'always' ? 'always' : 'domain';
-        $cut                            = trim( (string) ( $g['join_next_year_from'] ?? '' ) );
-        $gen['join_next_year_from']     = preg_match( '/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/', $cut ) ? $cut : '';
-        $gen['join_prelaw_tag']         = sanitize_title( (string) ( $g['join_prelaw_tag'] ?? '' ) );
-        $gen['join_success_text']       = sanitize_textarea_field( (string) ( $g['join_success_text'] ?? $defaults['general']['join_success_text'] ) );
-        $gen['join_municipalities']     = implode( "\n", array_filter( array_map( 'sanitize_text_field', (array) preg_split( '/\r\n|\r|\n/', (string) ( $g['join_municipalities'] ?? '' ) ) ), 'strlen' ) );
-        foreach ( [ 'cf_attorney_id', 'cf_bar_admission_date', 'cf_municipality', 'cf_nj_county', 'cf_school', 'cf_student_status', 'cf_mailing_phone' ] as $k ) {
-            $gen[ $k ] = sanitize_key( (string) ( $g[ $k ] ?? '' ) );
-        }
-        foreach ( [ 'year_paid_tag_pattern', 'year_unpaid_tag_pattern', 'assessment_paid_pattern' ] as $k ) {
-            if ( $gen[ $k ] === '' ) {
-                $gen[ $k ] = $defaults['general'][ $k ];
-            }
+            case 'applications':
+                foreach ( [ 'pending_tag', 'rejected_tag' ] as $k ) {
+                    $gen[ $k ] = sanitize_title( (string) ( $g[ $k ] ?? '' ) );
+                }
+                $gen['application_notify_email'] = sanitize_text_field( (string) ( $g['application_notify_email'] ?? '' ) );
+                $gen['application_success_text'] = sanitize_textarea_field( (string) ( $g['application_success_text'] ?? $defaults['general']['application_success_text'] ) );
+                $gen['mid_year_join_policy']     = array_key_exists( (string) ( $g['mid_year_join_policy'] ?? '' ), MyNJILGA_Dues_Settings::join_policy_labels() ) ? (string) $g['mid_year_join_policy'] : MyNJILGA_Dues_Settings::JOIN_FREE_UNTIL_NEXT_CYCLE;
+                break;
+
+            case 'advanced':
+                $gen['batch_size']             = max( 1, min( 200, (int) ( $g['batch_size'] ?? 25 ) ) );
+                $gen['downgrade_remove_roles'] = ! empty( $g['downgrade_remove_roles'] );
+                break;
+
+            case 'joining':
+                $gen['join_enabled']            = ! empty( $g['join_enabled'] );
+                $gen['join_allow_ach']          = ! empty( $g['join_allow_ach'] );
+                $gen['join_stripe_invoice']     = ! empty( $g['join_stripe_invoice'] );
+                $gen['join_notify_email']       = sanitize_text_field( (string) ( $g['join_notify_email'] ?? '' ) );
+                $gen['join_max_colleagues']     = max( 0, min( 99, (int) ( $g['join_max_colleagues'] ?? 10 ) ) );
+                $gen['join_invite_expiry_days'] = max( 1, min( 365, (int) ( $g['join_invite_expiry_days'] ?? 30 ) ) );
+                $gen['join_firm_match']         = ( (string) ( $g['join_firm_match'] ?? '' ) ) === 'always' ? 'always' : 'domain';
+                $cut                            = trim( (string) ( $g['join_next_year_from'] ?? '' ) );
+                $gen['join_next_year_from']     = preg_match( '/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/', $cut ) ? $cut : '';
+                $gen['join_prelaw_tag']         = sanitize_title( (string) ( $g['join_prelaw_tag'] ?? '' ) );
+                $gen['join_success_text']       = sanitize_textarea_field( (string) ( $g['join_success_text'] ?? $defaults['general']['join_success_text'] ) );
+                $gen['join_municipalities']     = implode( "\n", array_filter( array_map( 'sanitize_text_field', (array) preg_split( '/\r\n|\r|\n/', (string) ( $g['join_municipalities'] ?? '' ) ) ), 'strlen' ) );
+                foreach ( [ 'cf_attorney_id', 'cf_bar_admission_date', 'cf_municipality', 'cf_nj_county', 'cf_school', 'cf_student_status', 'cf_mailing_phone' ] as $k ) {
+                    $gen[ $k ] = sanitize_key( (string) ( $g[ $k ] ?? '' ) );
+                }
+                break;
         }
 
-        // --- Categories
+        // The default category must still exist after the categories changed.
+        if ( $gen['default_category'] !== '' && ! in_array( $gen['default_category'], array_column( $categories, 'key' ), true ) ) {
+            $gen['default_category'] = '';
+        }
+
+        // A member tag is something paying GRANTS; it must not be a tag that
+        // pricing, billing or the role logic already READS (a category's own
+        // tag, paid/unpaid, an assessment qualifier…), or paying would change
+        // who is charged what. Checked against the FINAL state on every save —
+        // changing the paid tag on one tab can newly collide with a member tag
+        // saved on another. Refused ones are blanked and reported.
+        $screened   = MyNJILGA_Member_Tags::screen( $categories, MyNJILGA_Member_Tags::reserved_slugs( $categories, $gen, (array) ( $assessment['qualifiers'] ?? [] ) ) );
+        $categories = $screened['categories'];
+
+        MyNJILGA_Dues_Settings::save( [
+            'general'        => $gen,
+            'categories'     => $categories,
+            'assessment'     => $assessment,
+            'firm_overrides' => $overrides,
+        ] );
+
+        // Which tags mean paid / unpaid / inactive, the year-tag pattern and the
+        // categories all feed the cached membership figures.
+        MyNJILGA_Membership_Stats::flush();
+
+        $args = [ 'saved' => '1' ];
+        if ( $screened['rejected'] ) {
+            $args['member_tag_rejected'] = implode( ',', $screened['rejected'] );
+        }
+        $queued = MyNJILGA_Role_Sync::after_settings_change( $current['categories'], $roleSignature );
+        if ( $queued !== null ) {
+            $args['role_sync'] = $queued;
+        }
+        self::back( $tab, $args );
+    }
+
+    /**
+     * The category table, as posted.
+     *
+     * @param array<string,mixed> $in
+     * @param array<string,mixed> $defaults
+     * @return array<int,array<string,mixed>>
+     */
+    private static function read_categories( array $in, array $defaults ): array {
         $categories = [];
         $usedKeys   = [];
         foreach ( (array) ( $in['categories'] ?? [] ) as $row ) {
@@ -947,15 +1066,18 @@ class MyNJILGA_Page_Settings {
             $c = MyNJILGA_Dues_Settings::normalize_category( $c );
         }
         unset( $c );
-        if ( empty( $categories ) ) {
-            $categories = $defaults['categories'];
-        }
-        if ( $gen['default_category'] !== '' && ! in_array( $gen['default_category'], array_column( $categories, 'key' ), true ) ) {
-            $gen['default_category'] = '';
-        }
+        return empty( $categories ) ? $defaults['categories'] : $categories;
+    }
 
-        // --- Assessment
-        $a = (array) ( $in['assessment'] ?? [] );
+    /**
+     * The assessment, as posted.
+     *
+     * @param array<string,mixed> $in
+     * @param array<string,mixed> $defaults
+     * @return array<string,mixed>
+     */
+    private static function read_assessment( array $in, array $defaults ): array {
+        $a          = (array) ( $in['assessment'] ?? [] );
         $qualifiers = [];
         foreach ( (array) ( $a['qualifiers'] ?? [] ) as $q ) {
             $q   = (array) $q;
@@ -974,14 +1096,21 @@ class MyNJILGA_Page_Settings {
             unset( $q['_order'] );
         }
         unset( $q );
-        $assessment = [
-            'key'          => 'trustee_dinner',
-            'label'        => sanitize_text_field( (string) ( $a['label'] ?? '' ) ) ?: $defaults['assessment']['label'],
-            'price_cents'  => self::dollars_to_cents( $a['price'] ?? 0 ),
-            'qualifiers'   => $qualifiers,
+        return [
+            'key'         => 'trustee_dinner',
+            'label'       => sanitize_text_field( (string) ( $a['label'] ?? '' ) ) ?: $defaults['assessment']['label'],
+            'price_cents' => self::dollars_to_cents( $a['price'] ?? 0 ),
+            'qualifiers'  => $qualifiers,
         ];
+    }
 
-        // --- Firm overrides
+    /**
+     * Per-firm billing-mode overrides, as posted.
+     *
+     * @param array<string,mixed> $in
+     * @return array<int,string>
+     */
+    private static function read_overrides( array $in ): array {
         $overrides = [];
         foreach ( (array) ( $in['firm_overrides'] ?? [] ) as $row ) {
             $row = (array) $row;
@@ -991,38 +1120,7 @@ class MyNJILGA_Page_Settings {
                 $overrides[ $cid ] = $md;
             }
         }
-
-        // A member tag is something paying GRANTS; it must not be a tag that
-        // pricing, billing or the role logic already READS (a category's own
-        // tag, paid/unpaid, an assessment qualifier…), or paying would change
-        // who is charged what. Refused ones are blanked and reported.
-        $screened   = MyNJILGA_Member_Tags::screen( $categories, MyNJILGA_Member_Tags::reserved_slugs( $categories, $gen, (array) ( $assessment['qualifiers'] ?? [] ) ) );
-        $categories = $screened['categories'];
-
-        MyNJILGA_Dues_Settings::save( [
-            'general'        => $gen,
-            'categories'     => $categories,
-            'assessment'     => $assessment,
-            'firm_overrides' => $overrides,
-        ] );
-
-        // Which tags mean paid / unpaid / inactive, the year-tag pattern and the
-        // categories all feed the cached membership figures.
-        MyNJILGA_Membership_Stats::flush();
-
-        $args   = [ 'saved' => '1' ];
-        if ( $screened['rejected'] ) {
-            $args['member_tag_rejected'] = implode( ',', $screened['rejected'] );
-        }
-        if ( $emailRejected ) {
-            $args['email_tag_rejected'] = implode( ',', $emailRejected );
-        }
-        $queued = MyNJILGA_Role_Sync::after_settings_change( $current['categories'], $roleSignature );
-        if ( $queued !== null ) {
-            $args['role_sync'] = $queued;
-        }
-        wp_safe_redirect( add_query_arg( $args, MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) );
-        exit;
+        return $overrides;
     }
 
     public static function handle_reset(): void {
@@ -1039,7 +1137,12 @@ class MyNJILGA_Page_Settings {
         if ( $queued !== null ) {
             $args['role_sync'] = $queued;
         }
-        wp_safe_redirect( add_query_arg( $args, MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) );
+        self::back( 'advanced', $args );
+    }
+
+    /** Redirect to a tab (with notice args) and stop. @param array<string,mixed> $args */
+    private static function back( string $tab, array $args = [] ): void {
+        wp_safe_redirect( self::tab_url( $tab, $args ) );
         exit;
     }
 

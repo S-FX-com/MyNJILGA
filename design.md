@@ -264,12 +264,22 @@ card. Client-side tabs (Invoicing) use `<button class="njilga-tab" data-tab="…
 
 `nav_tabs()` also works one level up, as a **section switch inside a
 single page class** rather than a filter on one list — Settings uses a
-`?tab=dues` / `?tab=payments` query arg to render two entirely different
-forms from one `render()` (never both at once), the same mechanism
-`MyNJILGA_Page_Firms::render_scope_tabs()` uses for a filter. Reach for
-this shape when a page grows a second, unrelated screen (a connection/
-credentials tab next to a settings form) rather than splitting it into a
-second menu page.
+`?tab=categories|billing|email|joining|applications|payments|advanced`
+query arg to render entirely different forms from one `render()` (never
+two at once), the same mechanism `MyNJILGA_Page_Firms::render_scope_tabs()`
+uses for a filter. Reach for this shape when a page grows unrelated
+screens (a connection/credentials tab next to settings forms) rather than
+splitting it into more menu pages.
+
+**One form per tab, and a tab saves only what it shows.** Give each tab
+its own `<form>` with a hidden `tab`, keep a map of the settings it owns
+(`MyNJILGA_Page_Settings::TAB_KEYS`), and have the save handler read only
+those from the post, carrying everything else over from what is stored — a
+big single form split into tabs is otherwise one forgotten field away from
+wiping the settings it no longer posts. Refuse (and say so) a post whose
+tab is unknown or that lacks the structure its tab edits, and pin "every
+setting has exactly one owner" in a test. A tab with its own actions (a
+preview, a test send) gets its own class and handler, as Invoice Email does.
 
 ### Danger zone
 

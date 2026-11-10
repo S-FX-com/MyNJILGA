@@ -20,9 +20,15 @@ class MyNJILGA_Invoice_Sender {
      * created yet, with a placeholder where the payment link will be (the
      * Launch Wizard's preview and sample). Sending never uses it.
      *
+     * $override tries wording and recipient settings that are NOT saved yet
+     * (subject, intro, closing, cc_mode, cc_emails, reply_to — any subset;
+     * the rest come from Settings): the Invoice Email tab uses it so "Send
+     * test" and "Preview" show unsaved edits through this very code path.
+     *
+     * @param array<string,string>|null $override
      * @return array{ok:bool,error?:string,to?:string,subject?:string,body?:string,headers?:array<int,string>,bill_to?:array<string,mixed>,dues_year?:int,assessment?:bool,total?:string,placeholder?:bool}
      */
-    public static function compose( object $invoiceRow, bool $preview = false ): array {
+    public static function compose( object $invoiceRow, bool $preview = false, ?array $override = null ): array {
         $placeholder = false;
         if ( empty( $invoiceRow->hosted_invoice_url ) ) {
             if ( ! $preview ) {
@@ -61,7 +67,7 @@ class MyNJILGA_Invoice_Sender {
 
         $covers = MyNJILGA_Dues_Roster::email_summary( $members, $duesYear, $kind );
 
-        $tpl = MyNJILGA_Invoice_Email::settings();
+        $tpl = array_merge( MyNJILGA_Invoice_Email::settings(), array_intersect_key( (array) $override, [ 'subject' => 1, 'intro' => 1, 'closing' => 1 ] ) );
         $msg = MyNJILGA_Invoice_Email::build( [
             'is_assessment'    => $isAssess,
             'year'             => $duesYear,
@@ -83,7 +89,7 @@ class MyNJILGA_Invoice_Sender {
             'to'         => (string) $billTo['email'],
             'subject'    => $msg['subject'],
             'body'       => $msg['body'],
-            'headers'    => self::headers( $billTo['email'], $members ),
+            'headers'    => self::headers( $billTo['email'], $members, $override ),
             'bill_to'    => $billTo,
             'dues_year'  => $duesYear,
             'assessment' => $isAssess,
@@ -136,11 +142,12 @@ class MyNJILGA_Invoice_Sender {
      * CC / Reply-To headers per Settings → Dues & Billing.
      *
      * @param array<int,array<string,mixed>> $members
+     * @param array<string,string>|null      $override cc_mode / cc_emails / reply_to to use instead of the saved ones (a preview of unsaved edits)
      * @return array<int,string>
      */
-    private static function headers( string $toEmail, array $members ): array {
+    private static function headers( string $toEmail, array $members, ?array $override = null ): array {
         $headers = [];
-        $mode    = (string) MyNJILGA_Dues_Settings::general( 'send_cc_mode', MyNJILGA_Dues_Settings::CC_OWNER_ONLY );
+        $mode    = (string) ( $override['cc_mode'] ?? MyNJILGA_Dues_Settings::general( 'send_cc_mode', MyNJILGA_Dues_Settings::CC_OWNER_ONLY ) );
         $cc      = [];
 
         if ( $mode === MyNJILGA_Dues_Settings::CC_ALL_MEMBERS ) {
@@ -151,7 +158,7 @@ class MyNJILGA_Invoice_Sender {
                 }
             }
         } elseif ( $mode === MyNJILGA_Dues_Settings::CC_CUSTOM ) {
-            foreach ( preg_split( '/[\s,;]+/', (string) MyNJILGA_Dues_Settings::general( 'send_cc_emails', '' ) ) as $raw ) {
+            foreach ( preg_split( '/[\s,;]+/', (string) ( $override['cc_emails'] ?? MyNJILGA_Dues_Settings::general( 'send_cc_emails', '' ) ) ) as $raw ) {
                 $email = sanitize_email( $raw );
                 if ( $email !== '' && strcasecmp( $email, $toEmail ) !== 0 ) {
                     $cc[] = $email;
@@ -163,7 +170,7 @@ class MyNJILGA_Invoice_Sender {
             $headers[] = 'Cc: ' . implode( ', ', $cc );
         }
 
-        $replyTo = sanitize_email( (string) MyNJILGA_Dues_Settings::general( 'send_reply_to', '' ) );
+        $replyTo = sanitize_email( (string) ( $override['reply_to'] ?? MyNJILGA_Dues_Settings::general( 'send_reply_to', '' ) ) );
         if ( $replyTo !== '' ) {
             $headers[] = 'Reply-To: ' . $replyTo;
         }

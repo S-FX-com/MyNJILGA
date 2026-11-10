@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, a member-facing dues status and membership overview, a public firm renewal lookup, a Dues History tab on FluentCRM contacts and companies, and tools to bring earlier years' dues in from PMPro or a spreadsheet — driven entirely from FluentCRM tags on the local install.
- * Version:     3.13.0
+ * Version:     3.14.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -88,6 +88,7 @@ require_once NJILGA_REPORT_DIR . 'includes/launch/class-launch-checks.php';
 require_once NJILGA_REPORT_DIR . 'includes/launch/class-page-launch.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-payments.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-settings.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-page-invoice-email.php';
 
 // Enrollment gate (application form → review queue → approval) and the
 // member-facing firm dues status page.
@@ -293,7 +294,10 @@ foreach ( [
 }
 unset( $njilgaLaunchAction, $njilgaLaunchHandler );
 
-// Dues & Billing settings.
+// Settings → Invoice Email: save, preview and send-test share one handler (the button picks).
+add_action( 'admin_post_' . MyNJILGA_Page_Invoice_Email::ACTION_SUBMIT, [ 'MyNJILGA_Page_Invoice_Email', 'handle_submit' ] );
+
+// Dues & Billing settings (one handler; each tab saves only its own settings).
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_SAVE,  [ 'MyNJILGA_Page_Settings', 'handle_save' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Settings::ACTION_RESET, [ 'MyNJILGA_Page_Settings', 'handle_reset' ] );
 

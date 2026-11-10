@@ -46,7 +46,9 @@ class MyNJILGA_Launch_Checks {
             $c[] = [ 'id' => $id, 'group' => $group, 'status' => $status, 'title' => $title, 'detail' => $detail, 'fix' => $fix ];
         };
         $fixTo = static function ( string $label, string $key ) use ( $url ): ?array {
-            return isset( $url[ $key ] ) && $url[ $key ] !== '' ? [ 'label' => $label, 'url' => (string) $url[ $key ] ] : null;
+            // A Settings tab's own link when we have it, else the Settings page itself.
+            $u = (string) ( $url[ $key ] ?? ( strpos( $key, 'settings_' ) === 0 ? ( $url['settings'] ?? '' ) : '' ) );
+            return $u !== '' ? [ 'label' => $label, 'url' => $u ] : null;
         };
 
         // ---- Payments (Stripe) ----------------------------------------------
@@ -129,7 +131,7 @@ class MyNJILGA_Launch_Checks {
             $add( 'tags', $g, self::OK, 'Every category\'s tag exists in FluentCRM' );
         }
         if ( $ladder ) {
-            $add( 'tiers', $g, self::FAIL, 'A tier ladder is wrong', implode( '; ', $ladder ), $fixTo( 'Fix it in Settings', 'settings' ) );
+            $add( 'tiers', $g, self::FAIL, 'A tier ladder is wrong', implode( '; ', $ladder ), $fixTo( 'Fix it in Categories & Pricing', 'settings_categories' ) );
         }
         if ( $prices ) {
             $add( 'prices', $g, self::INFO, 'What each category will be charged', implode( "\n", $prices ) . "\nTrustee Dinner Assessment — " . MyNJILGA_Invoicing::money( (int) ( $f['assessment_cents'] ?? 0 ) ) . ' (on top of dues, for officers and trustees)', $fixTo( 'Settings', 'settings' ) );
@@ -139,7 +141,7 @@ class MyNJILGA_Launch_Checks {
         $defaultLbl = (string) ( $f['default_category_label'] ?? $defaultKey );
         $defaulted  = (int) ( $f['defaulted_total'] ?? 0 );
         if ( $defaultKey === '' ) {
-            $add( 'default_category', $g, self::WARN, 'There is no default category', 'Contacts with no category tag will not be billed; they will be listed as exceptions.', $fixTo( 'Settings', 'settings' ) );
+            $add( 'default_category', $g, self::WARN, 'There is no default category', 'Contacts with no category tag will not be billed; they will be listed as exceptions.', $fixTo( 'Categories & Pricing', 'settings_categories' ) );
         } elseif ( ( $f['defaulted_total'] ?? null ) === null ) {
             $add( 'default_category', $g, self::INFO, 'Untagged contacts are billed as ' . $defaultLbl );
         } elseif ( $defaulted > 0 ) {
@@ -159,14 +161,14 @@ class MyNJILGA_Launch_Checks {
 
         $stripeBatch = (int) ( $f['batch_size'] ?? 0 );
         if ( $stripeBatch > 10 ) {
-            $add( 'batch', $g, self::WARN, sprintf( 'Invoice creation batch size is %d', $stripeBatch ), 'Each firm takes several Stripe calls; a large batch can run into the server\'s time limit. 10 is a safer start.', $fixTo( 'Settings', 'settings' ) );
+            $add( 'batch', $g, self::WARN, sprintf( 'Invoice creation batch size is %d', $stripeBatch ), 'Each firm takes several Stripe calls; a large batch can run into the server\'s time limit. 10 is a safer start.', $fixTo( 'Settings → Advanced', 'settings_advanced' ) );
         }
 
         // ---- Invoice emails -------------------------------------------------
         $g = 'Invoice emails';
-        $add( 'cc', $g, self::INFO, 'Who receives each invoice', (string) ( $f['cc_description'] ?? '' ), $fixTo( 'Settings', 'settings' ) );
+        $add( 'cc', $g, self::INFO, 'Who receives each invoice', (string) ( $f['cc_description'] ?? '' ), $fixTo( 'Invoice Email tab', 'settings_email' ) );
         if ( trim( (string) ( $f['reply_to'] ?? '' ) ) === '' ) {
-            $add( 'reply_to', $g, self::WARN, 'No Reply-To address is set', 'Replies to the invoice email will go to the site\'s From address, which may not be monitored.', $fixTo( 'Settings', 'settings' ) );
+            $add( 'reply_to', $g, self::WARN, 'No Reply-To address is set', 'Replies to the invoice email will go to the site\'s From address, which may not be monitored.', $fixTo( 'Invoice Email tab', 'settings_email' ) );
         } else {
             $add( 'reply_to', $g, self::OK, 'Replies go to ' . (string) $f['reply_to'] );
         }
@@ -177,9 +179,9 @@ class MyNJILGA_Launch_Checks {
         }
         $wording = $f['email_custom'] ?? null;
         if ( $wording === true ) {
-            $add( 'wording', $g, self::INFO, 'The invoice email uses your own wording', 'Read exactly what a firm will get — and send yourself a sample — in step 5. Merge tags are checked when you save, so a typo can\'t reach a firm.', [ 'label' => 'Preview it in step 5', 'url' => (string) ( $url['step5'] ?? '' ) ] );
+            $add( 'wording', $g, self::INFO, 'The invoice email uses your own wording', 'Preview it and send yourself a test on the Invoice Email tab (or read it per firm in step 5). Merge tags are checked when you save, so a typo can\'t reach a firm.', $fixTo( 'Edit or send a test', 'settings_email' ) );
         } elseif ( $wording === false ) {
-            $add( 'wording', $g, self::INFO, 'The invoice email uses the standard wording', 'You can change the subject, opening and sign-off under Settings → Dues & Billing, and preview the result in step 5.', $fixTo( 'Settings', 'settings' ) );
+            $add( 'wording', $g, self::INFO, 'The invoice email uses the standard wording', 'You can change the subject, opening and sign-off under Settings → Invoice Email, and preview the result in step 5.', $fixTo( 'Invoice Email tab', 'settings_email' ) );
         }
         $due = (int) ( $f['due_ts'] ?? 0 );
         if ( $due > 0 ) {
@@ -553,6 +555,9 @@ class MyNJILGA_Launch_Checks {
         return [
             'settings'  => $page( $menu::SLUG_SETTINGS ),
             'payments'  => $page( $menu::SLUG_SETTINGS, [ 'tab' => 'payments' ] ),
+            'settings_categories' => $page( $menu::SLUG_SETTINGS, [ 'tab' => 'categories' ] ),
+            'settings_email'      => $page( $menu::SLUG_SETTINGS, [ 'tab' => 'email' ] ),
+            'settings_advanced'   => $page( $menu::SLUG_SETTINGS, [ 'tab' => 'advanced' ] ),
             'setup'     => $page( $menu::SLUG_SETUP ),
             'invoicing' => $page( $menu::SLUG_INVOICING, [ 'dues_year' => $year ] ),
             'firms'     => $page( $menu::SLUG_FIRMS ),
