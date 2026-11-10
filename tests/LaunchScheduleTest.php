@@ -288,7 +288,7 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         $this->assertSame( 2, $w->state[2027]['sent'] );
         $this->assertCount( 1, $w->notified, 'staff are told once, when it finishes' );
         $this->assertSame( 'staff@example.org', $w->notified[0][0] );
-        $this->assertSame( [], $w->scheduled, 'nothing further is scheduled' );
+        $this->assertTrue( $w->unscheduled >= 1, 'the successor armed before sending is withdrawn once nothing is left' );
         $this->assertFalse( $w->locked, 'the lock is released' );
     }
 
@@ -348,6 +348,214 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         MyNJILGA_Launch_Schedule::run_batch( 2027, $p2 );
         $w2->now = self::NOW + 900 - 20;
         $this->assertSame( 'complete', MyNJILGA_Launch_Schedule::run_batch( 2027, $p2 )['outcome'] );
+    }
+
+    // ---- review findings: the window holds at run time, the list is the confirmed list, the lock is real ----
+
+    private function est( string $s ): int {
+        return ( new DateTimeImmutable( $s, $this->ny() ) )->getTimestamp();
+    }
+
+    /** weekdays-only, 9–17, one batch due Friday 16:50 */
+    private function windowWorld( array $rowIds, string $now ): array {
+        [ $p, $w ] = $this->world( $rowIds, [ 'batch_size' => 2, 'interval_min' => 15, 'weekdays_only' => true, 'has_window' => true, 'window_start' => 9, 'window_end' => 17 ],
+            [ 'start_ts' => $this->est( '2026-11-13 09:00' ), 'next_run_ts' => $this->est( '2026-11-13 16:50' ) ] );
+        $w->now = $this->est( $now );
+        return [ $p, $w ];
+    }
+
+    public function testALateFiringOutsideTheConfirmedHoursWaitsInsteadOfSending(): void {
+        [ $p, $w ] = $this->windowWorld( [ 1, 2, 3 ], '2026-11-14 03:00' ); // the Friday 16:50 batch fires at 3 am Saturday
+        $r = MyNJILGA_Launch_Schedule::run_batch( 2027, $p );
+        $this->assertSame( 'outside_window', $r['outcome'] );
+        $this->assertSame( [], $w->sendLog, 'nothing is emailed on a Saturday night' );
+        $this->assertSame( [ [ $this->est( '2026-11-16 09:00' ), 2027 ] ], $w->scheduled, 'it waits for Monday 9 am' );
+        $this->assertSame( $this->est( '2026-11-16 09:00' ), $w->state[2027]['next_run_ts'], 'and the record says so' );
+
+        $w->now = $this->est( '2026-11-16 09:00' ); $w->scheduled = [];
+        $this->assertSame( 'batch', MyNJILGA_Launch_Schedule::run_batch( 2027, $p )['outcome'] );
+        $this->assertSame( [ 1, 2 ], $w->sendLog, 'and sends when the window opens' );
+    }
+
+    public function testTheStaffButtonStillSendsOutsideTheWindow(): void {
+        [ $p, $w ] = $this->windowWorld( [ 1, 2, 3 ], '2026-11-14 03:00' );
+        $this->assertSame( 'batch', MyNJILGA_Launch_Schedule::run_batch( 2027, $p, true )['outcome'] );
+        $this->assertSame( [ 1, 2 ], $w->sendLog, 'an explicit "send now" is the admin overriding the window' );
+    }
+
+    public function testRetriesAreAlignedToTheWindowToo(): void {
+        // Stripe not ready at Fri 16:50: the 15-minute retry would be 17:05, which is outside the window.
+        [ $p, $w ] = $this->windowWorld( [ 1, 2 ], '2026-11-13 16:50' );
+        $w->ready = [ 'Stripe rejected this key.' ];
+        $this->assertSame( 'delayed', MyNJILGA_Launch_Schedule::run_batch( 2027, $p )['outcome'] );
+        $this->assertSame( [ [ $this->est( '2026-11-16 09:00' ), 2027 ] ], $w->scheduled );
+
+        // A held lock at Fri 16:58: +5 minutes would be 17:03.
+        [ $p, $w ] = $this->windowWorld( [ 1, 2 ], '2026-11-13 16:58' );
+        $w->locked = true;
+        $this->assertSame( 'locked', MyNJILGA_Launch_Schedule::run_batch( 2027, $p )['outcome'] );
+        $this->assertSame( [ [ $this->est( '2026-11-16 09:00' ), 2027 ] ], $w->scheduled );
+    }
+
+    public function testWeekdaysOnlyWithNoWindowDoesNotSendAtMidnightSaturday(): void {
+        [ $p, $w ] = $this->world( [ 1, 2 ], [ 'batch_size' => 2, 'weekdays_only' => true, 'has_window' => false ],
+            [ 'start_ts' => $this->est( '2026-11-13 09:00' ), 'next_run_ts' => $this->est( '2026-11-13 23:50' ) ] );
+        $w->now = $this->est( '2026-11-14 00:05' );
+        $this->assertSame( 'outside_window', MyNJILGA_Launch_Schedule::run_batch( 2027, $p )['outcome'] );
+        $this->assertSame( [], $w->sendLog );
+        $this->assertSame( [ [ $this->est( '2026-11-16 00:00' ), 2027 ] ], $w->scheduled );
+    }
+
+    public function testAFailureToRequeueAnEarlyOrLockedRunHaltsInsteadOfStalling(): void {
+        [ $p, $w ] = $this->world( [ 1, 2 ], [ 'start_ts' => self::NOW + 3600 ] );
+        $w->scheduleOk = false;
+        $this->assertSame( 'halted_schedule', MyNJILGA_Launch_Schedule::run_batch( 2027, $p )['outcome'] );
+        $this->assertSame( 'halted', $w->state[2027]['status'] );
+        $this->assertCount( 1, $w->notified );
+
+        [ $p, $w ] = $this->world( [ 1, 2 ] );
+        $w->locked = true; $w->scheduleOk = false;
+        $this->assertSame( 'halted_schedule', MyNJILGA_Launch_Schedule::run_batch( 2027, $p )['outcome'] );
+        $this->assertSame( 'halted', $w->state[2027]['status'] );
+    }
+
+    public function testOnlyTheInvoicesTheAdminConfirmedAreEverSent(): void {
+        [ $p, $w ] = $this->world( [ 1, 2, 3, 4 ], [ 'batch_size' => 10 ], [ 'row_ids' => [ 1, 2 ], 'unsent_at_schedule' => 2 ] );
+        $r = MyNJILGA_Launch_Schedule::run_batch( 2027, $p );
+        $this->assertSame( 'complete', $r['outcome'], 'done when the CONFIRMED invoices are done' );
+        $this->assertSame( [ 1, 2 ], $w->sendLog, 'invoices created after the confirmation (3 and 4) are not swept in' );
+        $this->assertSame( 'created', $w->rows[3] );
+        $this->assertSame( 'created', $w->rows[4] );
+    }
+
+    public function testTheConfirmedListAlsoDrivesWhatIsLeftToSend(): void {
+        [ $p, $w ] = $this->world( [ 1, 2, 3, 4, 5 ], [ 'batch_size' => 2 ], [ 'row_ids' => [ 1, 2, 3 ], 'unsent_at_schedule' => 3 ] );
+        $r = MyNJILGA_Launch_Schedule::run_batch( 2027, $p );
+        $this->assertSame( 'batch', $r['outcome'] );
+        $this->assertSame( 1, $r['remaining'], 'only invoice 3 of the confirmed three remains; 4 and 5 are not counted' );
+    }
+
+    public function testAFingerprintIdentifiesTheExactListNotItsLength(): void {
+        $a = MyNJILGA_Launch_Schedule::list_fingerprint( [ 3, 1, 2 ] );
+        $this->assertSame( $a, MyNJILGA_Launch_Schedule::list_fingerprint( [ '1', 2, 3, 3, 0, 'x' ] ) );
+        $this->assertTrue( $a !== MyNJILGA_Launch_Schedule::list_fingerprint( [ 1, 2, 4 ] ), 'same length, different invoices' );
+        $this->assertTrue( $a !== MyNJILGA_Launch_Schedule::list_fingerprint( [ 1, 2 ] ) );
+    }
+
+    public function testTheNextBatchIsArmedBeforeAnyEmailGoesOut(): void {
+        [ $p, $w ] = $this->world( [ 1, 2, 3, 4, 5 ], [ 'batch_size' => 2, 'interval_min' => 15 ] );
+        $armedAtFirstSend = null;
+        $w->onSend = static function ( int $id, $w ) use ( &$armedAtFirstSend ) { if ( $armedAtFirstSend === null ) { $armedAtFirstSend = count( $w->scheduled ); } };
+        MyNJILGA_Launch_Schedule::run_batch( 2027, $p );
+        $this->assertSame( 1, $armedAtFirstSend, 'if this batch died now, the schedule would still have a successor' );
+        $this->assertSame( [ [ self::NOW + 900, 2027 ] ], $w->scheduled, 'and it is the same time the batch records as next' );
+        $this->assertSame( self::NOW + 900, $w->state[2027]['next_run_ts'] );
+    }
+
+    public function testStripeStayingNotReadyHaltsAndTellsStaffInsteadOfDelayingForever(): void {
+        [ $p, $w ] = $this->world( [ 1, 2 ] );
+        $w->ready = [ 'Stripe rejected this key when checked just now.' ];
+        $outcomes = [];
+        for ( $i = 0; $i < MyNJILGA_Launch_Schedule::MAX_DELAYS; $i++ ) {
+            $outcomes[] = MyNJILGA_Launch_Schedule::run_batch( 2027, $p )['outcome'];
+            $w->now += 900;
+        }
+        $this->assertSame( [ 'delayed', 'delayed', 'delayed', 'halted_not_ready' ], $outcomes );
+        $this->assertSame( 'halted', $w->state[2027]['status'] );
+        $this->assertCount( 1, $w->notified, 'staff are told' );
+        $this->assertSame( [], $w->sendLog );
+
+        // A healthy batch in between resets the count.
+        [ $p, $w ] = $this->world( [ 1, 2, 3, 4, 5, 6 ], [ 'batch_size' => 1 ] );
+        $w->ready = [ 'blip' ];
+        MyNJILGA_Launch_Schedule::run_batch( 2027, $p ); $w->now += 900;
+        MyNJILGA_Launch_Schedule::run_batch( 2027, $p ); $w->now += 900;
+        $this->assertSame( 2, $w->state[2027]['delays'] );
+        $w->ready = [];
+        MyNJILGA_Launch_Schedule::run_batch( 2027, $p );
+        $this->assertSame( 0, $w->state[2027]['delays'], 'a batch that ran clears the streak' );
+    }
+
+    // ---- the send lock (a fake options table behind $wpdb) ----
+
+    private function withOptionsTable( callable $fn ): void {
+        $db = new class {
+            public $options = 'wp_options';
+            public $rows = [];
+            public function prepare( string $q, ...$args ): string {
+                $i = 0;
+                return (string) preg_replace_callback( '/%s/', static function () use ( &$i, $args ) { return "'" . addslashes( (string) $args[ $i++ ] ) . "'"; }, $q );
+            }
+            public function query( string $q ) {
+                if ( preg_match( "/^INSERT IGNORE INTO wp_options .* VALUES \\( '([^']*)', '([^']*)', 'no' \\)$/", $q, $m ) ) {
+                    if ( isset( $this->rows[ $m[1] ] ) ) { return 0; }
+                    $this->rows[ $m[1] ] = $m[2];
+                    return 1;
+                }
+                if ( preg_match( "/^UPDATE wp_options SET option_value = '([^']*)' WHERE option_name = '([^']*)' AND option_value = '([^']*)'$/", $q, $m ) ) {
+                    if ( ( $this->rows[ $m[2] ] ?? null ) !== $m[3] ) { return 0; }
+                    $this->rows[ $m[2] ] = $m[1];
+                    return 1;
+                }
+                if ( preg_match( "/^DELETE FROM wp_options WHERE option_name = '([^']*)' AND option_value = '([^']*)'$/", $q, $m ) ) {
+                    if ( ( $this->rows[ $m[1] ] ?? null ) !== $m[2] ) { return 0; }
+                    unset( $this->rows[ $m[1] ] );
+                    return 1;
+                }
+                throw new \RuntimeException( 'unexpected query: ' . $q );
+            }
+            public function get_var( string $q ) {
+                if ( preg_match( "/^SELECT option_value FROM wp_options WHERE option_name = '([^']*)'$/", $q, $m ) ) { return $this->rows[ $m[1] ] ?? null; }
+                throw new \RuntimeException( 'unexpected query: ' . $q );
+            }
+        };
+        $saved = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = $db;
+        try {
+            $fn( $db );
+        } finally {
+            $GLOBALS['wpdb'] = $saved;
+        }
+    }
+
+    public function testOnlyOneCallerCanHoldTheSendLock(): void {
+        $this->withOptionsTable( function ( $db ) {
+            $a = MyNJILGA_Launch_Schedule::acquire_lock();
+            $this->assertTrue( $a !== '', 'the first caller gets it' );
+            $this->assertSame( '', MyNJILGA_Launch_Schedule::acquire_lock(), 'the second does not' );
+            MyNJILGA_Launch_Schedule::release_lock( 'someone-elses-token' );
+            $this->assertSame( '', MyNJILGA_Launch_Schedule::acquire_lock(), 'a stranger cannot release it' );
+            MyNJILGA_Launch_Schedule::release_lock( $a );
+            $b = MyNJILGA_Launch_Schedule::acquire_lock();
+            $this->assertTrue( $b !== '' && $b !== $a, 'after release it can be taken again, with a fresh token' );
+        } );
+    }
+
+    public function testADeadRunsLockIsTakenOverExactlyOnce(): void {
+        $this->withOptionsTable( function ( $db ) {
+            $stale = ( time() - MyNJILGA_Launch_Schedule::LOCK_TTL - 30 ) . ':deadbeef';
+            $db->rows[ MyNJILGA_Launch_Schedule::LOCK_OPTION ] = $stale;
+            $first = MyNJILGA_Launch_Schedule::acquire_lock();
+            $this->assertTrue( $first !== '', 'a stale lock is taken over' );
+            $this->assertSame( '', MyNJILGA_Launch_Schedule::acquire_lock(), 'and the takeover is now the live lock' );
+
+            // Two takers who both saw the same stale value cannot both win: the compare-and-set loses for the second.
+            $db->rows[ MyNJILGA_Launch_Schedule::LOCK_OPTION ] = $stale;
+            $won  = (int) $db->query( $db->prepare( "UPDATE wp_options SET option_value = %s WHERE option_name = %s AND option_value = %s", 'taker-1', MyNJILGA_Launch_Schedule::LOCK_OPTION, $stale ) );
+            $lost = (int) $db->query( $db->prepare( "UPDATE wp_options SET option_value = %s WHERE option_name = %s AND option_value = %s", 'taker-2', MyNJILGA_Launch_Schedule::LOCK_OPTION, $stale ) );
+            $this->assertSame( [ 1, 0 ], [ $won, $lost ] );
+        } );
+    }
+
+    public function testTheRunnersLockPortReleasesOnlyItsOwnToken(): void {
+        $this->withOptionsTable( function ( $db ) {
+            $this->assertTrue( MyNJILGA_Launch_Schedule::take_lock() );
+            $this->assertFalse( MyNJILGA_Launch_Schedule::take_lock(), 'a second batch cannot start' );
+            // Someone takes over after a (simulated) timeout; the first run finishing late must not free THEIR lock.
+            $db->rows[ MyNJILGA_Launch_Schedule::LOCK_OPTION ] = time() . ':other-run';
+            MyNJILGA_Launch_Schedule::drop_lock();
+            $this->assertTrue( isset( $db->rows[ MyNJILGA_Launch_Schedule::LOCK_OPTION ] ), 'the other run keeps its lock' );
+        } );
     }
 
     public function testOnlyOneBatchRunsAtATime(): void {
@@ -442,7 +650,7 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         $this->assertSame( [ 1, 2, 3, 4, 5 ], $w->sendLog, 'stops after the fifth failure in a row — it does not burn through every invoice' );
         $this->assertSame( 'halted', $w->state[2027]['status'] );
         $this->assertCount( 1, $w->notified );
-        $this->assertSame( [], $w->scheduled, 'and schedules nothing further' );
+        $this->assertTrue( $w->unscheduled >= 1, 'and the successor armed before sending is withdrawn' );
     }
 
     public function testASuccessBreaksTheRunOfMailFailures(): void {
@@ -464,7 +672,9 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         $this->assertSame( 'interrupted', $r['outcome'] );
         $this->assertSame( 'paused', $w->state[2027]['status'], 'the batch must not revive what staff paused' );
         $this->assertSame( 2, $w->state[2027]['sent'] );
-        $this->assertSame( [], $w->scheduled );
+        // The successor armed before sending is still pending (a real pause() withdraws it), and does nothing when it fires.
+        $this->assertSame( 'skipped', MyNJILGA_Launch_Schedule::run_batch( 2027, $p )['outcome'] );
+        $this->assertSame( [ 1, 2 ], $w->sendLog );
     }
 
     public function testACancelledScheduleDoesNothing(): void {
@@ -498,7 +708,7 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         $this->assertSame( 'halted_schedule', $r['outcome'] );
         $this->assertSame( 'halted', $w->state[2027]['status'] );
         $this->assertCount( 1, $w->notified );
-        $this->assertSame( 2, $w->state[2027]['sent'], 'what was sent is kept' );
+        $this->assertSame( [], $w->sendLog, 'nothing is emailed when the next batch cannot be armed first' );
     }
 
     public function testNoUnsentInvoicesCompletesImmediately(): void {
@@ -519,12 +729,13 @@ class LaunchScheduleTest extends NJILGA_TestCase {
     public function testCreatingASchedulePersistsItAndSchedulesTheFirstBatch(): void {
         [ $p, $w ] = $this->world( [] );
         $w->state = [];
-        $r = MyNJILGA_Launch_Schedule::create( 2027, $this->goodOptions(), true, 7, 'me@example.org', 120, $p );
+        $r = MyNJILGA_Launch_Schedule::create( 2027, $this->goodOptions(), true, 7, 'me@example.org', range( 1, 120 ), $p );
         $this->assertTrue( $r['ok'], $r['error'] );
         $this->assertSame( [ [ self::NOW + 3600, 2027 ] ], $w->scheduled );
         $rec = $w->state[2027];
         $this->assertSame( 'scheduled', $rec['status'] );
         $this->assertSame( 120, $rec['unsent_at_schedule'] );
+        $this->assertSame( range( 1, 120 ), $rec['row_ids'], 'the confirmed list is stored with the schedule' );
         $this->assertSame( 7, $rec['created_by'] );
         $this->assertSame( 'me@example.org', $rec['notify_email'] );
         $this->assertTrue( $rec['livemode'] );
@@ -540,14 +751,14 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         $o['window_start']   = 9;
         $o['window_end']     = 17;
         $o['batch_size']     = 25;
-        MyNJILGA_Launch_Schedule::create( 2027, $o, true, 1, 'x@example.org', 10, $p );
+        MyNJILGA_Launch_Schedule::create( 2027, $o, true, 1, 'x@example.org', range( 1, 10 ), $p );
         $this->assertSame( 'Mon 2026-11-16 09:00 EST', $this->fmt( $w->scheduled[0][0] ) );
     }
 
     public function testOnlyOneScheduleCanBeOpenAtATime(): void {
         [ $p, $w ] = $this->world( [] );
         $w->open = [ 'year' => 2026, 'status' => 'paused' ];
-        $r = MyNJILGA_Launch_Schedule::create( 2027, $this->goodOptions(), true, 1, 'x@example.org', 10, $p );
+        $r = MyNJILGA_Launch_Schedule::create( 2027, $this->goodOptions(), true, 1, 'x@example.org', range( 1, 10 ), $p );
         $this->assertFalse( $r['ok'] );
         $this->assertSame( [], $w->scheduled );
     }
@@ -555,14 +766,14 @@ class LaunchScheduleTest extends NJILGA_TestCase {
     public function testNothingToSendIsRefused(): void {
         [ $p, $w ] = $this->world( [] );
         $w->state = [];
-        $this->assertFalse( MyNJILGA_Launch_Schedule::create( 2027, $this->goodOptions(), true, 1, 'x@example.org', 0, $p )['ok'] );
+        $this->assertFalse( MyNJILGA_Launch_Schedule::create( 2027, $this->goodOptions(), true, 1, 'x@example.org', [], $p )['ok'] );
     }
 
     public function testASchedulerThatRefusesLeavesNoRecordBehind(): void {
         [ $p, $w ] = $this->world( [] );
         $w->state = [];
         $w->scheduleOk = false;
-        $r = MyNJILGA_Launch_Schedule::create( 2027, $this->goodOptions(), true, 1, 'x@example.org', 10, $p );
+        $r = MyNJILGA_Launch_Schedule::create( 2027, $this->goodOptions(), true, 1, 'x@example.org', range( 1, 10 ), $p );
         $this->assertFalse( $r['ok'] );
         $this->assertSame( [], $w->state, 'nothing is recorded as scheduled when nothing is' );
     }

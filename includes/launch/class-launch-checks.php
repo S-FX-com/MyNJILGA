@@ -429,7 +429,7 @@ class MyNJILGA_Launch_Checks {
         if ( (int) $review['no_bill_to_email'] > 0 ) {
             $add( 'bill_to', self::WARN, sprintf( '%d invoice%s no bill-to email in the preview', (int) $review['no_bill_to_email'], (int) $review['no_bill_to_email'] === 1 ? ' has' : 's have' ), 'The email falls back to the contact\'s current address when it sends; check these firms have a reachable Owner.', $fix );
         }
-        if ( (int) $review['ready'] === 0 && (int) $review['created_unsent'] === 0 && (int) $review['sent'] === 0 && (int) $review['paid'] === 0 ) {
+        if ( (int) $review['ready'] === 0 && (int) $review['creating'] === 0 && (int) $review['created_unsent'] === 0 && (int) $review['sent'] === 0 && (int) $review['paid'] === 0 ) {
             $add( 'nothing_ready', self::WARN, 'No invoice is ready to create', 'Everything was excluded. Check the lists above.', $fix );
         }
         return $c;

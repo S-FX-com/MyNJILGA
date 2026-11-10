@@ -29,14 +29,24 @@
  *     must not burn through every invoice).
  *   - Pausing, cancelling and a mode flip are honoured between rows, not only
  *     between batches.
- *   - If the next batch cannot be scheduled the schedule HALTS visibly —
- *     never a silent stall.
+ *   - Only the invoices staff CONFIRMED are sent: the schedule stores their
+ *     ids, so invoices created afterwards are never swept in unconfirmed.
+ *   - The window the admin chose (weekdays, hours) is enforced when a batch
+ *     RUNS, not only when it is scheduled: Action Scheduler can fire late, and
+ *     a late firing waits for the next allowed moment instead of sending.
+ *   - The next batch is scheduled BEFORE any email goes out, so a batch that
+ *     dies part-way (PHP time or memory limit) still has a successor; and if
+ *     the next batch cannot be scheduled the schedule HALTS visibly — never a
+ *     silent stall. Repeated "Stripe not ready" deferrals halt it too.
  *   - The Action Scheduler callback takes its argument untyped. WordPress
  *     hands a hook callback whatever it was given (an empty string for an
  *     argument-less action), and a typed parameter once took a whole site
  *     down; run_scheduled() coerces instead.
  */
 class MyNJILGA_Launch_Schedule {
+
+    /** The token of the send lock this request holds ('' = none). */
+    private static $lockToken = '';
 
     const OPTION      = 'njilga_launch_schedules';
     const LOCK_OPTION = 'njilga_launch_send_lock';
@@ -66,6 +76,8 @@ class MyNJILGA_Launch_Schedule {
     const MAX_ATTEMPTS_PER_ROW = 2;
     /** A held lock older than this is treated as a dead run's. */
     const LOCK_TTL = 600;
+    /** "Stripe not ready" deferrals in a row (15 minutes apart) before the schedule halts and tells staff. */
+    const MAX_DELAYS = 4;
     const NOTES_KEPT = 40;
     const FAILURES_KEPT = 200;
 
@@ -253,6 +265,34 @@ class MyNJILGA_Launch_Schedule {
     }
 
     /**
+     * A short fingerprint of a list of invoice ids, so a confirmation can be
+     * tied to the exact list the admin was shown (not merely its length).
+     *
+     * @param array<int,int|string> $ids
+     */
+    public static function list_fingerprint( array $ids ): string {
+        $ids = array_values( array_unique( array_filter( array_map( 'intval', $ids ), static function ( $n ) { return $n > 0; } ) ) );
+        sort( $ids );
+        return substr( sha1( implode( ',', $ids ) ), 0, 16 );
+    }
+
+    /**
+     * Keep only the rows the admin confirmed. A record without a confirmed
+     * list (none is created without one) is left unfiltered.
+     *
+     * @param array<int,object>   $rows
+     * @param array<string,mixed> $rec
+     * @return array<int,object>
+     */
+    private static function confirmed_rows( array $rows, array $rec ): array {
+        if ( ! isset( $rec['row_ids'] ) || ! is_array( $rec['row_ids'] ) ) {
+            return $rows;
+        }
+        $ok = array_flip( array_map( 'intval', $rec['row_ids'] ) );
+        return array_values( array_filter( $rows, static function ( $r ) use ( $ok ) { return isset( $ok[ (int) $r->id ] ); } ) );
+    }
+
+    /**
      * The invoices that can be emailed: issued (`created`) and not yet sent,
      * with a payment link, excluding online joins (those were paid at
      * Checkout and have nothing to send). Id order.
@@ -320,11 +360,14 @@ class MyNJILGA_Launch_Schedule {
      * Start a schedule for a year.
      *
      * @param array<string,mixed> $options  normalize_options()'s `options`.
+     * @param array<int,int>      $rowIds   The invoices the admin confirmed — and the only ones this schedule will ever send.
      * @return array{ok:bool,error:string}
      */
-    public static function create( int $year, array $options, bool $livemode, int $userId, string $notifyEmail, int $unsent, ?array $ports = null ): array {
-        $p   = self::ports( $ports );
-        $now = (int) $p['now']();
+    public static function create( int $year, array $options, bool $livemode, int $userId, string $notifyEmail, array $rowIds, ?array $ports = null ): array {
+        $p      = self::ports( $ports );
+        $now    = (int) $p['now']();
+        $rowIds = array_values( array_unique( array_filter( array_map( 'intval', $rowIds ), static function ( $n ) { return $n > 0; } ) ) );
+        $unsent = count( $rowIds );
 
         $open = $p['open']();
         if ( $open ) {
@@ -348,6 +391,7 @@ class MyNJILGA_Launch_Schedule {
             'created_at'           => $now,
             'notify_email'         => $notifyEmail,
             'unsent_at_schedule'   => $unsent,
+            'row_ids'              => $rowIds,
             'sent'                 => 0,
             'failed'               => 0,
             'consecutive_failures' => 0,
@@ -441,7 +485,11 @@ class MyNJILGA_Launch_Schedule {
                 $rec = self::get( $year );
                 if ( $rec && self::is_active( (string) $rec['status'] ) ) {
                     $rec['status'] = self::ST_HALTED;
-                    self::put( $year, self::note( $rec, time(), 'Halted after an unexpected error: ' . $e->getMessage() ) );
+                    $rec           = self::note( $rec, time(), 'Halted after an unexpected error: ' . $e->getMessage() );
+                    self::put( $year, $rec );
+                    $p = self::ports( null );
+                    $p['unschedule']( $year );
+                    self::notify( $p, $rec, 'halted' );
                 }
             } catch ( \Throwable $inner ) {
                 // Nothing more can be done from here.
@@ -479,13 +527,22 @@ class MyNJILGA_Launch_Schedule {
         $due = (int) ( $rec['next_run_ts'] ?? 0 ) ?: (int) $rec['start_ts'];
         if ( ! $force && $now < $due - 30 ) {
             // Fired early (or twice): put the next run where it belongs and do nothing now.
-            $p['schedule']( $due, $year );
-            return $result( 'early' );
+            return self::requeue( $p, $year, $now, $due, $result( 'early' ) );
+        }
+
+        // The hours and days the admin confirmed are enforced NOW, not only when the batch
+        // was scheduled: Action Scheduler fires late on a quiet site, and a retry can land
+        // anywhere. Outside them, wait for the next allowed moment instead of sending.
+        if ( ! $force ) {
+            $allowed = self::align_to_window( $now, $opts, $tz );
+            if ( $allowed > $now ) {
+                self::commit( $p, $year, $now, [ 'next_run_ts' => $allowed ] );
+                return self::requeue( $p, $year, $now, $allowed, $result( 'outside_window' ) );
+            }
         }
 
         if ( ! $p['lock']() ) {
-            $p['schedule']( $now + 300, $year );
-            return $result( 'locked' );
+            return self::requeue( $p, $year, $now, self::align_to_window( $now + 300, $opts, $tz ), $result( 'locked' ) );
         }
 
         try {
@@ -501,16 +558,28 @@ class MyNJILGA_Launch_Schedule {
 
             $errors = (array) $p['ready_errors']();
             if ( $errors ) {
-                $retry = $now + 900;
-                self::commit( $p, $year, $now, [ 'note' => 'Stripe is not ready (' . (string) reset( $errors ) . ') — will try again in 15 minutes.', 'next_run_ts' => $retry, 'status' => self::ST_RUNNING ] );
+                $delays = (int) ( $rec['delays'] ?? 0 ) + 1;
+                if ( $delays >= self::MAX_DELAYS ) {
+                    return self::halt( $p, $year, $now, sprintf( 'Stripe has not been ready for %d checks in a row (%s) — halted. Fix the connection (Settings → Payments), then resume.', $delays, (string) reset( $errors ) ), $result( 'halted_not_ready' ), [ 'delays' => $delays ] );
+                }
+                $retry = self::align_to_window( $now + 900, $opts, $tz );
+                self::commit( $p, $year, $now, [ 'note' => 'Stripe is not ready (' . (string) reset( $errors ) . ') — will try again in 15 minutes.', 'next_run_ts' => $retry, 'status' => self::ST_RUNNING, 'delays' => $delays ] );
                 if ( ! $p['schedule']( $retry, $year ) ) {
                     return self::halt( $p, $year, $now, 'Stripe was not ready and the retry could not be scheduled.', $result( 'halted_schedule' ) );
                 }
                 return $result( 'delayed' );
             }
 
+            // Arm the NEXT batch before any email goes out. If this one dies part-way (PHP's
+            // time or memory limit skips every cleanup), the schedule still has a successor
+            // instead of sitting "running" with nothing pending. If it can't be armed, send nothing.
+            $next = self::next_run_ts( $now, $opts, $tz );
+            if ( ! $p['schedule']( $next, $year ) ) {
+                return self::halt( $p, $year, $now, 'The next batch could not be scheduled with Action Scheduler — halted before sending anything, so it cannot stall silently.', $result( 'halted_schedule' ) );
+            }
+
             $livemode = (bool) $rec['livemode'];
-            $batch    = self::pick_batch( (array) $p['rows']( $year, $livemode ), (array) $rec['attempts'], (int) $rec['options']['batch_size'] );
+            $batch    = self::pick_batch( self::confirmed_rows( (array) $p['rows']( $year, $livemode ), $rec ), (array) $rec['attempts'], (int) $rec['options']['batch_size'] );
 
             $sent        = 0;
             $failed      = 0;
@@ -566,14 +635,15 @@ class MyNJILGA_Launch_Schedule {
                 }
             }
 
-            $remaining = count( self::pick_batch( (array) $p['rows']( $year, $livemode ), array_replace( (array) $rec['attempts'], $attempts ), PHP_INT_MAX ) );
+            $remaining = count( self::pick_batch( self::confirmed_rows( (array) $p['rows']( $year, $livemode ), $rec ), array_replace( (array) $rec['attempts'], $attempts ), PHP_INT_MAX ) );
 
-            $delta = [ 'sent' => $sent, 'failed' => $failed, 'attempts' => $attempts, 'failures' => $failures, 'consecutive_failures' => $consecutive, 'last_run_ts' => $now ];
+            $delta = [ 'sent' => $sent, 'failed' => $failed, 'attempts' => $attempts, 'failures' => $failures, 'consecutive_failures' => $consecutive, 'last_run_ts' => $now, 'delays' => 0 ];
 
             if ( $stopped === 'failures' ) {
                 $delta['status'] = self::ST_HALTED;
                 $delta['note']   = sprintf( 'Halted: %d emails in a row could not be sent by the mail system. Check the site\'s mail configuration, send yourself a test email, then resume.', self::MAX_CONSECUTIVE_FAILURES );
                 $final = self::commit( $p, $year, $now, $delta );
+                $p['unschedule']( $year );
                 self::notify( $p, $final, 'halted' );
                 return $result( 'halted_failures', $sent, $failed, $remaining );
             }
@@ -590,17 +660,15 @@ class MyNJILGA_Launch_Schedule {
                 $delta['finished_ts'] = $now;
                 $delta['note']        = 'Complete: every sendable invoice has been emailed.';
                 $final = self::commit( $p, $year, $now, $delta );
+                $p['unschedule']( $year ); // the successor armed above has nothing left to do
                 self::notify( $p, $final, 'complete' );
                 return $result( 'complete', $sent, $failed, 0 );
             }
 
-            $next = self::next_run_ts( $now, $opts, $tz );
+            // The successor was armed before sending (at $next); record when it is due.
             $delta['status']      = self::ST_RUNNING;
             $delta['next_run_ts'] = $next;
             self::commit( $p, $year, $now, $delta );
-            if ( ! $p['schedule']( $next, $year ) ) {
-                return self::halt( $p, $year, $now, 'The next batch could not be scheduled with Action Scheduler — halted so it does not stall silently.', $result( 'halted_schedule', $sent, $failed, $remaining ) );
-            }
             return $result( 'batch', $sent, $failed, $remaining );
         } finally {
             $p['unlock']();
@@ -628,7 +696,7 @@ class MyNJILGA_Launch_Schedule {
         if ( ! empty( $delta['failures'] ) ) {
             $rec['failures'] = array_slice( array_replace( (array) $rec['failures'], (array) $delta['failures'] ), -self::FAILURES_KEPT, null, true );
         }
-        foreach ( [ 'consecutive_failures', 'last_run_ts', 'next_run_ts', 'finished_ts' ] as $k ) {
+        foreach ( [ 'consecutive_failures', 'last_run_ts', 'next_run_ts', 'finished_ts', 'delays' ] as $k ) {
             if ( isset( $delta[ $k ] ) ) {
                 $rec[ $k ] = $delta[ $k ];
             }
@@ -659,8 +727,24 @@ class MyNJILGA_Launch_Schedule {
         $delta['status'] = self::ST_HALTED;
         $delta['note']   = $reason;
         $final = self::commit( $p, $year, $now, $delta );
+        $p['unschedule']( $year );
         self::notify( $p, $final, 'halted' );
         return $outcome;
+    }
+
+    /**
+     * Put the next run at $ts. If Action Scheduler won't take it the schedule
+     * halts (visibly) rather than sit "scheduled" with nothing pending.
+     *
+     * @param array<string,callable> $p
+     * @param array<string,mixed>    $outcome What to return when it worked.
+     * @return array<string,mixed>
+     */
+    private static function requeue( array $p, int $year, int $now, int $ts, array $outcome ): array {
+        if ( $p['schedule']( $ts, $year ) ) {
+            return $outcome;
+        }
+        return self::halt( $p, $year, $now, 'The next batch could not be scheduled with Action Scheduler — halted so it does not stall silently.', [ 'outcome' => 'halted_schedule', 'sent' => 0, 'failed' => 0, 'remaining' => 0 ] );
     }
 
     /**
@@ -710,6 +794,71 @@ class MyNJILGA_Launch_Schedule {
         }
         $lines[] = 'Open My NJILGA → Launch Wizard → Send to see the details.';
         return [ 'subject' => $subject, 'body' => implode( "\n\n", $lines ) ];
+    }
+
+    // -------------------------------------------------------------------------
+    // The send lock
+    // -------------------------------------------------------------------------
+
+    /**
+     * Claim the send lock. Returns a token to release it with, or '' when
+     * another batch (or a manual send) holds it.
+     *
+     * The claim is a single INSERT IGNORE on the options table, so exactly one
+     * caller can create the row — add_option() is not enough, because it checks
+     * and then inserts with ON DUPLICATE KEY UPDATE, which lets two racing
+     * callers both succeed. A dead run's stale lock is taken over with a
+     * compare-and-set on the value we saw, so two takers cannot both win.
+     * Each holder releases only ITS OWN token.
+     */
+    public static function acquire_lock(): string {
+        global $wpdb;
+        $name = self::LOCK_OPTION;
+        $now  = time();
+        try {
+            $token = $now . ':' . bin2hex( random_bytes( 6 ) );
+        } catch ( \Throwable $e ) {
+            $token = $now . ':' . mt_rand();
+        }
+        for ( $attempt = 0; $attempt < 2; $attempt++ ) {
+            if ( (int) $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO {$wpdb->options} ( option_name, option_value, autoload ) VALUES ( %s, %s, 'no' )", $name, $token ) ) === 1 ) { // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+                return $token;
+            }
+            $held = (string) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $name ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            if ( $held === '' ) {
+                continue; // released between our two statements: try the insert again
+            }
+            if ( (int) $held > 0 && $now - (int) $held < self::LOCK_TTL ) {
+                return '';
+            }
+            // A dead run's lock: take it over only if it is still exactly what we saw.
+            return (int) $wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND option_value = %s", $token, $name, $held ) ) === 1 ? $token : ''; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        }
+        return '';
+    }
+
+    /** Release a lock taken with acquire_lock(): only if it is still ours. */
+    public static function release_lock( string $token ): void {
+        global $wpdb;
+        if ( $token === '' ) {
+            return;
+        }
+        $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s", self::LOCK_OPTION, $token ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    }
+
+    /** run_batch()'s lock port: remembers the token for drop_lock(). */
+    public static function take_lock(): bool {
+        $token = self::acquire_lock();
+        if ( $token === '' ) {
+            return false;
+        }
+        self::$lockToken = $token;
+        return true;
+    }
+
+    public static function drop_lock(): void {
+        self::release_lock( self::$lockToken );
+        self::$lockToken = '';
     }
 
     // -------------------------------------------------------------------------
@@ -768,21 +917,8 @@ class MyNJILGA_Launch_Schedule {
                 }
             },
 
-            'lock' => static function (): bool {
-                $now = time();
-                // add_option is an atomic insert: only one caller can create it.
-                if ( add_option( MyNJILGA_Launch_Schedule::LOCK_OPTION, $now, '', 'no' ) ) {
-                    return true;
-                }
-                $held = (int) get_option( MyNJILGA_Launch_Schedule::LOCK_OPTION, 0 );
-                if ( $held > 0 && $now - $held < MyNJILGA_Launch_Schedule::LOCK_TTL ) {
-                    return false;
-                }
-                // A dead run's lock: take it over.
-                update_option( MyNJILGA_Launch_Schedule::LOCK_OPTION, $now, false );
-                return true;
-            },
-            'unlock' => static function (): void { delete_option( MyNJILGA_Launch_Schedule::LOCK_OPTION ); },
+            'lock'   => static function (): bool { return MyNJILGA_Launch_Schedule::take_lock(); },
+            'unlock' => static function (): void { MyNJILGA_Launch_Schedule::drop_lock(); },
 
             'notify' => static function ( string $to, string $subject, string $body ): void { wp_mail( $to, $subject, $body ); },
         ];

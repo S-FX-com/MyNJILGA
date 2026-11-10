@@ -239,11 +239,13 @@ Pick a start time (site timezone), **emails per batch** (1–200), **minutes bet
 
 The schedule is one Action Scheduler action per year (`njilga_launch_send_batch`, group `njilga-dues`, args `[ year ]`) that re-queues itself after each batch. It is built to fail visibly rather than quietly:
 
+- **It sends exactly the invoices you confirmed.** Confirming stores that list with the schedule (and is rejected if the list changed since you read it, or while invoices are still being created in the background). Invoices created afterwards are never swept in; step 5 points them out so you can schedule them next.
 - **Only `created`, unsent, Live-mode invoices are sent**, each re-read fresh just before sending, so an invoice already sent, paid or voided (by hand, by a pilot, by the Invoicing page) is never emailed again.
-- **One batch at a time** (an atomic lock); a stray or duplicate firing between batches does nothing until the next batch is due; **Send the next batch now** is the explicit override.
-- **Stripe leaving Live mode, or not being ready, stops it**: a mode change halts the send; "not ready" delays 15 minutes and retries.
-- **Five mail-system failures in a row halt it**; a firm with no email on file is set aside (one retry) without stopping everyone else. A failed row records its error on the firm's Invoicing row.
-- **A next batch that can't be scheduled halts it** rather than stalling silently. Any unexpected error halts it too.
+- **The days and hours you chose hold at send time**, not only when the batch was scheduled: a late Action Scheduler firing outside them waits for the next allowed moment, and retries are aligned the same way. **Send the next batch now** is the explicit override.
+- **One batch at a time**, under an atomic database lock (`INSERT IGNORE`; a dead run's lock is taken over by compare-and-set, and each holder releases only its own). A hand-send ("Send the ticked firms now") takes the same lock. A stray or duplicate firing between batches does nothing until the next batch is due.
+- **The next batch is scheduled before any email goes out**, so a batch that dies part-way (PHP time/memory limit) still has a successor; if it can't be scheduled, nothing is sent and the schedule halts.
+- **Stripe leaving Live mode stops it**; "Stripe not ready" delays 15 minutes and retries, and four "not ready" checks in a row halt it and email you.
+- **Five mail-system failures in a row halt it**; a firm with no email on file is set aside (one retry) without stopping everyone else. A failed row records its error on the firm's Invoicing row. Any unexpected error halts it too.
 - Halting, completing and failing each **email the person who scheduled it**. **Pause**, **Resume** and **Cancel** are always available; progress and a log are shown on step 5. Nothing is ever emailed twice.
 
 Test mode: the wizard builds and previews everything but will not send or schedule, because a Test-mode invoice would put a test payment link in front of a real contact.

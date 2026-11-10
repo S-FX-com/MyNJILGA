@@ -468,6 +468,14 @@ class MyNJILGA_Page_Launch {
 
         if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) $schedule['status'] ) || ( $schedule && (string) $schedule['status'] === MyNJILGA_Launch_Schedule::ST_COMPLETE ) ) {
             self::render_schedule_status( $year, (array) $schedule, $tz );
+            // Invoices created after the confirmation are not part of it — say so rather than let it look like a miss.
+            if ( $live && MyNJILGA_Launch_Schedule::is_open( (string) $schedule['status'] ) && isset( $schedule['row_ids'] ) ) {
+                $covered = array_flip( array_map( 'intval', (array) $schedule['row_ids'] ) );
+                $outside = count( array_filter( $unsent, static function ( $r ) use ( $covered ) { return ! isset( $covered[ (int) $r->id ] ); } ) );
+                if ( $outside > 0 ) {
+                    MyNJILGA_Admin_UI::callout( sprintf( '<strong>%d invoice%s created since this was scheduled %s not part of it.</strong> The schedule sends only what you confirmed. Schedule %s once it finishes, or cancel it and schedule everything together.', $outside, $outside === 1 ? '' : 's', $outside === 1 ? 'is' : 'are', $outside === 1 ? 'it' : 'them' ), 'info' );
+                }
+            }
         }
 
         if ( ! $live ) {
@@ -595,6 +603,11 @@ class MyNJILGA_Page_Launch {
             return;
         }
 
+        if ( MyNJILGA_Invoice_Creator::has_pending_jobs() ) {
+            MyNJILGA_Admin_UI::callout( sprintf( '<strong>Invoices are still being created in the background.</strong> Scheduling opens once they finish, so the list you confirm is the list that is sent. <a href="%s">Reload</a> in a moment.', esc_url( self::url( $year, 5 ) ) ), 'info' );
+            return;
+        }
+
         // Chosen timing (a GET "preview timing"), else the defaults.
         $g = static function ( string $k, $d ) { return isset( $_GET[ $k ] ) ? wp_unslash( $_GET[ $k ] ) : $d; }; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         $timing = isset( $_GET['timing'] ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
@@ -653,6 +666,8 @@ class MyNJILGA_Page_Launch {
         foreach ( $in as $k => $v ) {
             printf( '<input type="hidden" name="%s" value="%s">', esc_attr( $k ), esc_attr( $v ) );
         }
+        // Ties the confirmation to the exact invoices listed above, not just how many there are.
+        printf( '<input type="hidden" name="list" value="%s">', esc_attr( MyNJILGA_Launch_Schedule::list_fingerprint( array_map( static function ( $r ) { return (int) $r->id; }, $unsent ) ) ) );
         printf( '<p><label class="njilga-check-label"><input type="checkbox" name="confirm" value="1" required> I have read the sample email, and I understand that %d invoice%s will be emailed to firms starting at the time above.</label></p>', count( $unsent ), count( $unsent ) === 1 ? '' : 's' );
         echo '<div class="njilga-actions"><button type="submit" class="njilga-btn njilga-btn-primary">Schedule these emails</button></div></form></div>';
     }
@@ -889,8 +904,26 @@ class MyNJILGA_Page_Launch {
         if ( ! self::is_live() ) {
             self::back( $year, 5, [ 'msg' => 'error', 'detail' => 'Stripe is in Test mode, so nothing is sent to firms. Switch to Live first.' ] );
         }
+        // The same lock a scheduled batch holds: a hand-send can neither overlap a batch nor a second click of itself.
+        $lock = MyNJILGA_Launch_Schedule::acquire_lock();
+        if ( $lock === '' ) {
+            self::back( $year, 5, [ 'msg' => 'error', 'detail' => 'A batch is sending right now (or another send is in progress). Wait a minute, then try again.' ] );
+        }
         $ok = 0;
         $fail = 0;
+        try {
+            self::send_selected( $year, $ok, $fail );
+        } finally {
+            MyNJILGA_Launch_Schedule::release_lock( $lock );
+        }
+        if ( $ok === 0 && $fail === 0 ) {
+            self::back( $year, 5, [ 'msg' => 'nothing' ] );
+        }
+        self::back( $year, 5, [ 'msg' => 'sent_now', 'n' => $ok, 'f' => $fail ] );
+    }
+
+    /** Email each ticked invoice that is still created and unsent. Counts into $ok / $fail. */
+    private static function send_selected( int $year, int &$ok, int &$fail ): void {
         foreach ( self::parse_ids( $_POST['row_ids'] ?? [] ) as $id ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
             $row = MyNJILGA_Dues_Invoice_Table::get( $id );
             // Created and not yet sent, this year, live, and not an online join: exactly what a schedule would send.
@@ -914,10 +947,6 @@ class MyNJILGA_Page_Launch {
                 MyNJILGA_Dues_Invoice_Table::set_error( (int) $row->id, (string) ( $res['error'] ?? 'Unknown error' ) );
             }
         }
-        if ( $ok === 0 && $fail === 0 ) {
-            self::back( $year, 5, [ 'msg' => 'nothing' ] );
-        }
-        self::back( $year, 5, [ 'msg' => 'sent_now', 'n' => $ok, 'f' => $fail ] );
     }
 
     public static function handle_schedule(): void {
@@ -944,9 +973,18 @@ class MyNJILGA_Page_Launch {
             self::back( $year, 5, [ 'msg' => 'error', 'detail' => $norm['error'] ] );
         }
 
-        $unsent = count( MyNJILGA_Launch_Schedule::unsent_rows( $year, true ) );
-        $user   = wp_get_current_user();
-        $r      = MyNJILGA_Launch_Schedule::create( $year, $norm['options'], true, (int) $user->ID, (string) $user->user_email, $unsent );
+        if ( MyNJILGA_Invoice_Creator::has_pending_jobs() ) {
+            self::back( $year, 5, [ 'msg' => 'error', 'detail' => 'Invoices are still being created in the background. Wait until they finish, reload this page and confirm again, so the list you confirm is the list that is sent.' ] );
+        }
+
+        // The schedule sends exactly the invoices the admin was shown and confirmed: not "whatever is unsent by then".
+        $ids = array_map( static function ( $r ) { return (int) $r->id; }, MyNJILGA_Launch_Schedule::unsent_rows( $year, true ) );
+        $seen = isset( $_POST['list'] ) ? sanitize_key( wp_unslash( (string) $_POST['list'] ) ) : '';
+        if ( $seen === '' || ! hash_equals( MyNJILGA_Launch_Schedule::list_fingerprint( $ids ), $seen ) ) {
+            self::back( $year, 5, [ 'msg' => 'error', 'detail' => sprintf( 'The invoices waiting to be sent changed while you were on this page (there are now %d). Reload step 5, read the list and sample again, and confirm.', count( $ids ) ) ] );
+        }
+        $user = wp_get_current_user();
+        $r    = MyNJILGA_Launch_Schedule::create( $year, $norm['options'], true, (int) $user->ID, (string) $user->user_email, $ids );
         if ( ! $r['ok'] ) {
             self::back( $year, 5, [ 'msg' => 'error', 'detail' => $r['error'] ] );
         }

@@ -333,6 +333,13 @@ class LaunchChecksTest extends NJILGA_TestCase {
         $this->assertFalse( in_array( 'nothing_ready', $ids, true ) );
     }
 
+    public function testInvoicesStillBeingCreatedAreNotReportedAsExcluded(): void {
+        // Everything approved and queued, nothing drafted yet: not "everything was excluded".
+        $rows = [ $this->invoiceRow( 1, 'approved' ), $this->invoiceRow( 2, 'approved' ) ];
+        $ids  = array_column( MyNJILGA_Launch_Checks::review_checks( MyNJILGA_Launch_Checks::review( $rows ), 2027 ), 'id' );
+        $this->assertFalse( in_array( 'nothing_ready', $ids, true ) );
+    }
+
     public function testASuccessfulPreviewRaisesNoWarnings(): void {
         $rows   = [ $this->invoiceRow( 1, 'draft' ), $this->invoiceRow( 2, 'draft' ) ];
         $checks = MyNJILGA_Launch_Checks::review_checks( MyNJILGA_Launch_Checks::review( $rows ), 2027 );
