@@ -613,9 +613,15 @@ class MyNJILGA_Stripe_Reconciler {
         // the event-log prune were never queued. AS announces readiness
         // with `action_scheduler_init`, so schedule from that — and right
         // away if it has somehow already fired.
-        add_action( 'action_scheduler_init', [ __CLASS__, 'ensure_scheduled' ] );
+        //
+        // The callback takes NO arguments and is registered for none (the
+        // 0 below): WordPress hands the callbacks of an action that was fired
+        // without arguments one empty string, so hooking a method that
+        // declares a typed parameter fatals with a TypeError on every request
+        // (see schedule_daily()).
+        add_action( 'action_scheduler_init', [ __CLASS__, 'schedule_daily' ], 10, 0 );
         if ( did_action( 'action_scheduler_init' ) ) {
-            self::ensure_scheduled();
+            self::schedule_daily();
         }
         // No inline fallback when Action Scheduler isn't available at all
         // — there's no reasonable substitute for a genuinely recurring
@@ -623,6 +629,19 @@ class MyNJILGA_Stripe_Reconciler {
         // "the manual Sync button is the only reconciliation path,"
         // matching how other Action-Scheduler-optional code in this
         // plugin already behaves.
+    }
+
+    /**
+     * The `action_scheduler_init` callback — the ONLY thing WordPress calls.
+     *
+     * Deliberately has no parameters. WordPress passes an empty string to the
+     * callbacks of an action fired without arguments, so a hooked method that
+     * declares a typed parameter (as ensure_scheduled()'s injectable
+     * `?callable` ones do) throws a TypeError on every page load. Keep the
+     * injectable method out of the hook.
+     */
+    public static function schedule_daily(): void {
+        self::ensure_scheduled();
     }
 
     /**
