@@ -160,6 +160,20 @@ Chris Poe — 2027 Membership Dues (no charge, inactive)               $0.00
 
 Each line carries `line_meta` with `contact_id`, `dues_year`, `kind`, `category`, `tier`, `rank`. Stripe has no product catalog for this gateway — every line is built inline at the Settings price via the `create → add_lines → finalize` sequence (see [Stripe billing](#stripe-billing) below), not pulled from a mapped product/variation. A firm where every member is $0 is refused ("nothing to invoice") — Stripe doesn't auto-settle a $0 invoice, but the plugin still won't issue paperwork for a firm that owes nothing this cycle.
 
+### Invoice email wording
+
+The invoice email can be reworded in **Settings → Dues & Billing → Invoice email wording**: the **subject**, the **opening** (the greeting and the "your invoice totals $X" sentence) and the **sign-off**. Leave a box blank for the standard wording (shown as the greyed placeholder) — which is exactly what the email said before this was editable, byte for byte. Plain text only.
+
+| Merge tag | Becomes |
+|---|---|
+| `{firm}` | The firm's name (or "your firm" if there isn't one) |
+| `{year}` | The dues year |
+| `{total}` | The invoice total, e.g. `$325.00` |
+| `{name}` / `{first_name}` | The bill-to contact's full / first name (first word of the name if no first name is on file) |
+| `{invoice}` | `membership dues invoice`, or the assessment's name followed by `invoice` |
+
+What stays system-generated and **cannot be edited away**: the list of who the invoice covers and what each is charged, the payment link, and the mail-a-check address (Settings → Payments). Saving refuses a typo like `{frim}` — it would otherwise be emailed to firms as literal text — keeps the previous wording for that field, and says which tag it didn't recognise. The same wording is used for every invoice email, including a separate assessment invoice if you bill assessments separately, so use `{invoice}` to name which one it is. Preview the result, and send yourself a sample, in **Launch Wizard → Send**.
+
 ### Frozen snapshot (spec §5)
 
 Generating freezes each invoice's roster and pricing into `{$wpdb->prefix}njilga_dues_invoices` (`includes/invoicing/class-dues-invoice-table.php`; snapshot shape documented in `class-dues-snapshot.php`). Every later step — Stripe invoice creation, the payment webhook, the downgrade sweep, the Company Note — reads that snapshot, never a fresh Company query. Re-running "Generate Preview" only touches rows still `draft`/`excluded`; stale drafts a billing-mode change left behind are removed; anything approved or later is untouched. Version-1 snapshots (pre-2.9) are upgraded on read.
@@ -231,7 +245,7 @@ Toolbar filters (dues year, status, payment method) narrow the underlying row se
 | **2 Open** | Sets *Joins cover next year from* (the same `MM-DD` setting as Settings → Dues & Billing, validated) and generates the preview. Generating is safe to repeat and never touches an invoice already created. |
 | **3 Review** | The preview in numbers (ready, need attention, nothing to bill, already created) with verdicts, and the list of firms a person must fix — chiefly firms with **no Owner**. Empty and fully-exempt firms are counted, not listed. |
 | **4 Create** | Tick a few **pilot firms** and create just those, check them in the Stripe Dashboard, then create the rest. Same eligibility as the Invoicing page (draft/approved rows of this year and the active Stripe mode, gateway ready) and the same background batches. Creating does not email anyone. |
-| **5 Send** | **A.** Send yourself a test email (and the wizard remembers that mail works). **B.** Read the exact invoice email a chosen firm will get — built by the same `MyNJILGA_Invoice_Sender::compose()` that sends the real one — and send yourself a copy marked `[SAMPLE]` (to you only: no firm address, no Cc). **C.** Optionally send a few firms now. **D.** Schedule the rest. |
+| **5 Send** | **A.** Send a plain test email to any address you type (it defaults to yours; the wizard remembers that mail works). **B.** Read the exact invoice email a chosen firm will get — built by the same `MyNJILGA_Invoice_Sender::compose()` that sends the real one — and send a copy marked `[SAMPLE]` to any address you like (never to the firm, no Cc, and it doesn't mark anything sent). It works for a firm whose invoice isn't created yet too (the payment link is a placeholder), and in Test mode. **C.** Optionally send a few firms now. **D.** Schedule the rest. |
 
 ### Scheduled sending
 
@@ -248,7 +262,7 @@ The schedule is one Action Scheduler action per year (`njilga_launch_send_batch`
 - **Five mail-system failures in a row halt it**; a firm with no email on file is set aside (one retry) without stopping everyone else. A failed row records its error on the firm's Invoicing row. Any unexpected error halts it too.
 - Halting, completing and failing each **email the person who scheduled it**. **Pause**, **Resume** and **Cancel** are always available; progress and a log are shown on step 5. Nothing is ever emailed twice.
 
-Test mode: the wizard builds and previews everything but will not send or schedule, because a Test-mode invoice would put a test payment link in front of a real contact.
+Test mode: the wizard builds and previews everything — including the email preview and a sample to any address — but will not send to firms or schedule, because a Test-mode invoice would put a test payment link in front of a real contact.
 
 ---
 
@@ -539,6 +553,7 @@ my-njilga/
 │   │   ├── class-dues-preview.php        ← Preview builder (engine + billing modes + exceptions)
 │   │   ├── class-dues-roster.php         ← Line labels / line items / email summary
 │   │   ├── class-invoice-creator.php     ← Action Scheduler batches, per-row isolation
+│   │   ├── class-invoice-email.php       ← PURE: the editable email wording — merge tags, cleaning, build() (unit-tested)
 │   │   ├── class-invoice-sender.php      ← Email + CC policy + Company Note
 │   │   ├── class-payment-listener.php    ← Paid → tags + role (via role sync)
 │   │   ├── class-role-sync.php           ← Paid member's WP role follows their category

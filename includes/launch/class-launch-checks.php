@@ -175,6 +175,12 @@ class MyNJILGA_Launch_Checks {
         } else {
             $add( 'remittance', $g, self::OK, 'The email includes a mailing address for checks' );
         }
+        $wording = $f['email_custom'] ?? null;
+        if ( $wording === true ) {
+            $add( 'wording', $g, self::INFO, 'The invoice email uses your own wording', 'Read exactly what a firm will get — and send yourself a sample — in step 5. Merge tags are checked when you save, so a typo can\'t reach a firm.', [ 'label' => 'Preview it in step 5', 'url' => (string) ( $url['step5'] ?? '' ) ] );
+        } elseif ( $wording === false ) {
+            $add( 'wording', $g, self::INFO, 'The invoice email uses the standard wording', 'You can change the subject, opening and sign-off under Settings → Dues & Billing, and preview the result in step 5.', $fixTo( 'Settings', 'settings' ) );
+        }
         $due = (int) ( $f['due_ts'] ?? 0 );
         if ( $due > 0 ) {
             $add( 'due', $g, self::INFO, 'Invoices created now are due ' . gmdate( 'F j, Y', $due ), 'Dues are due at the end of the year the invoice is raised in, with at least the "days until due" window.' );
@@ -492,6 +498,9 @@ class MyNJILGA_Launch_Checks {
         $f['batch_size']             = (int) ( $general['batch_size'] ?? 0 );
         $f['reply_to']               = (string) ( $general['send_reply_to'] ?? '' );
         $f['cc_description']         = self::cc_description( $general );
+        $f['email_custom']           = $probe( static function () use ( $general ) {
+            return MyNJILGA_Invoice_Email::is_custom( [ 'subject' => (string) ( $general['email_subject'] ?? '' ), 'intro' => (string) ( $general['email_intro'] ?? '' ), 'closing' => (string) ( $general['email_closing'] ?? '' ) ] );
+        }, null );
         $f['remittance']             = (string) $probe( static function () { return MyNJILGA_Stripe_Connection::setting( 'remittance_address', '' ); }, '' );
         $days                        = (int) $probe( static function () { return MyNJILGA_Stripe_Connection::setting( 'days_until_due', 30 ); }, 30 );
         $f['due_ts']                 = (int) $probe( static function () use ( $days ) { return MyNJILGA_Invoicing::year_end_due_timestamp( $days ); }, 0 );

@@ -74,6 +74,10 @@ class MyNJILGA_Dues_Settings {
                 'send_cc_mode'             => self::CC_OWNER_ONLY,
                 'send_cc_emails'           => '',
                 'send_reply_to'            => '',
+                // Invoice email wording. '' = the built-in text. See MyNJILGA_Invoice_Email.
+                'email_subject'            => '',
+                'email_intro'              => '',
+                'email_closing'            => '',
                 'downgrade_remove_roles'   => true,
                 // Confirmed by NJILGA 2026-08: joining is an approval process and
                 // the approved applicant is invoiced right away.

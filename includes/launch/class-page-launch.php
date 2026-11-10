@@ -37,6 +37,9 @@ class MyNJILGA_Page_Launch {
     /** @var array<int,string> */
     const STEPS = [ 1 => 'Check', 2 => 'Open', 3 => 'Review', 4 => 'Create', 5 => 'Send' ];
 
+    /** Invoice statuses an email can be previewed for (a draft previews with a placeholder payment link). */
+    const PREVIEW_STATUSES = [ 'draft', 'approved', 'created', 'sent' ];
+
     /** Most firms listed in a selection table (the rest are still handled by "all"). */
     const LIST_LIMIT = 300;
 
@@ -479,18 +482,16 @@ class MyNJILGA_Page_Launch {
         }
 
         if ( ! $live ) {
-            MyNJILGA_Admin_UI::callout( '<strong>Sending is switched off in Test mode</strong> — real contacts would be emailed a test payment link. Switch Stripe to Live (Settings → Payments) to continue.', 'warning' );
+            MyNJILGA_Admin_UI::callout( '<strong>Sending is switched off in Test mode</strong> — real contacts would be emailed a test payment link. You can still preview the email and send yourself a sample below. Switch Stripe to Live (Settings → Payments) to send for real.', 'warning' );
+        }
+
+        self::render_mail_test( $year );
+        self::render_sample( $year, $live );
+
+        if ( ! $live ) {
             echo '<div class="njilga-actions"><a class="njilga-btn njilga-btn-outline" href="' . esc_url( self::url( $year, 4 ) ) . '">&larr; Create</a></div>';
             return;
         }
-
-        // ---- A. Test it
-        MyNJILGA_Admin_UI::section( 'A. Test the email' );
-        echo '<div class="njilga-actions">';
-        echo MyNJILGA_Admin_UI::action_form( self::ACTION_MAILTEST, 'Send me a test email', [ 'dues_year' => $year ], 'outline', '' );
-        echo '</div>';
-        $user = wp_get_current_user();
-        printf( '<p class="njilga-help">Goes to %s. Check that it arrives (and isn\'t in spam): that is the only proof the site\'s mail is working.</p>', esc_html( (string) $user->user_email ) );
 
         if ( ! $unsent ) {
             MyNJILGA_Admin_UI::callout( (int) $review['created_unsent'] === 0 && (int) $review['ready'] > 0
@@ -500,38 +501,84 @@ class MyNJILGA_Page_Launch {
             return;
         }
 
-        self::render_sample( $year, $unsent );
         self::render_send_now( $year, $unsent );
         self::render_schedule_form( $year, $unsent, $schedule, $tz );
 
         echo '<div class="njilga-actions"><a class="njilga-btn njilga-btn-outline" href="' . esc_url( self::url( $year, 4 ) ) . '">&larr; Create</a></div>';
     }
 
+    /** A. Is mail working at all — to an address you choose. */
+    private static function render_mail_test( int $year ): void {
+        MyNJILGA_Admin_UI::section( 'A. Test that email works' );
+        $user = wp_get_current_user();
+        self::open_form( self::ACTION_MAILTEST, $year, 5 );
+        echo '<div class="njilga-inline-fields"><div class="njilga-field"><label for="njilga-mt-to"><strong>Send to</strong></label>';
+        printf( '<input type="email" id="njilga-mt-to" name="to" value="%s" placeholder="you@example.org" required></div>', esc_attr( (string) $user->user_email ) );
+        echo '<button type="submit" class="njilga-btn njilga-btn-outline">Send a test email</button></div></form>';
+        echo '<p class="njilga-help">A plain message, to the address above only — never to a firm. Check that it arrives (and isn\'t in spam): that is the only proof the site\'s mail is working.</p>';
+    }
+
     /**
-     * @param array<int,object> $unsent
+     * Invoices of this year in the active mode that an email can be previewed for: not yet sent,
+     * or sent already — never a join, never an excluded firm. Drafts count: their payment link
+     * is a placeholder until the invoice is created.
+     *
+     * @return array<int,object>
      */
-    private static function render_sample( int $year, array $unsent ): void {
-        MyNJILGA_Admin_UI::section( 'B. See exactly what a firm will receive', 'This is built by the same code that sends the real email, from a real invoice. Pick a firm to read its email, and send yourself a copy marked SAMPLE (it goes only to you).' );
+    private static function preview_rows( int $year, bool $live ): array {
+        $rows = MyNJILGA_Dues_Invoice_Table::get_by_year( $year, self::PREVIEW_STATUSES, $live );
+        $rows = array_values( array_filter( (array) $rows, static function ( $r ) {
+            return (string) ( $r->invoice_kind ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN;
+        } ) );
+        usort( $rows, static function ( $a, $b ) { return strcasecmp( MyNJILGA_Dues_Snapshot::company_name( $a ), MyNJILGA_Dues_Snapshot::company_name( $b ) ); } );
+        return $rows;
+    }
+
+    /** B. Read the exact email a firm will get, and send yourself (or anyone) a marked sample. */
+    private static function render_sample( int $year, bool $live ): void {
+        MyNJILGA_Admin_UI::section(
+            'B. See exactly what a firm will receive',
+            sprintf( 'Built by the same code that sends the real email. Pick any firm — even one whose invoice isn\'t created yet — to read its email, and send a copy marked SAMPLE to any address you like (it never goes to the firm). To change the wording: <a href="%s">Settings → Dues &amp; Billing → Invoice email wording</a>.', esc_url( MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) )
+        );
+
+        $rows = self::preview_rows( $year, $live );
+        if ( ! $rows ) {
+            MyNJILGA_Admin_UI::callout( sprintf( 'No invoices to preview yet for %d%s. <a href="%s">Generate the preview in step 2</a> first.', $year, $live ? '' : ' in Test mode', esc_url( self::url( $year, 2 ) ) ), 'info' );
+            return;
+        }
 
         $pick = isset( $_GET['sample'] ) ? (int) $_GET['sample'] : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-        $row  = null;
-        foreach ( $unsent as $r ) {
+        // Default to an invoice that is already created (it has the real payment link), else the first firm.
+        $row = $rows[0];
+        foreach ( $rows as $r ) {
+            if ( (string) ( $r->hosted_invoice_url ?? '' ) !== '' ) {
+                $row = $r;
+                break;
+            }
+        }
+        foreach ( $rows as $r ) {
             if ( (int) $r->id === $pick ) {
                 $row = $r;
             }
         }
-        $row = $row ?: $unsent[0];
 
         printf( '<form method="get" action="%s" class="njilga-inline-fields"><input type="hidden" name="page" value="%s"><input type="hidden" name="step" value="5"><input type="hidden" name="dues_year" value="%d"><div class="njilga-field"><label for="njilga-sample"><strong>Firm</strong></label><select id="njilga-sample" name="sample">', esc_url( admin_url( 'admin.php' ) ), esc_attr( MyNJILGA_Admin_Menu::SLUG_LAUNCH ), $year );
-        foreach ( array_slice( $unsent, 0, self::LIST_LIMIT ) as $r ) {
-            printf( '<option value="%d"%s>%s</option>', (int) $r->id, (int) $r->id === (int) $row->id ? ' selected' : '', esc_html( MyNJILGA_Dues_Snapshot::company_name( $r ) ) );
+        $shown = array_slice( $rows, 0, self::LIST_LIMIT );
+        if ( ! in_array( $row, $shown, true ) ) {
+            $shown[] = $row;
+        }
+        foreach ( $shown as $r ) {
+            printf( '<option value="%d"%s>%s — %s</option>', (int) $r->id, (int) $r->id === (int) $row->id ? ' selected' : '', esc_html( MyNJILGA_Dues_Snapshot::company_name( $r ) ), esc_html( (string) $r->status ) );
         }
         echo '</select></div><button type="submit" class="njilga-btn njilga-btn-outline">Show this email</button></form>';
 
-        $m = MyNJILGA_Invoice_Sender::compose( $row );
+        $m = MyNJILGA_Invoice_Sender::compose( $row, true );
         if ( empty( $m['ok'] ) ) {
             MyNJILGA_Admin_UI::callout( '<strong>This firm\'s email can\'t be built:</strong> ' . esc_html( (string) $m['error'] ), 'warning' );
             return;
+        }
+        if ( ! empty( $m['placeholder'] ) ) {
+            MyNJILGA_Admin_UI::callout( 'This firm\'s invoice hasn\'t been created yet, so the payment link below is a placeholder; everything else is what it will say.', 'info' );
         }
         $cc = '';
         $reply = '';
@@ -551,7 +598,13 @@ class MyNJILGA_Page_Launch {
             esc_html( (string) $m['subject'] ),
             esc_html( (string) $m['body'] )
         );
-        echo '<div class="njilga-actions">' . MyNJILGA_Admin_UI::action_form( self::ACTION_SAMPLE, 'Email this sample to me', [ 'dues_year' => $year, 'row_id' => (int) $row->id ], 'outline', '' ) . '</div>';
+
+        $user = wp_get_current_user();
+        self::open_form( self::ACTION_SAMPLE, $year, 5 );
+        printf( '<input type="hidden" name="row_id" value="%d">', (int) $row->id );
+        echo '<div class="njilga-inline-fields"><div class="njilga-field"><label for="njilga-sample-to"><strong>Send this sample to</strong></label>';
+        printf( '<input type="email" id="njilga-sample-to" name="to" value="%s" placeholder="you@example.org" required></div>', esc_attr( (string) $user->user_email ) );
+        echo '<button type="submit" class="njilga-btn njilga-btn-outline">Email me this sample</button></div></form>';
     }
 
     /**
@@ -737,6 +790,7 @@ class MyNJILGA_Page_Launch {
         $msg    = sanitize_key( wp_unslash( (string) $_GET['msg'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         $n      = isset( $_GET['n'] ) ? (int) $_GET['n'] : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         $f      = isset( $_GET['f'] ) ? (int) $_GET['f'] : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $to     = isset( $_GET['to'] ) ? sanitize_email( wp_unslash( (string) $_GET['to'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         $detail = isset( $_GET['detail'] ) ? sanitize_text_field( wp_unslash( (string) $_GET['detail'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         $plural = static function ( int $c, string $one, string $many ): string { return $c === 1 ? $one : $many; };
 
@@ -760,13 +814,13 @@ class MyNJILGA_Page_Launch {
                 MyNJILGA_Admin_UI::callout( 'Nothing was selected, or nothing was eligible.', 'info' );
                 break;
             case 'mailtest_sent':
-                MyNJILGA_Admin_UI::callout( '<strong>Test email sent.</strong> Check your inbox (and spam) — only you can confirm it arrived.', 'success' );
+                MyNJILGA_Admin_UI::callout( sprintf( '<strong>Test email sent%s.</strong> Check that inbox (and spam) — only a person can confirm it arrived.', $to !== '' ? ' to ' . esc_html( $to ) : '' ), 'success' );
                 break;
             case 'mailtest_failed':
                 MyNJILGA_Admin_UI::callout( '<strong>The test email could not be sent.</strong> The site\'s mail isn\'t working; fix that before sending invoices.', 'error' );
                 break;
             case 'sample_sent':
-                MyNJILGA_Admin_UI::callout( '<strong>Sample sent to you</strong>, marked SAMPLE. It was not sent to the firm.', 'success' );
+                MyNJILGA_Admin_UI::callout( sprintf( '<strong>Sample sent%s</strong>, marked SAMPLE. It was not sent to the firm.', $to !== '' ? ' to ' . esc_html( $to ) : '' ), 'success' );
                 break;
             case 'sent_now':
                 MyNJILGA_Admin_UI::callout( sprintf( '<strong>%d email%s sent</strong>%s.', $n, $plural( $n, '', 's' ), $f > 0 ? sprintf( ', %d could not be sent', $f ) : '' ), $f > 0 ? 'warning' : 'success' );
@@ -858,44 +912,54 @@ class MyNJILGA_Page_Launch {
     public static function handle_mailtest(): void {
         self::guard( self::ACTION_MAILTEST );
         $year = self::post_year();
-        $user = wp_get_current_user();
+        $to   = self::recipient();
+        if ( $to === '' ) {
+            self::back( $year, 5, [ 'msg' => 'error', 'detail' => 'That doesn\'t look like a valid email address.' ] );
+        }
         $sent = wp_mail(
-            (string) $user->user_email,
+            $to,
             'My NJILGA Launch Wizard: test email',
             "This is a test email from the My NJILGA Launch Wizard.\n\nIf you can read this, the site can send email. Check that it did not land in spam: the invoice emails are sent the same way.\n\nNothing was sent to any firm."
         );
         if ( $sent ) {
             update_option( MyNJILGA_Launch_Checks::MAIL_TEST_OPTION, time(), false );
         }
-        self::back( $year, 5, [ 'msg' => $sent ? 'mailtest_sent' : 'mailtest_failed' ] );
+        self::back( $year, 5, [ 'msg' => $sent ? 'mailtest_sent' : 'mailtest_failed', 'to' => $to ] );
     }
 
     public static function handle_sample(): void {
         self::guard( self::ACTION_SAMPLE );
         $year = self::post_year();
-        $row  = MyNJILGA_Dues_Invoice_Table::get( isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0 );
-        if ( ! $row || (int) $row->dues_year !== $year ) {
+        $to   = self::recipient();
+        if ( $to === '' ) {
+            self::back( $year, 5, [ 'msg' => 'error', 'detail' => 'That doesn\'t look like a valid email address.' ] );
+        }
+        $row = MyNJILGA_Dues_Invoice_Table::get( isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0 );
+        if ( ! $row
+            || (int) $row->dues_year !== $year
+            || (bool) $row->livemode !== self::is_live()
+            || (string) ( $row->invoice_kind ?? '' ) === MyNJILGA_Dues_Snapshot::KIND_JOIN
+            || ! in_array( (string) $row->status, self::PREVIEW_STATUSES, true )
+        ) {
             self::back( $year, 5, [ 'msg' => 'error', 'detail' => 'That invoice wasn\'t found.' ] );
         }
-        $m = MyNJILGA_Invoice_Sender::compose( $row );
+        $m = MyNJILGA_Invoice_Sender::compose( $row, true );
         if ( empty( $m['ok'] ) ) {
             self::back( $year, 5, [ 'msg' => 'error', 'detail' => (string) $m['error'] ] );
         }
-        // To the admin ONLY: no CC, and a clear banner, so it can never be mistaken for the real thing.
+        // To the address you chose ONLY: no firm, no CC, and a clear banner so it can never be mistaken for the real thing.
         $headers = [];
         foreach ( (array) $m['headers'] as $h ) {
             if ( stripos( $h, 'Reply-To:' ) === 0 ) {
                 $headers[] = $h;
             }
         }
-        $user = wp_get_current_user();
-        $sent = wp_mail(
-            (string) $user->user_email,
-            '[SAMPLE] ' . (string) $m['subject'],
-            "*** SAMPLE — this went only to you, not to the firm. It would be sent to " . (string) $m['to'] . " ***\n\n" . (string) $m['body'],
-            $headers
-        );
-        self::back( $year, 5, [ 'msg' => $sent ? 'sample_sent' : 'mailtest_failed', 'sample' => (int) $row->id ] );
+        $banner = '*** SAMPLE — this went only to ' . $to . ', not to the firm. It would be sent to ' . (string) $m['to'] . ' ***';
+        if ( ! empty( $m['placeholder'] ) ) {
+            $banner .= "\n*** The payment link below is a placeholder: this invoice has not been created yet. ***";
+        }
+        $sent = wp_mail( $to, '[SAMPLE] ' . (string) $m['subject'], $banner . "\n\n" . (string) $m['body'], $headers );
+        self::back( $year, 5, [ 'msg' => $sent ? 'sample_sent' : 'mailtest_failed', 'sample' => (int) $row->id, 'to' => $to ] );
     }
 
     public static function handle_send_now(): void {
@@ -1029,6 +1093,17 @@ class MyNJILGA_Page_Launch {
     // =========================================================================
     // Plumbing
     // =========================================================================
+
+    /** The address a test/sample goes to: what was typed, else the signed-in admin's; '' when it isn't a valid address. */
+    private static function recipient(): string {
+        $raw = isset( $_POST['to'] ) ? trim( (string) wp_unslash( $_POST['to'] ) ) : '';
+        if ( $raw === '' ) {
+            $user = wp_get_current_user();
+            $raw  = (string) $user->user_email;
+        }
+        $to = sanitize_email( $raw );
+        return ( $to !== '' && is_email( $to ) ) ? $to : '';
+    }
 
     private static function guard( string $action ): void {
         if ( ! current_user_can( 'manage_options' ) ) {
