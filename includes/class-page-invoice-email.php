@@ -378,7 +378,10 @@ class MyNJILGA_Page_Invoice_Email {
             'subject'   => MyNJILGA_Invoice_Email::clean( 'subject', (string) ( $in['subject'] ?? '' ) ),
             'intro'     => MyNJILGA_Invoice_Email::clean( 'intro', (string) ( $in['intro'] ?? '' ) ),
             'closing'   => MyNJILGA_Invoice_Email::clean( 'closing', (string) ( $in['closing'] ?? '' ) ),
-            'to'        => sanitize_text_field( trim( (string) ( $in['to'] ?? '' ) ) ), // as typed; validated by typed_address() when a test is sent
+            // EXACTLY as typed, never run through sanitize_text_field(): that deletes percent-encoded octets, so the valid
+            // address "john%20doe@x.com" would become "johndoe@x.com" and the test would go to someone else. It is
+            // validated by typed_address() when a test is sent and escaped where it is shown.
+            'to'        => substr( trim( (string) ( $in['to'] ?? '' ) ), 0, 254 ),
             'firm'      => ( $firm !== '' && ( ctype_digit( $firm ) || $firm === MyNJILGA_Invoice_Email::SAMPLE_FIRM ) ) ? $firm : MyNJILGA_Invoice_Email::SAMPLE_FIRM,
         ];
     }
