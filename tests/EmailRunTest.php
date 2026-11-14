@@ -93,6 +93,26 @@ class EmailRunTest extends NJILGA_TestCase {
         $this->assertCount( 0, $wpdb->queries, 'a paid invoice is never claimed for an email' );
     }
 
+    /** A database failure while claiming is an error to report — never mistaken for another sender having the invoice. */
+    public function testADatabaseFailureWhileClaimingIsAnError(): void {
+        $saved           = $GLOBALS['wpdb'];
+        $GLOBALS['wpdb'] = new class extends NJILGA_Recording_Wpdb {
+            public $last_error = 'Deadlock found when trying to get lock';
+            public function query( string $query ) {
+                $this->queries[] = $query;
+                return false;
+            }
+        };
+        try {
+            MyNJILGA_Dues_Invoice_Table::claim_for_email( $this->row( 1, 'created' ), self::NOW );
+            $this->assertTrue( false, 'expected an exception' );
+        } catch ( \RuntimeException $e ) {
+            $this->assertTrue( strpos( $e->getMessage(), 'Deadlock' ) !== false, $e->getMessage() );
+        } finally {
+            $GLOBALS['wpdb'] = $saved;
+        }
+    }
+
     /** A failed send hands the invoice back exactly as it was — only if nothing has moved it on since. */
     public function testReleasingAClaimRestoresWhatWasRead(): void {
         global $wpdb;

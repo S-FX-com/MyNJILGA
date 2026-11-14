@@ -114,12 +114,26 @@ class MyNJILGA_Invoice_Sender {
             return [ 'ok' => false, 'error' => (string) $m['error'] ];
         }
 
-        $stamp = MyNJILGA_Dues_Invoice_Table::claim_for_email( $invoiceRow );
+        try {
+            $stamp = MyNJILGA_Dues_Invoice_Table::claim_for_email( $invoiceRow );
+        } catch ( \Throwable $e ) {
+            // A database failure: a real error for this invoice, not contention.
+            return [ 'ok' => false, 'error' => $e->getMessage() ];
+        }
         if ( $stamp === null ) {
             return [ 'ok' => false, 'claimed' => false, 'error' => 'Another send had this invoice at the same moment, or it changed (paid, voided, emailed) since it was read — it was not emailed again.' ];
         }
 
-        if ( ! wp_mail( $m['to'], $m['subject'], $m['body'], $m['headers'] ) ) {
+        // Whatever happens in the mail call — false, or an exception from a
+        // mail plugin — an email that didn't go hands the claim back, so the
+        // invoice is not left marked emailed.
+        try {
+            $mailed = wp_mail( $m['to'], $m['subject'], $m['body'], $m['headers'] );
+        } catch ( \Throwable $e ) {
+            MyNJILGA_Dues_Invoice_Table::release_email_claim( $invoiceRow, $stamp );
+            return [ 'ok' => false, 'error' => 'The mail system failed while sending: ' . $e->getMessage() ];
+        }
+        if ( ! $mailed ) {
             MyNJILGA_Dues_Invoice_Table::release_email_claim( $invoiceRow, $stamp );
             return [ 'ok' => false, 'error' => "wp_mail() failed — check the site's mail configuration." ];
         }

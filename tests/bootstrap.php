@@ -175,7 +175,9 @@ class NJILGA_Recording_Wpdb {
     }
 
     /** @return int Always 0 rows affected — nothing is stored. */
-    public function query( string $query ): int {
+    // No return type: like WordPress's own $wpdb->query(), a subclass may
+    // return false (a failed query) as well as a row count.
+    public function query( string $query ) {
         $this->queries[] = $query;
         return 0;
     }

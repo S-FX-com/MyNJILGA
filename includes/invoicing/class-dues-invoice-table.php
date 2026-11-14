@@ -962,7 +962,8 @@ class MyNJILGA_Dues_Invoice_Table {
      * way round; a duplicate email can't be taken back.
      *
      * @param string|null $now Site time; defaults to now (injectable for tests).
-     * @return string|null The sent_at stamp it was claimed with, or null.
+     * @return string|null The sent_at stamp it was claimed with, or null when another sender has it / it changed.
+     * @throws \RuntimeException When the database could not be asked at all.
      */
     public static function claim_for_email( object $row, ?string $now = null ): ?string {
         global $wpdb;
@@ -980,6 +981,12 @@ class MyNJILGA_Dues_Invoice_Table {
                 : $wpdb->query( $wpdb->prepare( "UPDATE $table SET sent_at = %s WHERE id = %d AND status = %s AND sent_at = %s", $now, $id, self::STATUS_SENT, $prev ) ); // phpcs:ignore
         } else {
             return null;
+        }
+        // A failed query (deadlock, lock timeout, lost connection) is not
+        // "someone else has it": nobody claimed the invoice and it was not
+        // emailed, so it must surface as an error, never as a quiet skip.
+        if ( $n === false ) {
+            throw new \RuntimeException( 'Database error while claiming the invoice for its email' . ( ! empty( $wpdb->last_error ) ? ': ' . $wpdb->last_error : '' ) . ' — it was not emailed.' );
         }
         return (int) $n === 1 ? $now : null;
     }
