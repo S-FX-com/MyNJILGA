@@ -519,6 +519,12 @@ class MyNJILGA_Stripe_Reconciler {
                 if ( isset( $known[ $id ] ) || $stripeStatus === 'draft' || $stripeStatus === 'void' ) {
                     continue;
                 }
+                // Its Stripe metadata still names this year, but staff
+                // counted it toward another (MyNJILGA_Paid_Year_Move): it
+                // has a row, just not in this year.
+                if ( MyNJILGA_Dues_Invoice_Table::get_by_order_id( $id ) ) {
+                    continue;
+                }
 
                 $out['orphans'][] = [
                     'id'          => $id,
