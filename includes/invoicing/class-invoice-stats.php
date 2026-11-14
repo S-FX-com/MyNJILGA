@@ -383,8 +383,12 @@ class MyNJILGA_Invoice_Stats {
      * The year the Dashboard reads. An explicit ?dues_year= wins when it is
      * inside Invoicing's 2000..2100 window; otherwise next year (Invoicing's
      * own default — batches are generated ahead) IF it has at least one
-     * annual row in this mode, else the current year, so the page is not a
-     * wall of zeros after New Year, or before next year's preview exists.
+     * annual row in this mode, else the current year IF IT has one, so the
+     * page is not a wall of zeros after New Year, before next year's preview
+     * exists. With neither (a fresh install, before its first batch) it is
+     * next year again: the Dashboard's Invoicing link carries this year,
+     * and pointing it at a year that was never billed here is how a stray
+     * current-year invoice got generated ahead of the first real batch.
      *
      * "Has a row" ignores online joins, and counts draft and excluded rows:
      * a year holding only joins is exactly what Invoicing calls empty
@@ -397,7 +401,11 @@ class MyNJILGA_Invoice_Stats {
             return $valid;
         }
         $default = MyNJILGA_Invoicing::default_dues_year();
-        return self::year_has_annual_rows( $default, $live ) ? $default : MyNJILGA_Invoicing::current_dues_year();
+        if ( self::year_has_annual_rows( $default, $live ) ) {
+            return $default;
+        }
+        $current = MyNJILGA_Invoicing::current_dues_year();
+        return self::year_has_annual_rows( $current, $live ) ? $current : $default;
     }
 
     /** $year when it is inside the accepted 2000..2100 window, otherwise null. */

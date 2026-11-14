@@ -120,7 +120,8 @@ class MyNJILGA_Firm_Status_Page {
             MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT,
         ];
         return array_values( array_filter( $rows, static function ( $r ) use ( $hidden ) {
-            return ! in_array( (string) $r->status, $hidden, true );
+            return ! in_array( (string) $r->status, $hidden, true )
+                && ! MyNJILGA_Dues_Invoice_Table::withdrawn_unsent( $r );
         } ) );
     }
 

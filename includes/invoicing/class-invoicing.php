@@ -48,6 +48,35 @@ class MyNJILGA_Invoicing {
     }
 
     /**
+     * Whether a dues year may have a batch generated (and so invoices
+     * created) for it. Next year onward always may — that is what the
+     * batch is for. An earlier year may only once it already has a batch
+     * in progress: January's late "last call" for the year that just
+     * started, a firm that joined after the run. A past year that was
+     * never billed through this plugin stays closed, so a fresh install
+     * can't raise a stray invoice for a year it never ran — the way the
+     * current calendar year, offered beside next year, once let a 2026
+     * invoice reach members ahead of the first real (2027) batch.
+     *
+     * @param bool $hasBatch The year already holds an annual (non-join) row in this Stripe mode.
+     */
+    public static function year_is_open( int $year, bool $hasBatch ): bool {
+        return $hasBatch || $year >= self::default_dues_year();
+    }
+
+    /**
+     * Staff-facing reason year_is_open() said no, for the admin pages.
+     */
+    public static function closed_year_message( int $year ): string {
+        return sprintf(
+            '%d has no invoice batch, and invoices are only started for the coming dues year (%d) onward — so nothing was generated. Pick %d in the Dues Year menu.',
+            $year,
+            self::default_dues_year(),
+            self::default_dues_year()
+        );
+    }
+
+    /**
      * When a dues invoice falls due: December 31 of the calendar year the
      * invoice is RAISED IN, not the dues year it covers.
      *

@@ -1288,7 +1288,7 @@ class InvoiceStatsTest extends NJILGA_TestCase {
             return MyNJILGA_Invoice_Stats::build( true, false, self::TODAY, null );
         } );
 
-        $this->assertSame( MyNJILGA_Invoicing::current_dues_year(), $s['year'], 'nothing in the default year, so the current one' );
+        $this->assertSame( MyNJILGA_Invoicing::default_dues_year(), $s['year'], 'nothing billed in any year yet, so the coming one' );
         $this->assertSame( false, $s['year_has_rows'] );
         $this->assertSame( $this->zero( 'annual' ), $s['annual'] );
         $this->assertSame( $this->zero( 'joins' ), $s['joins'] );
@@ -1329,10 +1329,10 @@ class InvoiceStatsTest extends NJILGA_TestCase {
         $db = $this->db( [] );
         $this->with_db( $db, function (): void {
             foreach ( [ 1999, 2101, 0, -2027, 27 ] as $bad ) {
-                $this->assertSame( MyNJILGA_Invoicing::current_dues_year(), MyNJILGA_Invoice_Stats::dashboard_year( true, $bad ), "override $bad" );
+                $this->assertSame( MyNJILGA_Invoicing::default_dues_year(), MyNJILGA_Invoice_Stats::dashboard_year( true, $bad ), "override $bad" );
             }
         } );
-        $this->assertCount( 5, $db->queries, 'each fell through to the probe' );
+        $this->assertCount( 10, $db->queries, 'each fell through to both probes' );
     }
 
     /** Next year is the default, but only once it holds an annual row in THIS mode. */
@@ -1345,26 +1345,50 @@ class InvoiceStatsTest extends NJILGA_TestCase {
         } );
     }
 
-    /** No annual rows in next year — none at all, or only online joins, or only the OTHER mode's — falls back to the current year. */
-    public function testDashboardYearFallsBackToTheCurrentYear(): void {
+    /** No annual rows in next year, but the current year has a batch (January, mid-collection) — the current year. */
+    public function testDashboardYearFallsBackToTheCurrentYearWhileItHasABatch(): void {
         $next    = MyNJILGA_Invoicing::default_dues_year();
         $current = MyNJILGA_Invoicing::current_dues_year();
 
         $cases = [
-            'empty table'         => [],
-            'only online joins'   => [ $this->row( [ 'dues_year' => $next, 'invoice_kind' => 'join', 'status' => 'paid' ] ) ],
-            'only the other mode' => [ $this->row( [ 'dues_year' => $next, 'livemode' => 0 ] ) ],
-            'only another year'   => [ $this->row( [ 'dues_year' => $next + 1 ] ) ],
+            'only the current year' => [ $this->row( [ 'dues_year' => $current, 'status' => 'sent' ] ) ],
+            'next year only joins'  => [
+                $this->row( [ 'dues_year' => $current, 'status' => 'paid' ] ),
+                $this->row( [ 'dues_year' => $next, 'invoice_kind' => 'join', 'status' => 'paid' ] ),
+            ],
         ];
         foreach ( $cases as $name => $rows ) {
             $this->with_db( $this->db( $rows ), function () use ( $name, $current ): void {
                 $this->assertSame( $current, MyNJILGA_Invoice_Stats::dashboard_year( true, null ), $name );
             } );
         }
+    }
 
-        // And the same rows in the mode that DOES have the row give next year.
-        $this->with_db( $this->db( $cases['only the other mode'] ), function () use ( $next ): void {
-            $this->assertSame( $next, MyNJILGA_Invoice_Stats::dashboard_year( false, null ) );
+    /**
+     * Neither next year nor this one has an annual row in this mode — a
+     * fresh install before its first batch — stays on next year. Falling
+     * back to a year never billed here sent the Dashboard's Invoicing link
+     * to it, and a stray current-year invoice was generated from there.
+     */
+    public function testDashboardYearStaysOnNextYearWhenNothingHasBeenBilled(): void {
+        $next    = MyNJILGA_Invoicing::default_dues_year();
+        $current = MyNJILGA_Invoicing::current_dues_year();
+
+        $cases = [
+            'empty table'         => [],
+            'only online joins'   => [ $this->row( [ 'dues_year' => $current, 'invoice_kind' => 'join', 'status' => 'paid' ] ) ],
+            'only the other mode' => [ $this->row( [ 'dues_year' => $current, 'livemode' => 0 ] ) ],
+            'only another year'   => [ $this->row( [ 'dues_year' => $next + 1 ] ) ],
+        ];
+        foreach ( $cases as $name => $rows ) {
+            $this->with_db( $this->db( $rows ), function () use ( $name, $next ): void {
+                $this->assertSame( $next, MyNJILGA_Invoice_Stats::dashboard_year( true, null ), $name );
+            } );
+        }
+
+        // And the same rows in the mode that DOES have the row give the current year.
+        $this->with_db( $this->db( $cases['only the other mode'] ), function () use ( $current ): void {
+            $this->assertSame( $current, MyNJILGA_Invoice_Stats::dashboard_year( false, null ) );
         } );
     }
 
@@ -1377,6 +1401,19 @@ class InvoiceStatsTest extends NJILGA_TestCase {
                 $this->assertSame( $next, MyNJILGA_Invoice_Stats::dashboard_year( true, null ), $status );
             } );
         }
+    }
+
+    /** year_is_open(): the coming year onward always; an earlier year only once it has a batch. */
+    public function testYearIsOpen(): void {
+        $next    = MyNJILGA_Invoicing::default_dues_year();
+        $current = MyNJILGA_Invoicing::current_dues_year();
+
+        $this->assertTrue( MyNJILGA_Invoicing::year_is_open( $next, false ), 'the coming year, before its first preview' );
+        $this->assertTrue( MyNJILGA_Invoicing::year_is_open( $next + 1, false ) );
+        $this->assertFalse( MyNJILGA_Invoicing::year_is_open( $current, false ), 'a year never billed here' );
+        $this->assertFalse( MyNJILGA_Invoicing::year_is_open( $current - 5, false ) );
+        $this->assertTrue( MyNJILGA_Invoicing::year_is_open( $current, true ), 'a late batch for a year already in progress' );
+        $this->assertTrue( strpos( MyNJILGA_Invoicing::closed_year_message( $current ), (string) $next ) !== false );
     }
 
     /** valid_year(): Invoicing's own window, inclusive at both ends. */

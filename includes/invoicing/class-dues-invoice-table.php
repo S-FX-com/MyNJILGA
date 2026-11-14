@@ -861,6 +861,18 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
+     * PURE: an invoice voided before it was ever emailed — withdrawn
+     * before it reached the firm (a stray or mistaken one), so the
+     * member-facing pages leave it out entirely rather than list a
+     * "Voided" invoice nobody was ever sent. Stripe never emails these
+     * itself (auto_advance is always off); mark_sent() is the only thing
+     * that stamps sent_at.
+     */
+    public static function withdrawn_unsent( object $row ): bool {
+        return (string) ( $row->status ?? '' ) === self::STATUS_VOIDED && empty( $row->sent_at );
+    }
+
+    /**
      * @param array<int,int> $ids
      */
     public static function mark_sent( array $ids ): int {
