@@ -14,8 +14,12 @@
  * An invoice not yet emailed (status created) is sent. One already emailed
  * (sent) is re-sent only when staff ticked "email again" for it on the
  * review screen AND it hasn't been sent since this run was queued — so a
- * job that runs twice, or overlaps another, sends it once. Anything that
- * has moved on since (paid, voided…) is left alone.
+ * job that runs twice sends it once. Anything that has moved on since
+ * (paid, voided…) is left alone. And the send itself claims the invoice
+ * atomically (MyNJILGA_Invoice_Sender::send_for_row()), so a job that
+ * overlaps another sender — another run, the Launch Wizard, a second tab —
+ * can't email it in the same moment either. An invoice already queued in
+ * a run is shown as "Emailing…" on Invoicing and can't be queued again.
  *
  * Progress is read from the rows, as for creation: queue() stamps
  * queued_at (and clears last_error) on each; a successful send stamps
@@ -122,8 +126,13 @@ class MyNJILGA_Email_Run {
         $resendIds = array_values( array_map( 'intval', $resendIds ) );
 
         $eligible = [];
+        $now      = current_time( 'mysql' );
         foreach ( MyNJILGA_Dues_Invoice_Table::get_many( array_map( 'intval', $ids ) ) as $row ) {
             if ( self::refusal( $row, $year, $live ) !== '' ) {
+                continue;
+            }
+            // Already waiting in a run (this one or another): leave it to that run.
+            if ( MyNJILGA_Invoice_Creator::is_actively_queued( (string) ( $row->queued_at ?? '' ), $now ) ) {
                 continue;
             }
             if ( (string) $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_SENT && ! in_array( (int) $row->id, $resendIds, true ) ) {
@@ -186,6 +195,10 @@ class MyNJILGA_Email_Run {
             if ( ! empty( $r['ok'] ) ) {
                 MyNJILGA_Dues_Invoice_Table::clear_queued( (int) $row->id );
                 $out['sent']++;
+            } elseif ( isset( $r['claimed'] ) && $r['claimed'] === false ) {
+                // Another sender had it in the same moment, or it changed: not ours to send.
+                MyNJILGA_Dues_Invoice_Table::clear_queued( (int) $row->id );
+                $out['skipped']++;
             } else {
                 MyNJILGA_Dues_Invoice_Table::set_error( (int) $row->id, 'Email not sent: ' . (string) ( $r['error'] ?? 'unknown error' ) );
                 $out['failed']++;

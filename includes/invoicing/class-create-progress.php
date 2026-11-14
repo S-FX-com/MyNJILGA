@@ -237,17 +237,18 @@ class MyNJILGA_Create_Progress {
         );
     }
 
-    /** The polling script, once per page however many cards there are. */
+    /**
+     * The polling script, printed after EVERY card: it runs while the page
+     * is still being parsed, so it can only see cards printed before it.
+     * Each run starts polling for the cards not started yet — a page with
+     * both a creation and an email run gets both polled.
+     */
     private static function script(): void {
-        static $printed = false;
-        if ( $printed ) {
-            return;
-        }
-        $printed = true;
         echo <<<'JS'
 <script>
 (function(){
-  document.querySelectorAll('.njilga-createprogress').forEach(function(card){
+  document.querySelectorAll('.njilga-createprogress:not([data-cp-bound])').forEach(function(card){
+    card.setAttribute('data-cp-bound','1');
     var q=function(n){return card.querySelector('[data-cp="'+n+'"]');};
     var a=function(n){return card.getAttribute('data-'+n)||'';};
     var timer=null, misses=0;

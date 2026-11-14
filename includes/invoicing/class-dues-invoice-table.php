@@ -949,6 +949,63 @@ class MyNJILGA_Dues_Invoice_Table {
         }
     }
 
+    /**
+     * Claim an invoice for emailing — atomically, so two senders (two
+     * background jobs, a job and the Launch Wizard, two browser tabs) can
+     * never both email it. A compare-and-set on what the caller read:
+     * a not-yet-emailed invoice moves created → sent; one already emailed
+     * (a resend) has its sent_at moved on from the value read. Exactly one
+     * UPDATE matches; everyone else gets null and must not send.
+     *
+     * The claim marks the invoice emailed BEFORE the email goes, so a
+     * crash mid-send can leave one marked emailed that wasn't — the safe
+     * way round; a duplicate email can't be taken back.
+     *
+     * @param string|null $now Site time; defaults to now (injectable for tests).
+     * @return string|null The sent_at stamp it was claimed with, or null when another sender has it / it changed.
+     * @throws \RuntimeException When the database could not be asked at all.
+     */
+    public static function claim_for_email( object $row, ?string $now = null ): ?string {
+        global $wpdb;
+        $table  = self::table_name();
+        $now    = $now ?? current_time( 'mysql' );
+        $id     = (int) $row->id;
+        $status = (string) ( $row->status ?? '' );
+
+        if ( $status === self::STATUS_CREATED ) {
+            $n = $wpdb->query( $wpdb->prepare( "UPDATE $table SET status = %s, sent_at = %s WHERE id = %d AND status = %s", self::STATUS_SENT, $now, $id, self::STATUS_CREATED ) ); // phpcs:ignore
+        } elseif ( $status === self::STATUS_SENT ) {
+            $prev = (string) ( $row->sent_at ?? '' );
+            $n    = $prev === ''
+                ? $wpdb->query( $wpdb->prepare( "UPDATE $table SET sent_at = %s WHERE id = %d AND status = %s AND sent_at IS NULL", $now, $id, self::STATUS_SENT ) ) // phpcs:ignore
+                : $wpdb->query( $wpdb->prepare( "UPDATE $table SET sent_at = %s WHERE id = %d AND status = %s AND sent_at = %s", $now, $id, self::STATUS_SENT, $prev ) ); // phpcs:ignore
+        } else {
+            return null;
+        }
+        // A failed query (deadlock, lock timeout, lost connection) is not
+        // "someone else has it": nobody claimed the invoice and it was not
+        // emailed, so it must surface as an error, never as a quiet skip.
+        if ( $n === false ) {
+            throw new \RuntimeException( 'Database error while claiming the invoice for its email' . ( ! empty( $wpdb->last_error ) ? ': ' . $wpdb->last_error : '' ) . ' — it was not emailed.' );
+        }
+        return (int) $n === 1 ? $now : null;
+    }
+
+    /**
+     * Undo claim_for_email() when the email could not be sent: back to the
+     * status and sent_at the caller read — only if nothing has moved the
+     * row on since the claim (a payment, say).
+     */
+    public static function release_email_claim( object $row, string $stamp ): void {
+        global $wpdb;
+        $table = self::table_name();
+        $prev  = (string) ( $row->sent_at ?? '' );
+        $sql   = $prev === ''
+            ? $wpdb->prepare( "UPDATE $table SET status = %s, sent_at = NULL WHERE id = %d AND status = %s AND sent_at = %s", (string) $row->status, (int) $row->id, self::STATUS_SENT, $stamp ) // phpcs:ignore
+            : $wpdb->prepare( "UPDATE $table SET status = %s, sent_at = %s WHERE id = %d AND status = %s AND sent_at = %s", (string) $row->status, $prev, (int) $row->id, self::STATUS_SENT, $stamp ); // phpcs:ignore
+        $wpdb->query( $sql ); // phpcs:ignore
+    }
+
     /** A background job is done with this row: it is no longer queued. */
     public static function clear_queued( int $id ): void {
         global $wpdb;
