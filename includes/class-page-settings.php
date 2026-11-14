@@ -257,6 +257,7 @@ class MyNJILGA_Page_Settings {
         echo '</div>';
 
         self::render_mode_switch_banner( $activeMode );
+        self::render_webhook_section( $s );
         self::render_payment_flat_settings( $s );
 
         if ( ! MyNJILGA_Stripe_Connection::encryption_active() ) {
@@ -339,7 +340,10 @@ class MyNJILGA_Page_Settings {
             printf( '<tr><th>Last verified</th><td>%s</td></tr>', esc_html( $block['last_verified_at'] !== '' ? $block['last_verified_at'] : '—' ) );
             echo '</tbody></table></div>';
 
-            if ( $block['webhook_id'] === '' || $block['webhook_secret'] === '' ) {
+            // The secret is what matters: an endpoint added by hand has no
+            // id on file (only automatic setup records one), and asking
+            // for its secret again after it was pasted is a false alarm.
+            if ( $block['webhook_secret'] === '' ) {
                 self::render_manual_webhook_fallback( $mode );
             }
 
@@ -404,7 +408,7 @@ class MyNJILGA_Page_Settings {
         $webhookUrl = rest_url( 'njilga/v1/stripe-webhook' );
 
         echo '<div class="njilga-callout njilga-callout-warning">';
-        echo '<p><strong>No webhook secret on file for this mode.</strong> Add a webhook endpoint in the Stripe Dashboard (Developers &rarr; Webhooks) pointing at:</p>';
+        echo '<p><strong>No webhook secret on file for this mode.</strong> Add a webhook endpoint in the Stripe Dashboard pointing at the URL below — the <strong>Stripe webhook</strong> section further down this page lists the events and settings — then paste its signing secret here.</p>';
         printf( '<p><code>%s</code></p>', esc_html( $webhookUrl ) );
         printf(
             '<form method="post" action="%s" class="njilga-field">
@@ -420,6 +424,86 @@ class MyNJILGA_Page_Settings {
             wp_nonce_field( self::ACTION_STRIPE_WEBHOOK_SAVE, '_wpnonce', true, false )
         );
         echo '</div>';
+    }
+
+    /**
+     * What the Stripe webhook is, whether each mode has one, and — for
+     * when automatic setup wasn't possible — exactly what to enter in the
+     * Stripe Dashboard to add it by hand.
+     *
+     * @param array<string,mixed> $s MyNJILGA_Stripe_Connection::get()
+     */
+    private static function render_webhook_section( array $s ): void {
+        $url     = rest_url( 'njilga/v1/stripe-webhook' );
+        $version = MyNJILGA_Stripe_Client::API_VERSION;
+        $events  = MyNJILGA_Stripe_Connection::WEBHOOK_EVENTS;
+
+        MyNJILGA_Admin_UI::section(
+            'Stripe webhook',
+            'Stripe calls this site when an invoice is paid, voided or refunded, and when an online join\'s payment clears — that is how invoices turn Paid and members turn current without anyone touching them. Connecting a key above sets the webhook up automatically; the steps below are only for when that wasn\'t possible.'
+        );
+
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Mode</th><th>Webhook</th><th>Events</th><th>API version</th></tr></thead><tbody>';
+        foreach ( [ MyNJILGA_Stripe_Connection::MODE_LIVE, MyNJILGA_Stripe_Connection::MODE_TEST ] as $mode ) {
+            if ( ! MyNJILGA_Stripe_Connection::is_connected( $mode ) ) {
+                printf( '<tr><td>%s</td><td colspan="3" class="njilga-dim">Not connected — connecting a key sets the webhook up.</td></tr>', esc_html( ucfirst( $mode ) ) );
+                continue;
+            }
+            $block = $s[ $mode ];
+            $state = MyNJILGA_Stripe_Connection::webhook_events_state( $mode );
+            $id    = (string) $block['webhook_id'];
+
+            if ( (string) $block['webhook_secret'] === '' ) {
+                $endpoint = MyNJILGA_Admin_UI::validation( 'Not set up — follow the steps below, then paste the signing secret in the ' . ucfirst( $mode ) . ' mode card above', false );
+            } elseif ( $id !== '' ) {
+                $endpoint = MyNJILGA_Admin_UI::validation( 'Set up automatically', true ) . sprintf(
+                    '<span class="njilga-subline"><a href="%s" target="_blank" rel="noopener noreferrer">View it in Stripe</a> · <code>%s</code></span>',
+                    esc_url( 'https://dashboard.stripe.com/' . ( $mode === MyNJILGA_Stripe_Connection::MODE_TEST ? 'test/' : '' ) . 'webhooks/' . rawurlencode( $id ) ),
+                    esc_html( $id )
+                );
+            } else {
+                $endpoint = MyNJILGA_Admin_UI::validation( 'Added by hand — signing secret on file', true );
+            }
+
+            if ( $state['synced'] ) {
+                $eventsCell = MyNJILGA_Admin_UI::validation( 'All ' . count( $events ) . ' subscribed', true );
+            } elseif ( $state['missing'] ) {
+                $eventsCell = MyNJILGA_Admin_UI::validation( 'Missing: ' . implode( ', ', $state['missing'] ), false );
+            } elseif ( $state['endpoint'] === 'manual' && $state['recorded'] && ! $state['checked'] ) {
+                $eventsCell = MyNJILGA_Admin_UI::status( 'Can\'t be read with this key — check it against the list below', 'warn' );
+            } else {
+                $eventsCell = MyNJILGA_Admin_UI::status( 'Checked on the next admin page load', 'muted' );
+            }
+
+            $v = (string) $state['api_version'];
+            $versionCell = $v === ''
+                ? MyNJILGA_Admin_UI::blank()
+                : MyNJILGA_Admin_UI::validation( $v === $version ? $v : $v . ' — should be ' . $version, $v === $version );
+
+            printf( '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>', esc_html( ucfirst( $mode ) ), $endpoint, $eventsCell, $versionCell );
+        }
+        echo '</tbody></table></div></div>';
+
+        echo '<details class="njilga-details">';
+        printf( '<summary>%s Setting the webhook up by hand</summary>', MyNJILGA_Admin_UI::icon( 'wrench' ) );
+        echo '<div class="njilga-card njilga-card-pad">';
+        echo '<ol class="njilga-list">';
+        echo '<li>In the Stripe Dashboard, switch to the mode you are setting up (Test or Live) — each mode needs its own endpoint.</li>';
+        echo '<li>Open <strong>Developers &rarr; Webhooks</strong> (in newer dashboards, <strong>Workbench &rarr; Webhooks</strong>) and choose <strong>Add endpoint</strong> / <strong>Add destination</strong>.</li>';
+        echo '<li>Enter the values below: the endpoint URL, the API version, and the events. Choose events "from your account", not from connected accounts.</li>';
+        echo '<li>Save it, then open the new endpoint and <strong>Reveal</strong> its signing secret (it starts <code>whsec_</code>).</li>';
+        echo '<li>Paste the signing secret into that mode\'s card at the top of this page. The paste box appears there whenever no secret is on file.</li>';
+        echo '</ol>';
+        echo '<table class="njilga-table njilga-kv njilga-table-compact"><tbody>';
+        printf( '<tr><th>Endpoint URL</th><td><code>%s</code></td></tr>', esc_html( $url ) );
+        printf( '<tr><th>API version</th><td><code>%s</code></td></tr>', esc_html( $version ) );
+        $codes = array_map( static function ( $e ) { return '<code>' . esc_html( $e ) . '</code>'; }, $events );
+        printf( '<tr><th>Events (%d)</th><td>%s</td></tr>', count( $events ), implode( ' ', $codes ) );
+        echo '<tr><th>Payload style</th><td>Snapshot (the classic style), if Stripe asks.</td></tr>';
+        echo '</tbody></table>';
+        echo '<p class="njilga-help">Already have an endpoint for this URL that the plugin can\'t use (its secret is lost, or it was made with another API version)? Delete it in Stripe, then use <strong>Replace key</strong> above with the same key — the plugin creates a fresh one and keeps its secret.</p>';
+        echo '</div>';
+        echo '</details>';
     }
 
     private static function render_mode_switch_banner( string $activeMode ): void {
