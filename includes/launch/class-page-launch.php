@@ -338,8 +338,9 @@ class MyNJILGA_Page_Launch {
         if ( (int) $review['total'] > 0 ) {
             MyNJILGA_Admin_UI::callout( sprintf( 'A preview already exists for %d: <strong>%d</strong> firm invoice%s (%d ready, %d excluded). Generating again refreshes the drafts.', $year, (int) $review['total'], (int) $review['total'] === 1 ? '' : 's', (int) $review['ready'], (int) $review['excluded'] ), 'info' );
         }
-        if ( ! MyNJILGA_Invoicing::year_is_open( $year, (int) $review['total'] > 0 ) ) {
-            MyNJILGA_Admin_UI::callout( esc_html( MyNJILGA_Invoicing::closed_year_message( $year ) ), 'warning' );
+        $wiped = MyNJILGA_Year_Wipe::was_wiped( $year, $live );
+        if ( ! MyNJILGA_Invoicing::year_is_open( $year, (int) $review['total'] > 0, $wiped ) ) {
+            MyNJILGA_Admin_UI::callout( esc_html( MyNJILGA_Invoicing::closed_year_message( $year, $wiped ) ), 'warning' );
             return;
         }
         echo '<div class="njilga-actions">';
@@ -873,8 +874,8 @@ class MyNJILGA_Page_Launch {
     public static function handle_preview(): void {
         self::guard( self::ACTION_PREVIEW );
         $year  = self::post_year();
-        if ( ! MyNJILGA_Invoicing::year_is_open( $year, MyNJILGA_Invoice_Stats::year_has_annual_rows( $year, self::is_live() ) ) ) {
-            self::back( $year, 2, [ 'msg' => 'error', 'detail' => MyNJILGA_Invoicing::closed_year_message( $year ) ] );
+        if ( ! MyNJILGA_Invoicing::year_is_open_now( $year, self::is_live() ) ) {
+            self::back( $year, 2, [ 'msg' => 'error', 'detail' => MyNJILGA_Invoicing::closed_year_message( $year, MyNJILGA_Year_Wipe::was_wiped( $year, self::is_live() ) ) ] );
         }
         $stats = MyNJILGA_Dues_Preview::generate_and_persist( $year );
         self::back( $year, 3, [ 'msg' => 'previewed', 'n' => (int) $stats['drafts'], 'f' => (int) $stats['excluded'] ] );

@@ -14,15 +14,36 @@
  *   - invoices already voided are deleted.
  *
  * What it never touches: online joins (real payments for real
- * memberships), and nothing at all if any annual invoice in the year has
- * money against it or has been acted on — paid, processing, partly paid,
- * swept by the downgrade sweep, or written off. Those make the year a
- * real one, and the whole wipe is refused, so it is all or nothing.
+ * memberships), and any annual invoice with money against it or already
+ * acted on — paid, processing, partly paid, swept by the downgrade
+ * sweep, or written off. Those are KEPT and listed, for staff to settle
+ * in Stripe (a refund, say) — a wipe never loses a payment record.
+ *
+ * Afterwards the year is recorded as wiped (per mode), and no batch can
+ * be generated for it again — not even from the invoices it kept.
  *
  * Only years BEFORE the coming dues year qualify, so a batch in progress
  * for next year can never be wiped from here.
  */
 class MyNJILGA_Year_Wipe {
+
+    /** Option: [ 'live' => int[], 'test' => int[] ] — the years wiped in each mode. */
+    const OPTION_WIPED = 'njilga_wiped_dues_years';
+
+    /** Whether $year was wiped in this mode (so it stays closed to new batches). */
+    public static function was_wiped( int $year, bool $live ): bool {
+        $all = get_option( self::OPTION_WIPED, [] );
+        $key = $live ? 'live' : 'test';
+        return is_array( $all ) && in_array( $year, array_map( 'intval', (array) ( $all[ $key ] ?? [] ) ), true );
+    }
+
+    private static function record_wiped( int $year, bool $live ): void {
+        $all = get_option( self::OPTION_WIPED, [] );
+        $all = is_array( $all ) ? $all : [];
+        $key = $live ? 'live' : 'test';
+        $all[ $key ] = array_values( array_unique( array_merge( array_map( 'intval', (array) ( $all[ $key ] ?? [] ) ), [ $year ] ) ) );
+        update_option( self::OPTION_WIPED, $all, false );
+    }
 
     /** Statuses deleted outright: nothing exists in Stripe that could be collected. */
     const DELETE_STATUSES = [
@@ -49,12 +70,12 @@ class MyNJILGA_Year_Wipe {
      * @param array<int,object> $rows Every row of ONE year in ONE mode.
      * @return array{
      *   delete:array<int,object>, void:array<int,object>,
-     *   blocked:array<int,array{row:object,reason:string}>,
+     *   kept:array<int,array{row:object,reason:string}>,
      *   joins:int, firms:int, open_cents:int
-     * }
+     * }  firms counts the firms the wipe changes (not those only kept).
      */
     public static function plan( array $rows ): array {
-        $out   = [ 'delete' => [], 'void' => [], 'blocked' => [], 'joins' => 0, 'firms' => 0, 'open_cents' => 0 ];
+        $out   = [ 'delete' => [], 'void' => [], 'kept' => [], 'joins' => 0, 'firms' => 0, 'open_cents' => 0 ];
         $firms = [];
 
         foreach ( $rows as $row ) {
@@ -64,10 +85,12 @@ class MyNJILGA_Year_Wipe {
             }
 
             $status = (string) ( $row->status ?? '' );
-            $reason = self::block_reason( $row );
+            $reason = self::keep_reason( $row );
             if ( $reason !== '' ) {
-                $out['blocked'][] = [ 'row' => $row, 'reason' => $reason ];
-            } elseif ( in_array( $status, self::VOID_STATUSES, true ) ) {
+                $out['kept'][] = [ 'row' => $row, 'reason' => $reason ];
+                continue;
+            }
+            if ( in_array( $status, self::VOID_STATUSES, true ) ) {
                 $out['void'][]      = $row;
                 $out['open_cents'] += (int) ( $row->total_amount_cents ?? 0 );
             } else {
@@ -81,9 +104,9 @@ class MyNJILGA_Year_Wipe {
     }
 
     /**
-     * PURE: why one annual row stops the wipe ('' when it doesn't).
+     * PURE: why a wipe keeps one annual row ('' when it goes).
      */
-    public static function block_reason( object $row ): string {
+    public static function keep_reason( object $row ): string {
         $T      = 'MyNJILGA_Dues_Invoice_Table';
         $status = (string) ( $row->status ?? '' );
 
@@ -114,7 +137,7 @@ class MyNJILGA_Year_Wipe {
     /**
      * Everything the confirmation screen shows, and why it may not run.
      *
-     * @return array<string,mixed> plan() plus 'year', 'live', 'rows' (annual rows), 'stop' (reasons the whole wipe can't run now).
+     * @return array<string,mixed> plan() plus 'year', 'live', 'stop' (reasons the wipe can't run now).
      */
     public static function preview( int $year, bool $live ): array {
         $rows = MyNJILGA_Dues_Invoice_Table::get_by_year( $year, [], $live );
@@ -123,17 +146,6 @@ class MyNJILGA_Year_Wipe {
         $stop = [];
         if ( ! self::year_qualifies( $year ) ) {
             $stop[] = sprintf( 'Only a year before %d can be wiped.', MyNJILGA_Invoicing::default_dues_year() );
-        }
-        if ( $plan['blocked'] ) {
-            $stop[] = sprintf(
-                '%d invoice%s for %d %s money against %s or %s already been acted on (listed below). A year with real payments isn\'t wiped.',
-                count( $plan['blocked'] ),
-                count( $plan['blocked'] ) === 1 ? '' : 's',
-                $year,
-                count( $plan['blocked'] ) === 1 ? 'has' : 'have',
-                count( $plan['blocked'] ) === 1 ? 'it' : 'them',
-                count( $plan['blocked'] ) === 1 ? 'has' : 'have'
-            );
         }
         if ( MyNJILGA_Invoice_Creator::has_pending_jobs() ) {
             $stop[] = 'Invoices are being created in the background. Wait for that to finish, then reload this page.';
@@ -148,17 +160,18 @@ class MyNJILGA_Year_Wipe {
 
     /**
      * Do it. Re-plans from the database rather than trusting the screen,
-     * and refuses on any of preview()'s stop reasons.
+     * and refuses on any of preview()'s stop reasons. Kept rows are left
+     * exactly as they are.
      *
      * A void Stripe refuses (most often: the invoice was already voided
      * in the Stripe Dashboard) is checked against Stripe — already void
      * counts as done; anything else leaves that row in place and is
      * reported, while the rest of the wipe carries on.
      *
-     * @return array{ok:bool,error:string,deleted:int,voided:int,failed:array<int,string>,firms:int}
+     * @return array{ok:bool,error:string,deleted:int,voided:int,failed:array<int,string>,firms:int,kept:int}
      */
     public static function run( int $year, bool $live ): array {
-        $out = [ 'ok' => false, 'error' => '', 'deleted' => 0, 'voided' => 0, 'failed' => [], 'firms' => 0 ];
+        $out = [ 'ok' => false, 'error' => '', 'deleted' => 0, 'voided' => 0, 'failed' => [], 'firms' => 0, 'kept' => 0 ];
         $p   = self::preview( $year, $live );
         if ( $p['stop'] ) {
             $out['error'] = (string) $p['stop'][0];
@@ -207,8 +220,13 @@ class MyNJILGA_Year_Wipe {
             );
         }
 
+        // Closed for good in this mode, even though kept invoices (and any
+        // that failed to void) still give the year rows.
+        self::record_wiped( $year, $live );
+
         $out['ok']    = true;
         $out['firms'] = count( $firms );
+        $out['kept']  = count( $p['kept'] );
         return $out;
     }
 }

@@ -42,14 +42,14 @@ class YearWipeTest extends NJILGA_TestCase {
 
         $this->assertSame( [ 1, 2, 3, 6 ], $this->ids( $plan['delete'] ) );
         $this->assertSame( [ 4, 5 ], $this->ids( $plan['void'] ) );
-        $this->assertSame( [], $plan['blocked'] );
+        $this->assertSame( [], $plan['kept'] );
         $this->assertSame( 1, $plan['joins'], 'a paid online join is a real membership — never wiped' );
         $this->assertSame( 6, $plan['firms'] );
         $this->assertSame( 75000, $plan['open_cents'] );
     }
 
-    /** Anything with money against it, or already acted on, makes the year real. */
-    public function testRowsThatBlockTheWipe(): void {
+    /** Anything with money against it, or already acted on, is kept — never voided or deleted — and the rest still goes. */
+    public function testRowsWithAPaymentAreKept(): void {
         $cases = [
             'Paid'                                 => $this->row( 1, 'paid' ),
             'A payment is processing'              => $this->row( 2, 'processing' ),
@@ -58,14 +58,25 @@ class YearWipeTest extends NJILGA_TestCase {
             'Partly paid'                          => $this->row( 5, 'sent', [ 'amount_paid_cents' => 100 ] ),
         ];
         foreach ( $cases as $reason => $row ) {
-            $this->assertSame( $reason, MyNJILGA_Year_Wipe::block_reason( $row ), $reason );
+            $this->assertSame( $reason, MyNJILGA_Year_Wipe::keep_reason( $row ), $reason );
         }
-        $this->assertSame( 'Partly paid', MyNJILGA_Year_Wipe::block_reason( $this->row( 6, 'created', [ 'paid_off_stripe_cents' => 5000 ] ) ), 'paid by check' );
-        $this->assertTrue( MyNJILGA_Year_Wipe::block_reason( $this->row( 7, 'created', [ 'gateway_invoice_id' => '' ] ) ) !== '', 'an open invoice with no Stripe id cannot be voided' );
+        $this->assertSame( 'Partly paid', MyNJILGA_Year_Wipe::keep_reason( $this->row( 6, 'created', [ 'paid_off_stripe_cents' => 5000 ] ) ), 'paid by check' );
+        $this->assertTrue( MyNJILGA_Year_Wipe::keep_reason( $this->row( 7, 'created', [ 'gateway_invoice_id' => '' ] ) ) !== '', 'an open invoice with no Stripe id cannot be voided' );
 
-        $plan = MyNJILGA_Year_Wipe::plan( array_merge( array_values( $cases ), [ $this->row( 9, 'draft' ) ] ) );
-        $this->assertCount( 5, $plan['blocked'] );
+        // The reported case: 168 created, one of them paid — 167 go, 1 stays.
+        $plan = MyNJILGA_Year_Wipe::plan( array_merge( array_values( $cases ), [ $this->row( 8, 'created' ), $this->row( 9, 'draft' ) ] ) );
+        $this->assertSame( [ 1, 2, 3, 4, 5 ], array_map( static function ( $k ) { return (int) $k['row']->id; }, $plan['kept'] ) );
+        $this->assertSame( [ 8 ], $this->ids( $plan['void'] ) );
         $this->assertSame( [ 9 ], $this->ids( $plan['delete'] ) );
+        $this->assertSame( 2, $plan['firms'], 'only the firms the wipe changes' );
+    }
+
+    /** A wiped year is closed to new batches even though the invoices it kept still give it rows. */
+    public function testAWipedYearStaysClosed(): void {
+        $current = MyNJILGA_Invoicing::current_dues_year();
+        $this->assertTrue( MyNJILGA_Invoicing::year_is_open( $current, true ) );
+        $this->assertFalse( MyNJILGA_Invoicing::year_is_open( $current, true, true ) );
+        $this->assertTrue( strpos( MyNJILGA_Invoicing::closed_year_message( $current, true ), 'wiped' ) !== false );
     }
 
     public function testOnlyYearsBeforeTheComingOneQualify(): void {

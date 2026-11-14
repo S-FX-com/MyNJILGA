@@ -31,6 +31,7 @@ class MyNJILGA_Page_Invoicing {
     const ACTION_SYNC      = 'my_njilga_dues_stripe_sync';
     const ACTION_VOID      = 'my_njilga_dues_void';
     const ACTION_WIPE      = 'my_njilga_dues_wipe';
+    const ACTION_MOVE_JOIN = 'my_njilga_dues_move_join';
 
     const FORM_ID      = 'njilga-inv-form';
     const SYNC_FORM_ID = 'njilga-inv-sync';
@@ -119,8 +120,8 @@ class MyNJILGA_Page_Invoicing {
         // annual invoice: a year with only those (people joining for next
         // year after the cutover) still hasn't had its batch generated.
         if ( count( $views ) === $tally['joins'] ) {
-            if ( ! MyNJILGA_Invoicing::year_is_open( $duesYear, false ) ) {
-                self::render_closed_year( $duesYear );
+            if ( ! MyNJILGA_Invoicing::year_is_open( $duesYear, false, MyNJILGA_Year_Wipe::was_wiped( $duesYear, $liveMode ) ) ) {
+                self::render_closed_year( $duesYear, $liveMode );
                 echo '</div>';
                 return;
             }
@@ -489,13 +490,15 @@ class MyNJILGA_Page_Invoicing {
             case 'downgraded':
             case 'voided':
             case 'uncollectible':
+                $move = MyNJILGA_Join_Year_Move::offered( $row ) ? ' ' . self::move_join_button( $row ) : '';
                 if ( $link === '' ) {
-                    return '<span class="njilga-dim">—</span>';
+                    return $move !== '' ? ltrim( $move ) : '<span class="njilga-dim">—</span>';
                 }
                 return sprintf(
-                    '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View Invoice</a> %s',
+                    '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View Invoice</a> %s%s',
                     esc_url( $link ),
-                    self::pdf_link( $pdf )
+                    self::pdf_link( $pdf ),
+                    $move
                 );
 
             case 'blocked':
@@ -524,6 +527,20 @@ class MyNJILGA_Page_Invoicing {
     }
 
     /** A single POST + JS confirm() — voiding one invoice is a small enough blast radius not to need a full confirmation screen. */
+    /** A paid online join from this year: count it toward the coming year instead. */
+    private static function move_join_button( object $row ): string {
+        $to = MyNJILGA_Invoicing::default_dues_year();
+        return MyNJILGA_Admin_UI::action_form(
+            self::ACTION_MOVE_JOIN,
+            sprintf( 'Count toward %d', $to ),
+            [ 'row_id' => (int) $row->id, 'dues_year' => (int) $row->dues_year ],
+            'outline',
+            '',
+            sprintf( 'Count this online join toward %1$d dues instead of %2$d? Its members are tagged Dues Paid %1$d (keeping %2$d), and the %1$d invoices list them at $0 after the next Refresh Firms. Nothing changes in Stripe.', $to, (int) $row->dues_year ),
+            'sm'
+        );
+    }
+
     private static function void_button( object $row ): string {
         return MyNJILGA_Admin_UI::action_form(
             self::ACTION_VOID,
@@ -866,15 +883,14 @@ class MyNJILGA_Page_Invoicing {
      * A past year this plugin never billed: nothing to show and nothing
      * to generate — point at the year that is open instead.
      */
-    private static function render_closed_year( int $duesYear ): void {
+    private static function render_closed_year( int $duesYear, bool $live ): void {
         $next = MyNJILGA_Invoicing::default_dues_year();
         echo '<div class="njilga-card njilga-empty">';
         echo '<div class="njilga-empty-icon">' . self::icon( 'calendar' ) . '</div>';
         printf( '<h2 class="njilga-empty-title">No invoices for %d</h2>', $duesYear );
         printf(
-            '<p class="njilga-empty-text">%d was never billed through My NJILGA, so no batch can be started for it. Invoices are created for the coming dues year (%d) onward.</p>',
-            $duesYear,
-            $next
+            '<p class="njilga-empty-text">%s</p>',
+            esc_html( MyNJILGA_Invoicing::closed_year_message( $duesYear, MyNJILGA_Year_Wipe::was_wiped( $duesYear, $live ) ) )
         );
         printf(
             '<a class="njilga-btn njilga-btn-primary njilga-btn-sm" href="%s">Go to %d invoicing</a>',
@@ -1067,19 +1083,20 @@ class MyNJILGA_Page_Invoicing {
             return;
         }
         $p = MyNJILGA_Year_Wipe::preview( $duesYear, $live );
-        if ( $p['blocked'] || ( ! $p['delete'] && ! $p['void'] ) ) {
+        if ( ! $p['delete'] && ! $p['void'] ) {
             return;
         }
 
         echo '<div class="njilga-danger-card">';
         echo '<div class="njilga-danger-head">' . self::icon( 'alert' ) . '<h2>Wipe ' . (int) $duesYear . ' invoices</h2></div>';
         printf(
-            '<p>If %d was billed by mistake — the dues were already covered — this removes every %d dues invoice and preview here: <strong>%d</strong> open invoice%s voided in Stripe, <strong>%d</strong> other record%s deleted, across <strong>%d</strong> firm%s. Nothing has been paid against any of them.</p>',
+            '<p>If %d was billed by mistake — the dues were already covered — this removes the %d dues invoices and previews here: <strong>%d</strong> open invoice%s voided in Stripe, <strong>%d</strong> other record%s deleted, across <strong>%d</strong> firm%s.%s Online joins are kept.</p>',
             $duesYear,
             $duesYear,
             count( $p['void'] ), count( $p['void'] ) === 1 ? '' : 's',
             count( $p['delete'] ), count( $p['delete'] ) === 1 ? '' : 's',
-            (int) $p['firms'], (int) $p['firms'] === 1 ? '' : 's'
+            (int) $p['firms'], (int) $p['firms'] === 1 ? '' : 's',
+            $p['kept'] ? sprintf( ' <strong>%d</strong> invoice%s with a payment against %s %s kept and listed for you to settle in Stripe.', count( $p['kept'] ), count( $p['kept'] ) === 1 ? '' : 's', count( $p['kept'] ) === 1 ? 'it' : 'them', count( $p['kept'] ) === 1 ? 'is' : 'are' ) : ''
         );
         printf(
             '<a class="njilga-btn njilga-btn-danger njilga-btn-sm" href="%s">Review &amp; wipe %d →</a>',
@@ -1099,17 +1116,32 @@ class MyNJILGA_Page_Invoicing {
         MyNJILGA_Admin_UI::stat_cards( [
             [ 'label' => 'Voided in Stripe, then removed', 'value' => count( $p['void'] ),   'variant' => 'destructive', 'icon' => 'file' ],
             [ 'label' => 'Previews & records removed',     'value' => count( $p['delete'] ), 'variant' => 'destructive', 'icon' => 'file' ],
-            [ 'label' => 'Firms',                          'value' => (int) $p['firms'],     'variant' => 'default',     'icon' => 'users' ],
+            [ 'label' => 'Paid or in progress — kept',     'value' => count( $p['kept'] ),   'variant' => 'warning',     'icon' => 'alert' ],
             [ 'label' => 'Online joins kept',              'value' => (int) $p['joins'],     'variant' => 'success',     'icon' => 'check-circle' ],
         ] );
 
         echo '<div class="njilga-danger-card"><p><strong>What will happen</strong> (' . ( $live ? 'Live' : 'Test' ) . ' mode only):</p><ul class="njilga-list">';
         printf( '<li>Every created or sent %d invoice (%s outstanding) is <strong>voided in Stripe</strong>, so it can no longer be paid. Stripe keeps the voided invoice in its own records.</li>', $duesYear, esc_html( MyNJILGA_Invoicing::money( (int) $p['open_cents'] ) ) );
         printf( '<li>Every %d dues invoice, preview draft and exception is then <strong>deleted here</strong> — gone from Invoicing, Payments, the Dashboard and every member\'s page.</li>', $duesYear );
-        echo '<li>Online joins are real payments and are <strong>kept</strong>. Member tags and roles are not touched.</li>';
+        echo '<li>Online joins, and any invoice with a payment against it (paid, processing, partly paid, swept or written off), are <strong>kept</strong> — listed below so you can refund or keep each one in Stripe. Member tags and roles are not touched.</li>';
         echo '<li>A note is left on each firm\'s FluentCRM Company record.</li>';
-        printf( '<li>%d can\'t be billed again afterwards: invoices are only started for %d onward.</li>', $duesYear, MyNJILGA_Invoicing::default_dues_year() );
+        printf( '<li>%d is then closed: no invoices can be generated for it again. Invoicing carries on with %d.</li>', $duesYear, MyNJILGA_Invoicing::default_dues_year() );
         echo '</ul></div>';
+
+        if ( $p['kept'] ) {
+            MyNJILGA_Admin_UI::section( 'Kept — settle these in Stripe', 'A payment was made or started against each of these. Refund it in Stripe if it was paid in error, or leave it.' );
+            echo '<div class="njilga-card"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Firm</th><th>Status</th><th>Why it is kept</th><th class="njilga-col-num">Total</th></tr></thead><tbody>';
+            foreach ( $p['kept'] as $k ) {
+                printf(
+                    '<tr><td>%s</td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td></tr>',
+                    esc_html( MyNJILGA_Dues_Snapshot::company_name( $k['row'] ) ),
+                    self::pill( ucfirst( (string) $k['row']->status ), 'muted' ),
+                    esc_html( $k['reason'] ),
+                    esc_html( MyNJILGA_Invoicing::money( (int) $k['row']->total_amount_cents ) )
+                );
+            }
+            echo '</tbody></table></div></div>';
+        }
 
         if ( $p['stop'] ) {
             echo '<div class="njilga-callout njilga-callout-error"><p><strong>This year can\'t be wiped right now:</strong></p><ul class="njilga-list">';
@@ -1117,19 +1149,6 @@ class MyNJILGA_Page_Invoicing {
                 printf( '<li>%s</li>', esc_html( (string) $reason ) );
             }
             echo '</ul></div>';
-            if ( $p['blocked'] ) {
-                echo '<div class="njilga-card"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Firm</th><th>Status</th><th>Why it stops the wipe</th><th class="njilga-col-num">Total</th></tr></thead><tbody>';
-                foreach ( $p['blocked'] as $b ) {
-                    printf(
-                        '<tr><td>%s</td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td></tr>',
-                        esc_html( MyNJILGA_Dues_Snapshot::company_name( $b['row'] ) ),
-                        self::pill( ucfirst( (string) $b['row']->status ), 'muted' ),
-                        esc_html( $b['reason'] ),
-                        esc_html( MyNJILGA_Invoicing::money( (int) $b['row']->total_amount_cents ) )
-                    );
-                }
-                echo '</tbody></table></div></div>';
-            }
             return;
         }
 
@@ -1288,6 +1307,7 @@ class MyNJILGA_Page_Invoicing {
             'synced'          => 'info',
             'voided_invoice'  => 'success',
             'wiped'           => 'success',
+            'join_moved'      => 'success',
             'wiped_partial'   => 'warning',
             'nothing'         => 'info',
             'error'           => 'error',
@@ -1337,6 +1357,15 @@ class MyNJILGA_Page_Invoicing {
                 return sprintf( '%d invoice%s sent.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'sent_partial':
                 return sprintf( '%d invoice%s sent, %d failed — see details below.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
+            case 'join_moved':
+                return sprintf(
+                    'Online join moved: it now counts toward %d dues, and %d member%s %s tagged Dues Paid %d. Click Refresh Firms so the %d invoices list %s at $0.',
+                    MyNJILGA_Invoicing::default_dues_year(),
+                    $g( 'n' ), $g( 'n' ) === 1 ? '' : 's', $g( 'n' ) === 1 ? 'is' : 'are',
+                    MyNJILGA_Invoicing::default_dues_year(),
+                    MyNJILGA_Invoicing::default_dues_year(),
+                    $g( 'n' ) === 1 ? 'them' : 'everyone it covers'
+                );
             case 'wiped':
             case 'wiped_partial':
                 return sprintf(
@@ -1345,7 +1374,8 @@ class MyNJILGA_Page_Invoicing {
                     $g( 'voided' ), $g( 'voided' ) === 1 ? '' : 's',
                     $g( 'deleted' ), $g( 'deleted' ) === 1 ? '' : 's',
                     $g( 'firms' ), $g( 'firms' ) === 1 ? '' : 's',
-                    $msg === 'wiped_partial' ? sprintf( ' %d invoice%s could not be voided and %s left in place — see below, then run the wipe again.', $g( 'failed' ), $g( 'failed' ) === 1 ? '' : 's', $g( 'failed' ) === 1 ? 'was' : 'were' ) : ''
+                    ( $g( 'kept' ) > 0 ? sprintf( ' %d invoice%s with a payment against %s %s kept.', $g( 'kept' ), $g( 'kept' ) === 1 ? '' : 's', $g( 'kept' ) === 1 ? 'it' : 'them', $g( 'kept' ) === 1 ? 'was' : 'were' ) : '' ) .
+                    ( $msg === 'wiped_partial' ? sprintf( ' %d invoice%s could not be voided and %s left in place — see below, then run the wipe again.', $g( 'failed' ), $g( 'failed' ) === 1 ? '' : 's', $g( 'failed' ) === 1 ? 'was' : 'were' ) : '' )
                 );
             case 'downgraded':
                 return sprintf( 'Sweep complete: %d invoice%s across %d firm%s — %d member%s tagged unpaid, %d WordPress role%s removed, %d protected as already paid.', $g( 'invoices' ), $g( 'invoices' ) === 1 ? '' : 's', $g( 'firms' ), $g( 'firms' ) === 1 ? '' : 's', $g( 'members' ), $g( 'members' ) === 1 ? '' : 's', $g( 'roles' ), $g( 'roles' ) === 1 ? '' : 's', $g( 'protected' ) );
@@ -1559,8 +1589,8 @@ JS;
         $duesYear = self::post_year();
 
         $live = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
-        if ( ! MyNJILGA_Invoicing::year_is_open( $duesYear, MyNJILGA_Invoice_Stats::year_has_annual_rows( $duesYear, $live ) ) ) {
-            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => MyNJILGA_Invoicing::closed_year_message( $duesYear ) ] );
+        if ( ! MyNJILGA_Invoicing::year_is_open_now( $duesYear, $live ) ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => MyNJILGA_Invoicing::closed_year_message( $duesYear, MyNJILGA_Year_Wipe::was_wiped( $duesYear, $live ) ) ] );
         }
 
         $stats = MyNJILGA_Dues_Preview::generate_and_persist( $duesYear );
@@ -1692,6 +1722,17 @@ JS;
         ] );
     }
 
+    public static function handle_move_join(): void {
+        self::guard( self::ACTION_MOVE_JOIN );
+        $rowId  = isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0;
+        $result = MyNJILGA_Join_Year_Move::move( $rowId );
+        if ( ! $result['ok'] ) {
+            self::redirect( self::post_year(), [ 'msg' => 'error', 'detail' => $result['error'] ] );
+        }
+        // On to the year it now counts toward, where it shows under Online joins.
+        self::redirect( $result['to_year'], [ 'msg' => 'join_moved', 'n' => $result['members'] ] );
+    }
+
     public static function handle_wipe(): void {
         self::guard( self::ACTION_WIPE );
         $duesYear = self::post_year();
@@ -1723,6 +1764,7 @@ JS;
             'deleted' => $result['deleted'],
             'firms'   => $result['firms'],
             'failed'  => count( $result['failed'] ),
+            'kept'    => $result['kept'],
         ] );
     }
 

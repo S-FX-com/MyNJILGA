@@ -58,16 +58,39 @@ class MyNJILGA_Invoicing {
      * current calendar year, offered beside next year, once let a 2026
      * invoice reach members ahead of the first real (2027) batch.
      *
+     * A year wiped as billed in error (MyNJILGA_Year_Wipe) is closed for
+     * good, even when invoices it had to keep (a paid one) still give it
+     * rows.
+     *
      * @param bool $hasBatch The year already holds an annual (non-join) row in this Stripe mode.
+     * @param bool $wiped    The year was wiped in this Stripe mode.
      */
-    public static function year_is_open( int $year, bool $hasBatch ): bool {
-        return $hasBatch || $year >= self::default_dues_year();
+    public static function year_is_open( int $year, bool $hasBatch, bool $wiped = false ): bool {
+        return ! $wiped && ( $hasBatch || $year >= self::default_dues_year() );
+    }
+
+    /**
+     * year_is_open() for this year as it stands in the database.
+     */
+    public static function year_is_open_now( int $year, bool $live ): bool {
+        return self::year_is_open(
+            $year,
+            MyNJILGA_Invoice_Stats::year_has_annual_rows( $year, $live ),
+            MyNJILGA_Year_Wipe::was_wiped( $year, $live )
+        );
     }
 
     /**
      * Staff-facing reason year_is_open() said no, for the admin pages.
      */
-    public static function closed_year_message( int $year ): string {
+    public static function closed_year_message( int $year, bool $wiped = false ): string {
+        if ( $wiped ) {
+            return sprintf(
+                '%d was wiped as billed in error, so no new invoices can be generated for it. Pick %d in the Dues Year menu.',
+                $year,
+                self::default_dues_year()
+            );
+        }
         return sprintf(
             '%d has no invoice batch, and invoices are only started for the coming dues year (%d) onward — so nothing was generated. Pick %d in the Dues Year menu.',
             $year,
