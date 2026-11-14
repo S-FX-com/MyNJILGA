@@ -62,6 +62,48 @@ class EmailRunTest extends NJILGA_TestCase {
         $this->assertFalse( MyNJILGA_Email_Run::should_send( $this->row( 5, 'created', [ 'hosted_invoice_url' => '' ] ), [], self::SINCE ) );
     }
 
+    /**
+     * The claim is a compare-and-set on what the sender read, so of two
+     * senders that read the same row at once only one UPDATE matches.
+     * (The recording $wpdb reports 0 rows changed, i.e. "someone else won".)
+     */
+    public function testClaimingAnInvoiceIsACompareAndSet(): void {
+        global $wpdb;
+
+        $wpdb->reset();
+        $this->assertSame( null, MyNJILGA_Dues_Invoice_Table::claim_for_email( $this->row( 1, 'created' ), self::NOW ), 'lost the race: do not send' );
+        $sql = $wpdb->last_query();
+        foreach ( [ "SET status = 'sent'", 'WHERE id = 1', "AND status = 'created'" ] as $needle ) {
+            $this->assertTrue( strpos( $sql, $needle ) !== false, "Expected \"$needle\" in: $sql" );
+        }
+
+        $wpdb->reset();
+        MyNJILGA_Dues_Invoice_Table::claim_for_email( $this->row( 2, 'sent', [ 'sent_at' => '2026-11-01 10:00:00' ] ), self::NOW );
+        $sql = $wpdb->last_query();
+        foreach ( [ 'WHERE id = 2', "AND status = 'sent'", "AND sent_at = '2026-11-01 10:00:00'" ] as $needle ) {
+            $this->assertTrue( strpos( $sql, $needle ) !== false, "Expected \"$needle\" in: $sql" );
+        }
+
+        $wpdb->reset();
+        MyNJILGA_Dues_Invoice_Table::claim_for_email( $this->row( 3, 'sent' ), self::NOW );
+        $this->assertTrue( strpos( $wpdb->last_query(), 'AND sent_at IS NULL' ) !== false );
+
+        $wpdb->reset();
+        $this->assertSame( null, MyNJILGA_Dues_Invoice_Table::claim_for_email( $this->row( 4, 'paid' ), self::NOW ) );
+        $this->assertCount( 0, $wpdb->queries, 'a paid invoice is never claimed for an email' );
+    }
+
+    /** A failed send hands the invoice back exactly as it was — only if nothing has moved it on since. */
+    public function testReleasingAClaimRestoresWhatWasRead(): void {
+        global $wpdb;
+        $wpdb->reset();
+        MyNJILGA_Dues_Invoice_Table::release_email_claim( $this->row( 1, 'created' ), '2026-11-20 09:01:00' );
+        $sql = $wpdb->last_query();
+        foreach ( [ "SET status = 'created', sent_at = NULL", 'WHERE id = 1', "AND status = 'sent'", "AND sent_at = '2026-11-20 09:01:00'" ] as $needle ) {
+            $this->assertTrue( strpos( $sql, $needle ) !== false, "Expected \"$needle\" in: $sql" );
+        }
+    }
+
     public function testProgressIsReadFromTheRows(): void {
         $rows = [
             $this->row( 1, 'sent', [ 'sent_at' => '2026-11-20 09:02:00' ] ),                                       // sent by the run

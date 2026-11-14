@@ -99,7 +99,14 @@ class MyNJILGA_Invoice_Sender {
     }
 
     /**
-     * @return array{ok:bool, error?:string}
+     * Email one invoice to its firm. Every path that sends goes through
+     * here, and here the invoice is claimed atomically first
+     * (MyNJILGA_Dues_Invoice_Table::claim_for_email()): of two senders that
+     * read the same row at once, one sends and the other gets
+     * claimed=false and sends nothing. $invoiceRow is the row as the caller
+     * read it — the claim only succeeds if it is still exactly that.
+     *
+     * @return array{ok:bool, error?:string, claimed?:bool}
      */
     public static function send_for_row( object $invoiceRow ): array {
         $m = self::compose( $invoiceRow );
@@ -107,7 +114,13 @@ class MyNJILGA_Invoice_Sender {
             return [ 'ok' => false, 'error' => (string) $m['error'] ];
         }
 
+        $stamp = MyNJILGA_Dues_Invoice_Table::claim_for_email( $invoiceRow );
+        if ( $stamp === null ) {
+            return [ 'ok' => false, 'claimed' => false, 'error' => 'Another send had this invoice at the same moment, or it changed (paid, voided, emailed) since it was read — it was not emailed again.' ];
+        }
+
         if ( ! wp_mail( $m['to'], $m['subject'], $m['body'], $m['headers'] ) ) {
+            MyNJILGA_Dues_Invoice_Table::release_email_claim( $invoiceRow, $stamp );
             return [ 'ok' => false, 'error' => "wp_mail() failed — check the site's mail configuration." ];
         }
 
