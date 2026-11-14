@@ -132,9 +132,7 @@ class MyNJILGA_Page_Invoicing {
 
         self::render_summary( $tally, self::annual_totals( $views ) );
 
-        if ( MyNJILGA_Invoice_Creator::has_pending_jobs() ) {
-            echo '<div class="njilga-callout njilga-callout-info"><p><strong>Invoices are being created in the background.</strong> Reload this page in a moment to see them move to Created. Any failures are recorded on the firm\'s row.</p></div>';
-        }
+        MyNJILGA_Create_Progress::render( $duesYear, $liveMode, self::page_url( $duesYear ) );
 
         self::render_workspace( $duesYear, $views, $canCreate );
         self::render_send_form( $duesYear );
@@ -1364,7 +1362,7 @@ class MyNJILGA_Page_Invoicing {
             case 'approved':
                 return sprintf( '%d invoice%s approved.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'queued':
-                return sprintf( '%d invoice%s queued for creation in %d background batch%s. Reload in a moment.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'chunks' ), $g( 'chunks' ) === 1 ? '' : 'es' );
+                return sprintf( '%d invoice%s queued for creation in the background. Progress is shown below — you can leave this page while it runs.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'created':
                 return sprintf( '%d invoice%s created.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'created_partial':
@@ -1438,6 +1436,23 @@ class MyNJILGA_Page_Invoicing {
   if(!root) return;
   var table=document.getElementById('njilga-table');
   if(!table) return;
+
+  // Create: say at once that it's working, and stop a second click from
+  // queuing the same firms twice. Buttons are dimmed rather than disabled
+  // — a disabled submitter would drop its own name/value ("all",
+  // "single") from what the form sends.
+  var createForm=document.getElementById('njilga-inv-form');
+  if(createForm){
+    var submitting=false;
+    createForm.addEventListener('submit',function(e){
+      if(submitting){ e.preventDefault(); return; }
+      submitting=true;
+      var btn=e.submitter;
+      var n=btn&&btn.name==='single'?1:(btn&&btn.name==='all'?null:createForm.querySelectorAll('input.njilga-check:checked').length);
+      document.querySelectorAll('button[form="njilga-inv-form"],#njilga-inv-form button[type="submit"]').forEach(function(b){ b.classList.add('njilga-busy'); b.setAttribute('aria-disabled','true'); });
+      if(btn){ btn.textContent=n===1?'Queuing…':(n?'Queuing '+n+' invoices…':'Queuing invoices…'); }
+    });
+  }
 
   var rows=Array.prototype.slice.call(table.querySelectorAll('tr.njilga-row'));
   var previews={};

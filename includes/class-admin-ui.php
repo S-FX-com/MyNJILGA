@@ -425,6 +425,14 @@ class MyNJILGA_Admin_UI {
 .njilga-money-line{font-size:12.5px;color:var(--muted-fg)}
 .njilga-progress{height:8px;background:var(--muted);border-radius:999px;overflow:hidden}
 .njilga-progress-bar{height:100%;background:var(--primary);border-radius:999px;transition:width .3s}
+.njilga-createprogress{margin:0 0 20px}
+.njilga-createprogress .njilga-progress-top{margin-bottom:8px}
+.njilga-createprogress .njilga-help{margin:10px 0 0}
+.njilga-spin{display:inline-flex;vertical-align:middle}
+.njilga-spin .njilga-icon{width:14px;height:14px;animation:njilga-spin 1.2s linear infinite}
+@keyframes njilga-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.njilga-spin .njilga-icon{animation:none}}
+.njilga-busy{opacity:.7;pointer-events:none}
 
 /* --- Cards --------------------------------------------------------------- */
 .njilga-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-card);

@@ -410,9 +410,7 @@ class MyNJILGA_Page_Launch {
         if ( ! $can ) {
             MyNJILGA_Admin_UI::callout( '<strong>Stripe isn\'t ready</strong>, so nothing can be created yet: ' . esc_html( (string) reset( $errors ) ), 'error' );
         }
-        if ( MyNJILGA_Invoice_Creator::has_pending_jobs() ) {
-            MyNJILGA_Admin_UI::callout( sprintf( '<strong>Invoices are being created in the background.</strong> <a href="%s">Reload</a> to see them appear. Any failures are recorded on the firm\'s row.', esc_url( self::url( $year, 4 ) ) ), 'info' );
-        }
+        MyNJILGA_Create_Progress::render( $year, $live, self::url( $year, 4 ) );
 
         MyNJILGA_Admin_UI::stat_cards( [
             [ 'label' => 'Ready to create', 'value' => (int) $review['ready'], 'variant' => 'default', 'icon' => 'file' ],
