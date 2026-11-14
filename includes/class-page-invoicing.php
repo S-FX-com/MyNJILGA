@@ -35,6 +35,7 @@ class MyNJILGA_Page_Invoicing {
     const ACTION_EMAIL_PICK = 'my_njilga_dues_email_pick';
     const ACTION_EMAIL_TEST = 'my_njilga_dues_email_test';
     const ACTION_EMAIL_SEND = 'my_njilga_dues_email_send';
+    const ACTION_REISSUE    = 'my_njilga_dues_reissue';
 
     /** How long a "Generate emails" selection waits for staff on the review screen. */
     const EMAIL_BATCH_TTL = 6 * HOUR_IN_SECONDS;
@@ -572,6 +573,17 @@ class MyNJILGA_Page_Invoicing {
             case 'voided':
             case 'uncollectible':
                 $move = MyNJILGA_Paid_Year_Move::offered( $row ) ? ' ' . self::move_paid_button( $row ) : '';
+                if ( $c['status'] === 'voided' && MyNJILGA_Invoice_Reissue::refusal( $row ) === '' ) {
+                    $move .= ' ' . MyNJILGA_Admin_UI::action_form(
+                        self::ACTION_REISSUE,
+                        'Issue again',
+                        [ 'row_id' => (int) $row->id, 'dues_year' => (int) $row->dues_year ],
+                        'outline',
+                        '',
+                        sprintf( 'Issue this firm\'s %d invoice again? The voided invoice stays voided in Stripe. The firm goes back under No Invoice, ready to Refresh (re-price from today\'s roster) and Create.', (int) $row->dues_year ),
+                        'sm'
+                    );
+                }
                 if ( $link === '' ) {
                     return $move !== '' ? ltrim( $move ) : '<span class="njilga-dim">—</span>';
                 }
@@ -1225,8 +1237,11 @@ class MyNJILGA_Page_Invoicing {
         foreach ( $unsent as $r ) {
             $idFields .= sprintf( '<input type="hidden" name="send_ids[]" value="%d">', (int) $r->id );
         }
+        // Each "again" is tied to the emailed time this screen showed: if the
+        // invoice is emailed again from elsewhere (another tab, another
+        // person) before this Send, it is not sent a third time.
         foreach ( $resent as $r ) {
-            $idFields .= sprintf( '<input type="hidden" name="resend_ids[]" value="%d">', (int) $r->id );
+            $idFields .= sprintf( '<input type="hidden" name="resend_at[%d]" value="%s">', (int) $r->id, esc_attr( (string) ( $r->sent_at ?? '' ) ) );
         }
         printf(
             '<div class="njilga-card njilga-card-pad"><form method="post" action="%s" class="njilga-confirm-form">
@@ -1693,6 +1708,7 @@ JS;
             'wiped'           => 'success',
             'join_moved'      => 'success',
             'emails_queued'   => 'success',
+            'reissued'        => 'success',
             'email_test_sent' => 'success',
             'invoice_moved'   => 'success',
             'wiped_partial'   => 'warning',
@@ -1752,6 +1768,8 @@ JS;
                 return sprintf( '%d invoice%s sent.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'sent_partial':
                 return sprintf( '%d invoice%s sent, %d failed — see details below.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
+            case 'reissued':
+                return 'The firm is back under No Invoice, ready to issue again. Click Refresh Firms to re-price it from today\'s roster, then Create. The voided invoice stays voided in Stripe.';
             case 'emails_queued':
                 return sprintf( '%d invoice email%s queued. They go out in the background — progress is shown below, and you can leave this page while they send.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'email_test_sent':
@@ -2243,7 +2261,19 @@ JS;
             return array_values( array_intersect( array_unique( $ids ), array_map( 'intval', $batch['ids'] ) ) );
         };
         $sendIds = $posted( 'send_ids' );
-        $resend  = ! empty( $_POST['resend'] ) ? $posted( 'resend_ids' ) : [];
+        $resend  = [];
+        if ( ! empty( $_POST['resend'] ) && isset( $_POST['resend_at'] ) && is_array( $_POST['resend_at'] ) ) {
+            $shownAt = [];
+            foreach ( wp_unslash( $_POST['resend_at'] ) as $id => $at ) {
+                $shownAt[ (int) $id ] = (string) $at;
+            }
+            $inBatch = array_map( 'intval', $batch['ids'] );
+            foreach ( MyNJILGA_Dues_Invoice_Table::get_many( array_intersect( array_keys( $shownAt ), $inBatch ) ) as $r ) {
+                if ( (string) ( $r->sent_at ?? '' ) === $shownAt[ (int) $r->id ] ) {
+                    $resend[] = (int) $r->id;
+                }
+            }
+        }
         if ( ! $sendIds && ! $resend ) {
             $fail( 'Nothing to send — every invoice here was left out, or already emailed and not ticked to send again.' );
         }
@@ -2275,6 +2305,16 @@ JS;
             'roles'     => $result['roles_removed'],
             'protected' => $result['protected'],
         ] );
+    }
+
+    public static function handle_reissue(): void {
+        self::guard( self::ACTION_REISSUE );
+        $result = MyNJILGA_Invoice_Reissue::run( isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0 );
+        $year   = $result['year'] > 0 ? $result['year'] : self::post_year();
+        if ( ! $result['ok'] ) {
+            self::redirect( $year, [ 'msg' => 'error', 'detail' => $result['error'] ] );
+        }
+        self::redirect( $year, [ 'msg' => 'reissued' ] );
     }
 
     public static function handle_move_join(): void {
