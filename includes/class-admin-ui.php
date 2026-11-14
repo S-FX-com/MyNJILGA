@@ -141,6 +141,65 @@ class MyNJILGA_Admin_UI {
         return '<span class="njilga-dim">&mdash;</span>';
     }
 
+    // -------------------------------------------------------------------------
+    // FluentCRM record links — every one opens in a new tab, so staff keep
+    // their place on the page they were working through.
+    // -------------------------------------------------------------------------
+
+    /** The FluentCRM admin screen for a contact. */
+    public static function crm_contact_url( int $contactId ): string {
+        return admin_url( 'admin.php?page=fluentcrm-admin#/subscribers/' . $contactId );
+    }
+
+    /** The FluentCRM admin screen for a company (a law firm). */
+    public static function crm_company_url( int $companyId ): string {
+        return admin_url( 'admin.php?page=fluentcrm-admin#/companies/' . $companyId );
+    }
+
+    /**
+     * A person's name linked to their FluentCRM contact. Plain (escaped)
+     * text when there is no contact id — a snapshot member with no record.
+     */
+    public static function contact_link( int $contactId, string $label ): string {
+        return self::record_link( $contactId > 0 ? self::crm_contact_url( $contactId ) : '', $label, 'Open this contact in FluentCRM' );
+    }
+
+    /** A firm's name linked to its FluentCRM company. Plain text with no company id. */
+    public static function company_link( int $companyId, string $label ): string {
+        return self::record_link( $companyId > 0 ? self::crm_company_url( $companyId ) : '', $label, 'Open this firm in FluentCRM' );
+    }
+
+    /**
+     * A small external-link icon to a firm's FluentCRM company, for where
+     * the firm's name itself already does something else (Invoicing's
+     * name expands the row). '' with no company id.
+     */
+    public static function company_icon_link( int $companyId, string $firmName ): string {
+        if ( $companyId <= 0 ) {
+            return '';
+        }
+        $label = sprintf( 'Open %s in FluentCRM', $firmName );
+        return sprintf(
+            '<a class="njilga-crmlink" href="%s" target="_blank" rel="noopener" title="%s" aria-label="%s">%s</a>',
+            esc_url( self::crm_company_url( $companyId ) ),
+            esc_attr( $label ),
+            esc_attr( $label ),
+            self::icon( 'external' )
+        );
+    }
+
+    private static function record_link( string $url, string $label, string $title ): string {
+        if ( $url === '' || $label === '' ) {
+            return esc_html( $label );
+        }
+        return sprintf(
+            '<a href="%s" target="_blank" rel="noopener" title="%s">%s</a>',
+            esc_url( $url ),
+            esc_attr( $title ),
+            esc_html( $label )
+        );
+    }
+
     /**
      * Validation line: a check or a warning triangle plus a label.
      */
@@ -595,6 +654,11 @@ class MyNJILGA_Admin_UI {
   font-family:inherit}
 .njilga-firmname:hover .njilga-firm-label{text-decoration:underline}
 .njilga-subline{display:block;color:var(--muted-fg);font-size:12px;margin-top:3px}
+.njilga-crmlink{display:inline-flex;align-items:center;vertical-align:middle;margin-left:6px;color:var(--muted-fg)}
+.njilga-ui a.njilga-crmlink:hover{color:var(--info-fg);text-decoration:none}
+.njilga-crmlink .njilga-icon{width:14px;height:14px}
+.njilga-subline a:not(.njilga-btn){color:inherit;text-decoration:underline;text-decoration-color:var(--border)}
+.njilga-subline a:not(.njilga-btn):hover{color:var(--info-fg)}
 .njilga-subline-warn{color:var(--warn-fg);display:inline-flex;align-items:center;gap:4px}
 .njilga-subline-warn .njilga-icon{width:13px;height:13px}
 .njilga-inline-status{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}

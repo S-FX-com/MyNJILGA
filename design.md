@@ -231,6 +231,21 @@ text), `njilga-field` (stacked label + control), `njilga-check-label`
 `njilga-note-ok` / `-warn` / `-bad` (11.5px inline validation under a
 field).
 
+### FluentCRM record links
+
+Wherever a person or a firm is named, link it to its FluentCRM record —
+always in a new tab, so staff keep their place:
+
+```php
+MyNJILGA_Admin_UI::contact_link( $contactId, $name );   // plain text when $contactId is 0
+MyNJILGA_Admin_UI::company_link( $companyId, $firm );
+MyNJILGA_Admin_UI::company_icon_link( $companyId, $firm ); // icon only, for when the name itself
+                                                           // already does something (Invoicing's
+                                                           // name expands the row)
+```
+
+The bare URLs are `crm_contact_url()` / `crm_company_url()`.
+
 ### Link cards
 
 Navigation grids (Dashboard, Reports):
