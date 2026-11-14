@@ -268,6 +268,9 @@ class MyMembershipTest extends NJILGA_TestCase {
             'hosted_invoice_url' => 'https://pay.example.test/' . $id,
             'invoice_pdf_url'    => 'https://pay.example.test/' . $id . '.pdf',
             'paid_at'            => $status === 'paid' ? '2026-03-04 10:00:00' : null,
+            // Emailed unless it never left staff hands — a voided row here
+            // is one the firm was sent, unless a test says otherwise.
+            'sent_at'            => array_key_exists( 'sent_at', $over ) ? $over['sent_at'] : ( in_array( $status, [ 'draft', 'excluded', 'approved', 'created' ], true ) ? null : '2026-02-01 09:00:00' ),
         ];
     }
 
@@ -301,6 +304,18 @@ class MyMembershipTest extends NJILGA_TestCase {
         $this->assertSame( 12500, $ledger['members'][5]['paid_cents'] );
         $this->assertCount( 4, $ledger['invoices'] );
         $this->assertFalse( in_array( 5, array_column( $ledger['invoices'], 'id' ), true ), 'the draft is not shown' );
+    }
+
+    /** A stray invoice voided before anyone emailed it never reached the firm: it is not listed at all. */
+    public function test_an_invoice_voided_before_it_was_sent_is_not_shown(): void {
+        $m      = $this->member();
+        $ledger = MyNJILGA_My_Membership::fee_ledger( [
+            $this->row( 1, 2027, 'created', [ $m ] ),
+            $this->row( 2, 2026, 'voided', [ $m ], [ 'sent_at' => null ] ),           // withdrawn unsent
+            $this->row( 3, 2025, 'voided', [ $m ], [ 'sent_at' => '2025-01-10 09:00:00' ] ), // sent, then voided
+        ] );
+        $this->assertSame( [ 1, 3 ], array_column( $ledger['invoices'], 'id' ) );
+        $this->assertSame( [ 2027, 2025 ], array_column( $ledger['members'][5]['fees'], 'year' ), 'its fee lines go too' );
     }
 
     public function test_only_an_owed_invoice_offers_a_pay_link(): void {

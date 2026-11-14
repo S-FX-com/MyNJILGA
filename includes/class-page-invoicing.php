@@ -113,6 +113,11 @@ class MyNJILGA_Page_Invoicing {
         // annual invoice: a year with only those (people joining for next
         // year after the cutover) still hasn't had its batch generated.
         if ( count( $views ) === $tally['joins'] ) {
+            if ( ! MyNJILGA_Invoicing::year_is_open( $duesYear, false ) ) {
+                self::render_closed_year( $duesYear );
+                echo '</div>';
+                return;
+            }
             self::render_empty_state( $duesYear, $tally['joins'] );
             echo '</div>';
             return;
@@ -180,12 +185,14 @@ class MyNJILGA_Page_Invoicing {
     }
 
     private static function render_year_form( int $duesYear ): void {
-        // Years with rows, plus the selected one, next year (the default)
-        // and this year — so a late batch for the current year (a "last
-        // call" to firms that haven't renewed) can be generated too.
+        // Years with rows, plus the selected one and next year (the
+        // default). Not the current year unless it already has rows: a
+        // late batch for a year in progress (a "last call" in January) is
+        // reachable because its rows put it in years(), while a year this
+        // plugin never billed isn't offered at all — see year_is_open().
         $years = array_merge(
             MyNJILGA_Dues_Invoice_Table::years(),
-            [ $duesYear, MyNJILGA_Invoicing::default_dues_year(), MyNJILGA_Invoicing::current_dues_year() ]
+            [ $duesYear, MyNJILGA_Invoicing::default_dues_year() ]
         );
         $years = array_values( array_unique( array_map( 'intval', $years ) ) );
         sort( $years );
@@ -848,6 +855,28 @@ class MyNJILGA_Page_Invoicing {
         echo '</div>';
     }
 
+    /**
+     * A past year this plugin never billed: nothing to show and nothing
+     * to generate — point at the year that is open instead.
+     */
+    private static function render_closed_year( int $duesYear ): void {
+        $next = MyNJILGA_Invoicing::default_dues_year();
+        echo '<div class="njilga-card njilga-empty">';
+        echo '<div class="njilga-empty-icon">' . self::icon( 'calendar' ) . '</div>';
+        printf( '<h2 class="njilga-empty-title">No invoices for %d</h2>', $duesYear );
+        printf(
+            '<p class="njilga-empty-text">%d was never billed through My NJILGA, so no batch can be started for it. Invoices are created for the coming dues year (%d) onward.</p>',
+            $duesYear,
+            $next
+        );
+        printf(
+            '<a class="njilga-btn njilga-btn-primary njilga-btn-sm" href="%s">Go to %d invoicing</a>',
+            esc_url( self::page_url( $next ) ),
+            $next
+        );
+        echo '</div>';
+    }
+
     private static function render_generate_form( int $duesYear, string $label, string $style ): void {
         printf(
             '<form method="post" action="%s" class="njilga-generate">
@@ -1385,6 +1414,11 @@ JS;
     public static function handle_preview(): void {
         self::guard( self::ACTION_PREVIEW );
         $duesYear = self::post_year();
+
+        $live = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
+        if ( ! MyNJILGA_Invoicing::year_is_open( $duesYear, MyNJILGA_Invoice_Stats::year_has_annual_rows( $duesYear, $live ) ) ) {
+            self::redirect( $duesYear, [ 'msg' => 'error', 'detail' => MyNJILGA_Invoicing::closed_year_message( $duesYear ) ] );
+        }
 
         $stats = MyNJILGA_Dues_Preview::generate_and_persist( $duesYear );
 

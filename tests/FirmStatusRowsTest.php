@@ -18,7 +18,7 @@ class FirmStatusRowsTest extends NJILGA_TestCase {
     private function rows( array $statuses ): array {
         $out = [];
         foreach ( $statuses as $i => $status ) {
-            $out[] = (object) [ 'id' => $i + 1, 'status' => $status ];
+            $out[] = (object) [ 'id' => $i + 1, 'status' => $status, 'sent_at' => '2026-02-01 09:00:00' ];
         }
         return $out;
     }
@@ -37,6 +37,17 @@ class FirmStatusRowsTest extends NJILGA_TestCase {
         $statuses = [ 'approved', 'created', 'sent', 'processing', 'paid', 'downgraded', 'voided', 'uncollectible' ];
         $visible  = MyNJILGA_Firm_Status_Page::visible_rows( $this->rows( $statuses ) );
         $this->assertSame( [ 1, 2, 3, 4, 5, 6, 7, 8 ], $this->ids( $visible ) );
+    }
+
+    /** Voided before it was ever emailed: withdrawn before it reached the firm, so not shown. */
+    public function testAnInvoiceVoidedBeforeItWasSentIsHidden(): void {
+        $rows = [
+            (object) [ 'id' => 1, 'status' => 'voided', 'sent_at' => null ],
+            (object) [ 'id' => 2, 'status' => 'voided', 'sent_at' => '' ],
+            (object) [ 'id' => 3, 'status' => 'voided', 'sent_at' => '2026-02-01 09:00:00' ],
+            (object) [ 'id' => 4, 'status' => 'created', 'sent_at' => null ],
+        ];
+        $this->assertSame( [ 3, 4 ], $this->ids( MyNJILGA_Firm_Status_Page::visible_rows( $rows ) ) );
     }
 
     public function testOrderIsPreservedAndKeysAreReindexed(): void {

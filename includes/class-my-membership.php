@@ -319,7 +319,8 @@ class MyNJILGA_My_Membership {
      * invoices a member can see, and every fee line grouped by the person
      * it belongs to. Pure — rows are plain objects (id, dues_year, status,
      * total_amount_cents, roster_snapshot, and optionally hosted_invoice_url,
-     * invoice_pdf_url, paid_at).
+     * invoice_pdf_url, paid_at, sent_at). A voided invoice that was never
+     * sent is left out altogether (withdrawn_unsent()).
      *
      * Newest year first, then invoice id. A person is keyed by contact id
      * (or, for a snapshot member with none, by name). 'due_cents' on an
@@ -353,7 +354,7 @@ class MyNJILGA_My_Membership {
 
         foreach ( $rows as $row ) {
             $state = self::invoice_state( (string) $row->status );
-            if ( ! $state['show'] ) {
+            if ( ! $state['show'] || MyNJILGA_Dues_Invoice_Table::withdrawn_unsent( $row ) ) {
                 continue;
             }
 

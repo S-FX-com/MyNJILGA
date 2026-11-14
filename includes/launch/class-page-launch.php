@@ -198,7 +198,8 @@ class MyNJILGA_Page_Launch {
     private static function year_form( int $year, int $step ): string {
         $years = array_values( array_unique( array_merge(
             MyNJILGA_Dues_Invoice_Table::years(),
-            [ $year, MyNJILGA_Invoicing::default_dues_year(), MyNJILGA_Invoicing::current_dues_year() ]
+            // Not the current year unless it has rows — see year_is_open().
+            [ $year, MyNJILGA_Invoicing::default_dues_year() ]
         ) ) );
         sort( $years );
         $opts = '';
@@ -336,6 +337,10 @@ class MyNJILGA_Page_Launch {
         MyNJILGA_Admin_UI::section( 'Generate the preview', 'Safe to run again at any time: it refreshes drafts from FluentCRM, and never touches an invoice that has already been created.' );
         if ( (int) $review['total'] > 0 ) {
             MyNJILGA_Admin_UI::callout( sprintf( 'A preview already exists for %d: <strong>%d</strong> firm invoice%s (%d ready, %d excluded). Generating again refreshes the drafts.', $year, (int) $review['total'], (int) $review['total'] === 1 ? '' : 's', (int) $review['ready'], (int) $review['excluded'] ), 'info' );
+        }
+        if ( ! MyNJILGA_Invoicing::year_is_open( $year, (int) $review['total'] > 0 ) ) {
+            MyNJILGA_Admin_UI::callout( esc_html( MyNJILGA_Invoicing::closed_year_message( $year ) ), 'warning' );
+            return;
         }
         echo '<div class="njilga-actions">';
         echo MyNJILGA_Admin_UI::action_form( self::ACTION_PREVIEW, 'Generate preview for ' . $year, [ 'dues_year' => $year ], 'primary', 'refresh' );
@@ -868,6 +873,9 @@ class MyNJILGA_Page_Launch {
     public static function handle_preview(): void {
         self::guard( self::ACTION_PREVIEW );
         $year  = self::post_year();
+        if ( ! MyNJILGA_Invoicing::year_is_open( $year, MyNJILGA_Invoice_Stats::year_has_annual_rows( $year, self::is_live() ) ) ) {
+            self::back( $year, 2, [ 'msg' => 'error', 'detail' => MyNJILGA_Invoicing::closed_year_message( $year ) ] );
+        }
         $stats = MyNJILGA_Dues_Preview::generate_and_persist( $year );
         self::back( $year, 3, [ 'msg' => 'previewed', 'n' => (int) $stats['drafts'], 'f' => (int) $stats['excluded'] ] );
     }
