@@ -358,7 +358,12 @@ class MyNJILGA_Stripe_Webhook {
         }
         if ( $rowId > 0 ) {
             $row = MyNJILGA_Dues_Invoice_Table::get( $rowId );
-            if ( $row ) {
+            // The id must still be THIS invoice's row. A wiped year's rows
+            // are deleted (MyNJILGA_Year_Wipe), and MySQL can hand a
+            // deleted id to a new row after a restart — a late event for
+            // a voided 2026 invoice must never land on a 2027 one.
+            $metaYear = (int) ( $dataObject['metadata']['njilga_dues_year'] ?? 0 );
+            if ( $row && ( $metaYear === 0 || $metaYear === (int) $row->dues_year ) ) {
                 return $row;
             }
         }

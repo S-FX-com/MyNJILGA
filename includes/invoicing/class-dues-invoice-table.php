@@ -770,6 +770,31 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
+     * Delete rows for MyNJILGA_Year_Wipe. Belt and braces on top of the
+     * ids: only that year, only that mode, never an online join, and only
+     * in a status with nothing collectable behind it — a row voided in
+     * Stripe a moment ago is 'voided' by now; one paid in the meantime is
+     * not, and stays.
+     *
+     * @param array<int,int> $ids
+     * @return int Rows deleted.
+     */
+    public static function delete_wiped( array $ids, int $duesYear, bool $livemode ): int {
+        global $wpdb;
+        $ids = array_values( array_filter( array_map( 'intval', $ids ) ) );
+        if ( ! $ids ) {
+            return 0;
+        }
+        $table    = self::table_name();
+        $statuses = [ self::STATUS_DRAFT, self::STATUS_EXCLUDED, self::STATUS_APPROVED, self::STATUS_VOIDED ];
+        $sql      = "DELETE FROM $table WHERE dues_year = %d AND livemode = %d AND invoice_kind <> %s"
+            . ' AND status IN (' . implode( ',', array_fill( 0, count( $statuses ), '%s' ) ) . ')'
+            . ' AND id IN (' . implode( ',', array_fill( 0, count( $ids ), '%d' ) ) . ')';
+        $args     = array_merge( [ $duesYear, $livemode ? 1 : 0, MyNJILGA_Dues_Snapshot::KIND_JOIN ], $statuses, $ids );
+        return (int) $wpdb->query( $wpdb->prepare( $sql, $args ) ); // phpcs:ignore
+    }
+
+    /**
      * @param array<int,int> $ids
      * @return int Rows actually moved to approved (only drafts qualify).
      */
