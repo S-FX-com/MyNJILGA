@@ -603,6 +603,7 @@ class MyNJILGA_Admin_UI {
 .njilga-callout a{color:inherit;text-decoration:underline}
 .njilga-list{list-style:disc;padding-left:22px;margin:6px 0;font-size:13.5px}
 .njilga-list li{margin:3px 0}
+ol.njilga-list{list-style:decimal}
 
 /* --- Disclosure ---------------------------------------------------------- */
 .njilga-details{margin:16px 0}
