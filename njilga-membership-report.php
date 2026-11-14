@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, a member-facing dues status and membership overview, a public firm renewal lookup, a Dues History tab on FluentCRM contacts and companies, and tools to bring earlier years' dues in from PMPro or a spreadsheet — driven entirely from FluentCRM tags on the local install.
- * Version:     3.15.0
+ * Version:     3.16.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -82,6 +82,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-role-sync.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-member-tags.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-payment-listener.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-downgrade-sweep.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-year-wipe.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-page-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/launch/class-launch-schedule.php';
 require_once NJILGA_REPORT_DIR . 'includes/launch/class-launch-checks.php';
@@ -277,6 +278,7 @@ add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SEND,      [ 'MyNJIL
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_DOWNGRADE, [ 'MyNJILGA_Page_Invoicing', 'handle_downgrade' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_SYNC,      [ 'MyNJILGA_Page_Invoicing', 'handle_sync' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_VOID,      [ 'MyNJILGA_Page_Invoicing', 'handle_void' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_WIPE,      [ 'MyNJILGA_Page_Invoicing', 'handle_wipe' ] );
 
 // Launch Wizard — open the year, create, test, send and schedule. Handlers
 // take no parameters (WordPress passes '' to an argument-less action).

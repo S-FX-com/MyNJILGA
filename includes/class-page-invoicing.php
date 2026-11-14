@@ -30,6 +30,7 @@ class MyNJILGA_Page_Invoicing {
     const ACTION_DOWNGRADE = 'my_njilga_dues_downgrade';
     const ACTION_SYNC      = 'my_njilga_dues_stripe_sync';
     const ACTION_VOID      = 'my_njilga_dues_void';
+    const ACTION_WIPE      = 'my_njilga_dues_wipe';
 
     const FORM_ID      = 'njilga-inv-form';
     const SYNC_FORM_ID = 'njilga-inv-sync';
@@ -85,6 +86,11 @@ class MyNJILGA_Page_Invoicing {
             echo '</div>';
             return;
         }
+        if ( $view === 'wipe' ) {
+            self::render_wipe_confirm( $duesYear, $liveMode );
+            echo '</div>';
+            return;
+        }
 
         self::render_notice();
         self::render_gateway_notices();
@@ -132,6 +138,7 @@ class MyNJILGA_Page_Invoicing {
         self::render_workspace( $duesYear, $views, $canCreate );
         self::render_send_form( $duesYear );
         self::render_downgrade_entry( $duesYear );
+        self::render_wipe_entry( $duesYear, $liveMode );
 
         self::scripts();
         echo '</div>';
@@ -1048,6 +1055,130 @@ class MyNJILGA_Page_Invoicing {
     }
 
     // -------------------------------------------------------------------------
+    // Wipe a year billed in error
+    // -------------------------------------------------------------------------
+
+    /**
+     * Offered only for a year before the coming one, with nothing paid or
+     * acted on — a year the association never really billed here.
+     */
+    private static function render_wipe_entry( int $duesYear, bool $live ): void {
+        if ( ! MyNJILGA_Year_Wipe::year_qualifies( $duesYear ) ) {
+            return;
+        }
+        $p = MyNJILGA_Year_Wipe::preview( $duesYear, $live );
+        if ( $p['blocked'] || ( ! $p['delete'] && ! $p['void'] ) ) {
+            return;
+        }
+
+        echo '<div class="njilga-danger-card">';
+        echo '<div class="njilga-danger-head">' . self::icon( 'alert' ) . '<h2>Wipe ' . (int) $duesYear . ' invoices</h2></div>';
+        printf(
+            '<p>If %d was billed by mistake — the dues were already covered — this removes every %d dues invoice and preview here: <strong>%d</strong> open invoice%s voided in Stripe, <strong>%d</strong> other record%s deleted, across <strong>%d</strong> firm%s. Nothing has been paid against any of them.</p>',
+            $duesYear,
+            $duesYear,
+            count( $p['void'] ), count( $p['void'] ) === 1 ? '' : 's',
+            count( $p['delete'] ), count( $p['delete'] ) === 1 ? '' : 's',
+            (int) $p['firms'], (int) $p['firms'] === 1 ? '' : 's'
+        );
+        printf(
+            '<a class="njilga-btn njilga-btn-danger njilga-btn-sm" href="%s">Review &amp; wipe %d →</a>',
+            esc_url( self::page_url( $duesYear, [ 'view' => 'wipe' ] ) ),
+            $duesYear
+        );
+        echo '</div>';
+    }
+
+    private static function render_wipe_confirm( int $duesYear, bool $live ): void {
+        $p = MyNJILGA_Year_Wipe::preview( $duesYear, $live );
+
+        printf( '<p class="njilga-back"><a href="%s">&larr; Back to %d invoicing</a></p>', esc_url( self::page_url( $duesYear ) ), $duesYear );
+        printf( '<h1 class="njilga-title njilga-title-danger">Wipe the %d invoices</h1>', $duesYear );
+        self::render_notice();
+
+        MyNJILGA_Admin_UI::stat_cards( [
+            [ 'label' => 'Voided in Stripe, then removed', 'value' => count( $p['void'] ),   'variant' => 'destructive', 'icon' => 'file' ],
+            [ 'label' => 'Previews & records removed',     'value' => count( $p['delete'] ), 'variant' => 'destructive', 'icon' => 'file' ],
+            [ 'label' => 'Firms',                          'value' => (int) $p['firms'],     'variant' => 'default',     'icon' => 'users' ],
+            [ 'label' => 'Online joins kept',              'value' => (int) $p['joins'],     'variant' => 'success',     'icon' => 'check-circle' ],
+        ] );
+
+        echo '<div class="njilga-danger-card"><p><strong>What will happen</strong> (' . ( $live ? 'Live' : 'Test' ) . ' mode only):</p><ul class="njilga-list">';
+        printf( '<li>Every created or sent %d invoice (%s outstanding) is <strong>voided in Stripe</strong>, so it can no longer be paid. Stripe keeps the voided invoice in its own records.</li>', $duesYear, esc_html( MyNJILGA_Invoicing::money( (int) $p['open_cents'] ) ) );
+        printf( '<li>Every %d dues invoice, preview draft and exception is then <strong>deleted here</strong> — gone from Invoicing, Payments, the Dashboard and every member\'s page.</li>', $duesYear );
+        echo '<li>Online joins are real payments and are <strong>kept</strong>. Member tags and roles are not touched.</li>';
+        echo '<li>A note is left on each firm\'s FluentCRM Company record.</li>';
+        printf( '<li>%d can\'t be billed again afterwards: invoices are only started for %d onward.</li>', $duesYear, MyNJILGA_Invoicing::default_dues_year() );
+        echo '</ul></div>';
+
+        if ( $p['stop'] ) {
+            echo '<div class="njilga-callout njilga-callout-error"><p><strong>This year can\'t be wiped right now:</strong></p><ul class="njilga-list">';
+            foreach ( $p['stop'] as $reason ) {
+                printf( '<li>%s</li>', esc_html( (string) $reason ) );
+            }
+            echo '</ul></div>';
+            if ( $p['blocked'] ) {
+                echo '<div class="njilga-card"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Firm</th><th>Status</th><th>Why it stops the wipe</th><th class="njilga-col-num">Total</th></tr></thead><tbody>';
+                foreach ( $p['blocked'] as $b ) {
+                    printf(
+                        '<tr><td>%s</td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td></tr>',
+                        esc_html( MyNJILGA_Dues_Snapshot::company_name( $b['row'] ) ),
+                        self::pill( ucfirst( (string) $b['row']->status ), 'muted' ),
+                        esc_html( $b['reason'] ),
+                        esc_html( MyNJILGA_Invoicing::money( (int) $b['row']->total_amount_cents ) )
+                    );
+                }
+                echo '</tbody></table></div></div>';
+            }
+            return;
+        }
+
+        if ( ! $p['delete'] && ! $p['void'] ) {
+            printf( '<p><strong>Nothing to wipe</strong> — %d has no dues invoices or previews in this mode.</p>', $duesYear );
+            return;
+        }
+
+        if ( $p['void'] ) {
+            echo '<div class="njilga-card"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Firm</th><th>Status</th><th>Bill to</th><th class="njilga-col-num">Total</th></tr></thead><tbody>';
+            foreach ( $p['void'] as $row ) {
+                printf(
+                    '<tr><td>%s</td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td></tr>',
+                    esc_html( MyNJILGA_Dues_Snapshot::company_name( $row ) ),
+                    self::pill( ucfirst( (string) $row->status ), 'muted' ),
+                    esc_html( self::bill_to_label( $row ) ),
+                    esc_html( MyNJILGA_Invoicing::money( (int) $row->total_amount_cents ) )
+                );
+            }
+            echo '</tbody></table></div></div>';
+        }
+
+        printf(
+            '<form method="post" action="%s" class="njilga-confirm-form">
+                <input type="hidden" name="action" value="%s">
+                <input type="hidden" name="dues_year" value="%d">
+                <input type="hidden" name="confirmed" value="1">
+                %s
+                <div class="njilga-field"><label for="njilga-wipe-year"><strong>Type %d to confirm</strong></label>
+                <input type="text" id="njilga-wipe-year" name="confirm_year" class="njilga-input-sm" inputmode="numeric" autocomplete="off" required pattern="%d"></div>
+                <div class="njilga-confirm-actions">
+                    <button type="submit" class="njilga-btn njilga-btn-danger">Wipe %d — void %d, remove %d</button>
+                    <a class="njilga-btn njilga-btn-outline" href="%s">Cancel</a>
+                </div>
+             </form>',
+            esc_url( admin_url( 'admin-post.php' ) ),
+            esc_attr( self::ACTION_WIPE ),
+            $duesYear,
+            wp_nonce_field( self::ACTION_WIPE, '_wpnonce', true, false ),
+            $duesYear,
+            $duesYear,
+            $duesYear,
+            count( $p['void'] ),
+            count( $p['void'] ) + count( $p['delete'] ),
+            esc_url( self::page_url( $duesYear ) )
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // Mark Paid (by check/cash/wire) — confirmation screen
     // -------------------------------------------------------------------------
 
@@ -1156,6 +1287,8 @@ class MyNJILGA_Page_Invoicing {
             'downgraded'      => 'success',
             'synced'          => 'info',
             'voided_invoice'  => 'success',
+            'wiped'           => 'success',
+            'wiped_partial'   => 'warning',
             'nothing'         => 'info',
             'error'           => 'error',
         ];
@@ -1204,6 +1337,16 @@ class MyNJILGA_Page_Invoicing {
                 return sprintf( '%d invoice%s sent.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'sent_partial':
                 return sprintf( '%d invoice%s sent, %d failed — see details below.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
+            case 'wiped':
+            case 'wiped_partial':
+                return sprintf(
+                    '%d wiped: %d invoice%s voided in Stripe and %d record%s removed across %d firm%s.%s',
+                    $g( 'wiped_year' ),
+                    $g( 'voided' ), $g( 'voided' ) === 1 ? '' : 's',
+                    $g( 'deleted' ), $g( 'deleted' ) === 1 ? '' : 's',
+                    $g( 'firms' ), $g( 'firms' ) === 1 ? '' : 's',
+                    $msg === 'wiped_partial' ? sprintf( ' %d invoice%s could not be voided and %s left in place — see below, then run the wipe again.', $g( 'failed' ), $g( 'failed' ) === 1 ? '' : 's', $g( 'failed' ) === 1 ? 'was' : 'were' ) : ''
+                );
             case 'downgraded':
                 return sprintf( 'Sweep complete: %d invoice%s across %d firm%s — %d member%s tagged unpaid, %d WordPress role%s removed, %d protected as already paid.', $g( 'invoices' ), $g( 'invoices' ) === 1 ? '' : 's', $g( 'firms' ), $g( 'firms' ) === 1 ? '' : 's', $g( 'members' ), $g( 'members' ) === 1 ? '' : 's', $g( 'roles' ), $g( 'roles' ) === 1 ? '' : 's', $g( 'protected' ) );
             case 'synced':
@@ -1546,6 +1689,40 @@ JS;
             'members'   => $result['members_downgraded'],
             'roles'     => $result['roles_removed'],
             'protected' => $result['protected'],
+        ] );
+    }
+
+    public static function handle_wipe(): void {
+        self::guard( self::ACTION_WIPE );
+        $duesYear = self::post_year();
+
+        // Only the confirmation screen's form carries these, and the typed
+        // year must be this year.
+        $typed = isset( $_POST['confirm_year'] ) ? trim( (string) wp_unslash( $_POST['confirm_year'] ) ) : '';
+        if ( empty( $_POST['confirmed'] ) || $typed !== (string) $duesYear ) {
+            wp_safe_redirect( self::page_url( $duesYear, [ 'view' => 'wipe' ] ) );
+            exit;
+        }
+
+        $live   = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
+        $result = MyNJILGA_Year_Wipe::run( $duesYear, $live );
+        if ( ! $result['ok'] ) {
+            self::redirect( $duesYear, [ 'view' => 'wipe', 'msg' => 'error', 'detail' => $result['error'] ] );
+        }
+        if ( $result['failed'] ) {
+            set_transient( 'njilga_dues_errors_' . get_current_user_id(), $result['failed'], 60 );
+        }
+
+        // Back to the year itself if anything is left to look at, else to
+        // the coming year — the one there is work to do in.
+        $target = $result['failed'] ? $duesYear : MyNJILGA_Invoicing::default_dues_year();
+        self::redirect( $target, [
+            'msg'     => $result['failed'] ? 'wiped_partial' : 'wiped',
+            'wiped_year' => $duesYear,
+            'voided'  => $result['voided'],
+            'deleted' => $result['deleted'],
+            'firms'   => $result['firms'],
+            'failed'  => count( $result['failed'] ),
         ] );
     }
 

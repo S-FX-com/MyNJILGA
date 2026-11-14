@@ -512,8 +512,11 @@ class MyNJILGA_Stripe_Reconciler {
                 // — which only ever UNDER-reports orphans, never invents
                 // one. A draft is skipped outright: create_order()
                 // deletes its own abandoned drafts, and a draft has
-                // collected nothing.
-                if ( isset( $known[ $id ] ) || (string) ( $invoice['status'] ?? '' ) === 'draft' ) {
+                // collected nothing. So is a voided one: it can never
+                // collect anything, and a wiped year
+                // (MyNJILGA_Year_Wipe) leaves exactly those behind.
+                $stripeStatus = (string) ( $invoice['status'] ?? '' );
+                if ( isset( $known[ $id ] ) || $stripeStatus === 'draft' || $stripeStatus === 'void' ) {
                     continue;
                 }
 
