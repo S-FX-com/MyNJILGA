@@ -795,6 +795,27 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
+     * Move a PAID online join's row to another dues year
+     * (MyNJILGA_Join_Year_Move). Conditional on it still being that: a
+     * paid join, in $fromYear.
+     *
+     * @return bool Whether the row moved.
+     */
+    public static function move_join_year( int $id, int $fromYear, int $toYear, string $snapshotJson ): bool {
+        global $wpdb;
+        $table = self::table_name();
+        return (bool) $wpdb->query( $wpdb->prepare( // phpcs:ignore
+            "UPDATE $table SET dues_year = %d, roster_snapshot = %s WHERE id = %d AND dues_year = %d AND invoice_kind = %s AND status = %s",
+            $toYear,
+            $snapshotJson,
+            $id,
+            $fromYear,
+            MyNJILGA_Dues_Snapshot::KIND_JOIN,
+            self::STATUS_PAID
+        ) );
+    }
+
+    /**
      * @param array<int,int> $ids
      * @return int Rows actually moved to approved (only drafts qualify).
      */
