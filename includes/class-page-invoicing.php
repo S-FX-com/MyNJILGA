@@ -403,7 +403,7 @@ class MyNJILGA_Page_Invoicing {
         if ( $c['status'] === 'blocked' ) {
             $subline = '<span class="njilga-subline njilga-subline-warn">' . self::icon( 'alert' ) . ' No firm owner</span>';
         } elseif ( $billTo !== '—' ) {
-            $subline = '<span class="njilga-subline">Bill to ' . esc_html( $billTo ) . '</span>';
+            $subline = '<span class="njilga-subline">Bill to ' . self::bill_to_link( $row ) . '</span>';
         } else {
             $subline = '';
         }
@@ -413,10 +413,11 @@ class MyNJILGA_Page_Invoicing {
         echo '<tr class="njilga-row" data-id="' . $rowId . '" data-name="' . esc_attr( strtolower( $name ) ) . '" data-bucket="' . esc_attr( $c['bucket'] ) . '" data-status="' . esc_attr( $c['status'] ) . '" data-createable="' . ( $createable ? '1' : '0' ) . '">';
         echo '<td class="njilga-col-check">' . $checkCell . '</td>';
         printf(
-            '<td class="njilga-firmcell"><button type="button" class="njilga-firmname njilga-expand" data-id="%d"><span class="njilga-firm-label">%s</span>%s</button>%s</td>',
+            '<td class="njilga-firmcell"><button type="button" class="njilga-firmname njilga-expand" data-id="%d"><span class="njilga-firm-label">%s</span>%s</button>%s%s</td>',
             $rowId,
             esc_html( $name ),
             $badges,
+            MyNJILGA_Admin_UI::company_icon_link( (int) $row->fluentcrm_company_id, $name ),
             $subline
         );
         echo '<td class="njilga-col-num">' . ( $memberCnt > 0 ? (int) $memberCnt : '<span class="njilga-dim">0</span>' ) . '</td>';
@@ -610,8 +611,8 @@ class MyNJILGA_Page_Invoicing {
         echo '<div class="njilga-preview-card">';
         printf(
             '<div class="njilga-preview-head"><div><div class="njilga-preview-title">Invoice Preview — %s</div><div class="njilga-preview-sub">Bill to %s · %d billed member%s</div></div></div>',
-            esc_html( $name ),
-            esc_html( $billTo ),
+            MyNJILGA_Admin_UI::company_link( (int) $row->fluentcrm_company_id, $name ),
+            self::bill_to_link( $row ),
             $billed,
             $billed === 1 ? '' : 's'
         );
@@ -661,7 +662,7 @@ class MyNJILGA_Page_Invoicing {
                 if ( ! empty( $m['unbilled_reason'] ) ) {
                     printf(
                         '<tr class="njilga-roster-unbilled"><td>%s</td><td>%s</td><td colspan="2" class="njilga-dim">%s — not billed</td></tr>',
-                        esc_html( (string) ( $m['name'] ?? '' ) ),
+                        MyNJILGA_Admin_UI::contact_link( (int) ( $m['contact_id'] ?? 0 ), (string) ( $m['name'] ?? '' ) ),
                         esc_html( (string) ( $m['category_label'] ?: '—' ) ),
                         esc_html( ucfirst( (string) $m['unbilled_reason'] ) )
                     );
@@ -675,7 +676,7 @@ class MyNJILGA_Page_Invoicing {
                     : '<span class="njilga-dim">' . esc_html( (string) ( $m['assessment_note'] ?? '—' ) ) . '</span>';
                 printf(
                     '<tr><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td><td class="njilga-col-num">%s</td></tr>',
-                    esc_html( (string) ( $m['name'] ?? '' ) ),
+                    MyNJILGA_Admin_UI::contact_link( (int) ( $m['contact_id'] ?? 0 ), (string) ( $m['name'] ?? '' ) ),
                     esc_html( (string) ( $m['category_label'] ?: '—' ) ),
                     $duesCell,
                     $feeCell
@@ -1041,10 +1042,10 @@ class MyNJILGA_Page_Invoicing {
             $names = array_map( static function ( $m ) { return (string) ( $m['name'] ?? '' ); }, MyNJILGA_Dues_Snapshot::members( $row ) );
             printf(
                 '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td></tr>',
-                esc_html( MyNJILGA_Dues_Snapshot::company_name( $row ) ),
+                MyNJILGA_Admin_UI::company_link( (int) $row->fluentcrm_company_id, MyNJILGA_Dues_Snapshot::company_name( $row ) ),
                 self::kind_pill( $row ),
                 self::pill( ucfirst( (string) $row->status ), 'muted' ),
-                esc_html( self::bill_to_label( $row ) ),
+                self::bill_to_link( $row ),
                 esc_html( implode( ', ', $names ) ),
                 esc_html( MyNJILGA_Invoicing::money( (int) $row->total_amount_cents ) )
             );
@@ -1138,7 +1139,7 @@ class MyNJILGA_Page_Invoicing {
             foreach ( $p['kept'] as $k ) {
                 printf(
                     '<tr><td>%s</td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td></tr>',
-                    esc_html( MyNJILGA_Dues_Snapshot::company_name( $k['row'] ) ),
+                    MyNJILGA_Admin_UI::company_link( (int) $k['row']->fluentcrm_company_id, MyNJILGA_Dues_Snapshot::company_name( $k['row'] ) ),
                     self::pill( ucfirst( (string) $k['row']->status ), 'muted' ),
                     esc_html( $k['reason'] ),
                     esc_html( MyNJILGA_Invoicing::money( (int) $k['row']->total_amount_cents ) )
@@ -1166,9 +1167,9 @@ class MyNJILGA_Page_Invoicing {
             foreach ( $p['void'] as $row ) {
                 printf(
                     '<tr><td>%s</td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td></tr>',
-                    esc_html( MyNJILGA_Dues_Snapshot::company_name( $row ) ),
+                    MyNJILGA_Admin_UI::company_link( (int) $row->fluentcrm_company_id, MyNJILGA_Dues_Snapshot::company_name( $row ) ),
                     self::pill( ucfirst( (string) $row->status ), 'muted' ),
-                    esc_html( self::bill_to_label( $row ) ),
+                    self::bill_to_link( $row ),
                     esc_html( MyNJILGA_Invoicing::money( (int) $row->total_amount_cents ) )
                 );
             }
@@ -1249,6 +1250,16 @@ class MyNJILGA_Page_Invoicing {
 
     private static function validation_cell( string $label, bool $ok ): string {
         return MyNJILGA_Admin_UI::validation( $label, $ok );
+    }
+
+    /** The bill-to name, linked to their FluentCRM contact when there is one. */
+    private static function bill_to_link( object $row ): string {
+        $label = self::bill_to_label( $row );
+        if ( $label === '—' ) {
+            return $label;
+        }
+        $id = (int) MyNJILGA_Dues_Snapshot::bill_to( $row )['contact_id'] ?: (int) ( $row->bill_to_contact_id ?? 0 );
+        return MyNJILGA_Admin_UI::contact_link( $id, $label );
     }
 
     private static function bill_to_label( object $row ): string {

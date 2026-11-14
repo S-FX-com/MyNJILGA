@@ -427,10 +427,10 @@ class MyNJILGA_Dues_History_View {
     }
 
     public static function contact_url( int $contactId ): string {
-        return admin_url( 'admin.php?page=fluentcrm-admin#/subscribers/' . $contactId );
+        return MyNJILGA_Admin_UI::crm_contact_url( $contactId );
     }
 
     public static function company_url( int $companyId ): string {
-        return admin_url( 'admin.php?page=fluentcrm-admin#/companies/' . $companyId );
+        return MyNJILGA_Admin_UI::crm_company_url( $companyId );
     }
 }
