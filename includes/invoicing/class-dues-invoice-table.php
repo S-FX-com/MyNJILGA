@@ -949,6 +949,12 @@ class MyNJILGA_Dues_Invoice_Table {
         }
     }
 
+    /** A background job is done with this row: it is no longer queued. */
+    public static function clear_queued( int $id ): void {
+        global $wpdb;
+        $wpdb->update( self::table_name(), [ 'queued_at' => null ], [ 'id' => $id ], [ '%s' ], [ '%d' ] );
+    }
+
     public static function set_error( int $id, string $message ): void {
         global $wpdb;
         $wpdb->update(

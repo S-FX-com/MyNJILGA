@@ -32,6 +32,12 @@ class MyNJILGA_Page_Invoicing {
     const ACTION_VOID      = 'my_njilga_dues_void';
     const ACTION_WIPE      = 'my_njilga_dues_wipe';
     const ACTION_MOVE_JOIN = 'my_njilga_dues_move_join';
+    const ACTION_EMAIL_PICK = 'my_njilga_dues_email_pick';
+    const ACTION_EMAIL_TEST = 'my_njilga_dues_email_test';
+    const ACTION_EMAIL_SEND = 'my_njilga_dues_email_send';
+
+    /** How long a "Generate emails" selection waits for staff on the review screen. */
+    const EMAIL_BATCH_TTL = 6 * HOUR_IN_SECONDS;
 
     const FORM_ID      = 'njilga-inv-form';
     const SYNC_FORM_ID = 'njilga-inv-sync';
@@ -92,6 +98,16 @@ class MyNJILGA_Page_Invoicing {
             echo '</div>';
             return;
         }
+        if ( $view === 'email' ) {
+            self::render_email_review( $duesYear, $liveMode );
+            echo '</div>';
+            return;
+        }
+        if ( $view === 'checks' ) {
+            self::render_checks_view( $duesYear );
+            echo '</div>';
+            return;
+        }
 
         self::render_notice();
         self::render_gateway_notices();
@@ -133,9 +149,10 @@ class MyNJILGA_Page_Invoicing {
         self::render_summary( $tally, self::annual_totals( $views ) );
 
         MyNJILGA_Create_Progress::render( $duesYear, $liveMode, self::page_url( $duesYear ) );
+        MyNJILGA_Email_Run::render( $duesYear, $liveMode, self::page_url( $duesYear ) );
 
-        self::render_workspace( $duesYear, $views, $canCreate );
-        self::render_send_form( $duesYear );
+        self::render_workspace( $duesYear, $views, $canCreate, $liveMode );
+        self::render_email_pick_form( $duesYear );
         self::render_downgrade_entry( $duesYear );
         self::render_wipe_entry( $duesYear, $liveMode );
 
@@ -156,14 +173,14 @@ class MyNJILGA_Page_Invoicing {
      * @param array<string,int> $t tally
      */
     private static function render_header( int $duesYear, array $t, bool $canCreate ): void {
-        $ready       = $t['ready'];
+        $ready       = $t['none'];
         $canBulk     = $canCreate && $ready > 0;
         $settingsUrl = MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS );
 
         echo '<div class="njilga-header">';
         echo '<div class="njilga-header-text">';
         echo '<h1 class="njilga-title">Generate Annual Dues Invoices</h1>';
-        echo '<p class="njilga-subtitle">Review participating law firms, validate dues, and create invoices for the selected year.</p>';
+        echo '<p class="njilga-subtitle">Each firm moves left to right: no invoice &rarr; invoice created &rarr; email sent &rarr; paid. Create invoices, email them, and watch the payments come in, all from here.</p>';
         echo '</div>';
 
         echo '<div class="njilga-header-actions">';
@@ -233,10 +250,11 @@ class MyNJILGA_Page_Invoicing {
      */
     private static function render_summary( array $t, array $totals ): void {
         MyNJILGA_Admin_UI::stat_cards( [
-            [ 'label' => 'Law Firms',        'value' => $t['firms'],     'variant' => 'default', 'icon' => 'users' ],
-            [ 'label' => 'Ready to Invoice', 'value' => $t['ready'],     'variant' => 'success', 'icon' => 'check-circle' ],
-            [ 'label' => 'Invoices Created', 'value' => $t['created'],   'variant' => 'info',    'icon' => 'file' ],
-            [ 'label' => 'Needs Attention',  'value' => $t['attention'], 'variant' => $t['attention'] > 0 ? 'warning' : 'default', 'icon' => 'alert' ],
+            [ 'label' => 'No Invoice',      'value' => $t['none'],      'variant' => 'default', 'icon' => 'users' ],
+            [ 'label' => 'Invoice Created', 'value' => $t['created'],   'variant' => 'info',    'icon' => 'file' ],
+            [ 'label' => 'Email Sent',      'value' => $t['sent'],      'variant' => 'info',    'icon' => 'inbox' ],
+            [ 'label' => 'Paid',            'value' => $t['paid'],      'variant' => 'success', 'icon' => 'check-circle' ],
+            [ 'label' => 'Needs Attention', 'value' => $t['attention'], 'variant' => $t['attention'] > 0 ? 'warning' : 'default', 'icon' => 'alert' ],
         ] );
 
         $T           = MyNJILGA_Dues_Invoice_Table::class;
@@ -267,22 +285,23 @@ class MyNJILGA_Page_Invoicing {
     /**
      * @param array<int,array{row:object,c:array<string,mixed>}> $views
      */
-    private static function render_workspace( int $duesYear, array $views, bool $canCreate ): void {
+    private static function render_workspace( int $duesYear, array $views, bool $canCreate, bool $live ): void {
         $t = self::tally( $views );
 
         echo '<div class="njilga-card njilga-workspace">';
 
-        // Card header + tabs.
+        // Card header + the pipeline, in the order a firm moves through it.
         echo '<div class="njilga-card-head"><h2 class="njilga-card-title">Law Firms</h2></div>';
         echo '<div class="njilga-tabs" role="tablist">';
-        self::tab( 'all',       'All',            count( $views ) );
-        self::tab( 'ready',     'Ready',          $t['ready'] );
-        self::tab( 'created',   'Created',        $t['created'] );
-        self::tab( 'attention', 'Needs Attention', $t['attention'] );
-        if ( $t['joins'] > 0 ) {
-            self::tab( 'joins', 'Online joins', $t['joins'] );
-        }
+        self::tab( 'all',       'All',             count( $views ) );
+        self::tab( 'none',      'No Invoice',      $t['tabs']['none'] );
+        self::tab( 'attention', 'Needs Attention', $t['tabs']['attention'] );
+        self::tab( 'created',   'Invoice Created', $t['tabs']['created'] );
+        self::tab( 'sent',      'Email Sent',      $t['tabs']['sent'] );
+        self::tab( 'paid',      'Paid',            $t['tabs']['paid'] );
         echo '</div>';
+
+        self::render_stage_notes( $duesYear, $views, $live );
 
         // Toolbar: search + status filter + refresh.
         echo '<div class="njilga-toolbar">';
@@ -322,10 +341,13 @@ class MyNJILGA_Page_Invoicing {
         );
 
         echo '<div class="njilga-bulkbar" id="njilga-bulkbar" hidden>
-                <label class="njilga-bulkbar-check"><input type="checkbox" id="njilga-all"> <span id="njilga-selcount">0</span> firms selected</label>
+                <label class="njilga-bulkbar-check"><input type="checkbox" id="njilga-all"> <span id="njilga-selcount">0</span> selected</label>
                 <span class="njilga-bulkbar-sep"></span>
-                <span class="njilga-bulkbar-total">Estimated total <strong id="njilga-seltotal">$0.00</strong></span>
-                <button type="submit" class="njilga-btn njilga-btn-primary njilga-btn-sm" id="njilga-bulkcreate">Create Invoices</button>
+                <span class="njilga-bulkbar-total">Total <strong id="njilga-seltotal">$0.00</strong></span>
+                <span class="njilga-bulkbar-actions">
+                  <button type="button" class="njilga-btn njilga-btn-outline njilga-btn-sm" id="njilga-bulkemail" hidden>Generate Emails</button>
+                  <button type="submit" class="njilga-btn njilga-btn-primary njilga-btn-sm" id="njilga-bulkcreate" hidden>Create Invoices</button>
+                </span>
               </div>';
 
         echo '<div class="njilga-tablewrap"><table class="njilga-table" id="njilga-table"><thead><tr>';
@@ -367,6 +389,48 @@ class MyNJILGA_Page_Invoicing {
         echo '</div>'; // .njilga-card
     }
 
+    /**
+     * What each stage is and what to do there — one note per tab, shown
+     * with it (the script switches them). No Invoice also carries the
+     * Launch Wizard's review checks for the batch as it stands, and a way
+     * to the pre-flight checks.
+     *
+     * @param array<int,array{row:object,c:array<string,mixed>}> $views
+     */
+    private static function render_stage_notes( int $duesYear, array $views, bool $live ): void {
+        $rows    = array_map( static function ( $v ) { return $v['row']; }, $views );
+        $review  = MyNJILGA_Launch_Checks::review( $rows );
+        $issues  = array_values( array_filter( MyNJILGA_Launch_Checks::review_checks( $review, $duesYear, '' ), static function ( $c ) {
+            return in_array( (string) ( $c['status'] ?? '' ), [ MyNJILGA_Launch_Checks::FAIL, MyNJILGA_Launch_Checks::WARN ], true );
+        } ) );
+        $checks  = sprintf( '<a href="%s">Run the pre-flight checks</a>', esc_url( self::page_url( $duesYear, [ 'view' => 'checks' ] ) ) );
+
+        $notes = [
+            'none'      => 'Firms with no invoice yet. Tick the ones to bill (or Select all) and <strong>Create</strong>: that freezes each firm\'s roster and price and issues its invoice in Stripe, in the background. Nothing is emailed yet. ' . $checks . ' first if this is the start of the year.',
+            'attention' => 'Firms that won\'t be invoiced, or need a decision, as they stand: no Owner on the firm, nothing to bill, an error from Stripe, or an invoice voided, written off or swept as unpaid. Fix the cause in FluentCRM, then <strong>Refresh Firms</strong>.',
+            'created'   => 'Created in Stripe, not emailed yet. Tick firms (or Select all) and <strong>Generate emails</strong>: you\'ll read the exact email each firm gets, can send yourself a test, then send them all in the background.',
+            'sent'      => 'Emailed and awaiting payment. Payments arrive from Stripe on their own. To remind a firm, tick it and <strong>Generate emails</strong> to send its invoice again.',
+            'paid'      => 'Paid in full, including people who joined online.',
+        ];
+
+        foreach ( $notes as $tab => $html ) {
+            printf( '<div class="njilga-stage-note" data-stage="%s" hidden><p>%s</p>', esc_attr( $tab ), wp_kses_post( $html ) );
+            if ( $tab === 'none' && $issues ) {
+                echo '<ul class="njilga-list">';
+                foreach ( $issues as $c ) {
+                    printf(
+                        '<li>%s %s%s</li>',
+                        MyNJILGA_Admin_UI::validation( (string) $c['title'], false ),
+                        isset( $c['detail'] ) && $c['detail'] !== '' ? '<span class="njilga-dim">— ' . esc_html( (string) $c['detail'] ) . '</span>' : '',
+                        ''
+                    );
+                }
+                echo '</ul>';
+            }
+            echo '</div>';
+        }
+    }
+
     private static function tab( string $key, string $label, int $count ): void {
         printf(
             '<button type="button" class="njilga-tab%s" data-tab="%s" role="tab">%s <span class="njilga-tab-count">%d</span></button>',
@@ -392,9 +456,15 @@ class MyNJILGA_Page_Invoicing {
         $cents      = (int) $row->total_amount_cents;
         $rowId      = (int) $row->id;
 
-        $checkCell = $createable
-            ? sprintf( '<input type="checkbox" class="njilga-check" name="row_ids[]" value="%d" data-cents="%d" aria-label="Select %s">', $rowId, $cents, esc_attr( $name ) )
-            : '';
+        // A box wherever there's a bulk action: Create for a firm with no
+        // invoice, Generate emails for one created (or emailed already).
+        if ( $createable ) {
+            $checkCell = sprintf( '<input type="checkbox" class="njilga-check" data-act="create" name="row_ids[]" value="%d" data-cents="%d" aria-label="Select %s">', $rowId, $cents, esc_attr( $name ) );
+        } elseif ( ! empty( $c['emailable'] ) ) {
+            $checkCell = sprintf( '<input type="checkbox" class="njilga-check" data-act="email" name="email_ids[]" value="%d" data-cents="%d" aria-label="Select %s">', $rowId, $cents, esc_attr( $name ) );
+        } else {
+            $checkCell = '';
+        }
 
         // Firm name cell — name + badges + bill-to line.
         $badges = self::row_badges( $row, $snapshot );
@@ -457,7 +527,7 @@ class MyNJILGA_Page_Invoicing {
 
             case 'created':
                 return sprintf(
-                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d">Send</button> %s %s %s %s',
+                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d" title="Read the email, then send it">Email</button> %s %s %s %s',
                     $rowId,
                     self::view_link( $link ),
                     self::pdf_link( $pdf ),
@@ -467,7 +537,7 @@ class MyNJILGA_Page_Invoicing {
 
             case 'sent':
                 return sprintf(
-                    '%s %s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d">Resend</button> %s %s',
+                    '%s %s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d" title="Read the email, then send it again">Email again</button> %s %s',
                     self::view_link( $link ),
                     self::pdf_link( $pdf ),
                     $rowId,
@@ -704,13 +774,13 @@ class MyNJILGA_Page_Invoicing {
         // counts and the progress bar leave out.
         if ( (string) ( $row->invoice_kind ?? '' ) === MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
             $paid = $status === $T::STATUS_PAID;
-            return self::verdict(
-                'joins',
+            return array_merge( self::verdict(
+                $paid ? 'paid' : 'attention',
                 $paid ? 'paid' : 'join',
                 [ $paid ? 'Paid online' : ucfirst( $status ), $paid ? 'success' : 'muted' ],
                 $hasError ? [ (string) $row->last_error, false ] : [ 'Online join', true ],
                 false
-            );
+            ), [ 'join' => true ] );
         }
 
         switch ( $status ) {
@@ -733,16 +803,18 @@ class MyNJILGA_Page_Invoicing {
                 // killed leaves queued_at set for good, and the row must come
                 // back as Ready (selectable) rather than "Creating…" forever.
                 if ( $status === $T::STATUS_APPROVED && MyNJILGA_Invoice_Creator::is_actively_queued( (string) ( $row->queued_at ?? '' ), current_time( 'mysql' ) ) ) {
-                    return self::verdict( 'ready', 'creating', [ 'Creating…', 'info' ], [ 'Complete', true ], false );
+                    return self::verdict( 'none', 'creating', [ 'Creating…', 'info' ], [ 'Complete', true ], false );
                 }
-                return self::verdict( 'ready', 'ready', [ 'Ready', 'success' ], [ 'Complete', true ], true );
+                return self::verdict( 'none', 'ready', [ 'Ready', 'success' ], [ 'Complete', true ], true );
 
             case $T::STATUS_CREATED:
                 $val = $hasError ? [ (string) $row->last_error, false ] : [ 'Complete', true ];
-                return self::verdict( 'created', 'created', [ 'Invoice Created', 'info' ], $val, false );
+                return array_merge( self::verdict( 'created', 'created', [ 'Invoice Created', 'info' ], $val, false ), [ 'emailable' => self::emailable( $row ) ] );
 
             case $T::STATUS_SENT:
-                return self::verdict( 'created', 'sent', [ 'Sent', 'info' ], [ 'Complete', true ], false );
+                $sentOn = substr( (string) ( $row->sent_at ?? '' ), 0, 10 );
+                $val    = $hasError ? [ (string) $row->last_error, false ] : [ 'Complete', true ];
+                return array_merge( self::verdict( 'sent', 'sent', [ $sentOn !== '' ? 'Emailed ' . $sentOn : 'Emailed', 'info' ], $val, false ), [ 'emailable' => self::emailable( $row ) ] );
 
             // ACH-in-flight (set only by the payment_intent.processing
             // webhook event, or the reconciler catching up to it) — not
@@ -755,13 +827,14 @@ class MyNJILGA_Page_Invoicing {
                 $submitted = substr( (string) ( $row->processing_at ?? '' ), 0, 10 );
                 $pillLabel = $submitted !== '' ? 'ACH clearing since ' . $submitted : 'ACH clearing';
                 $val       = $hasError ? [ (string) $row->last_error, false ] : [ 'Payment in progress (ACH)', true ];
-                return self::verdict( 'created', 'processing', [ $pillLabel, 'warning' ], $val, false );
+                // Awaiting money either way: with the emails if it was emailed.
+                return self::verdict( (string) ( $row->sent_at ?? '' ) !== '' ? 'sent' : 'created', 'processing', [ $pillLabel, 'warning' ], $val, false );
 
             case $T::STATUS_PAID:
-                return self::verdict( 'created', 'paid', [ 'Paid', 'success' ], [ 'Complete', true ], false );
+                return self::verdict( 'paid', 'paid', [ 'Paid', 'success' ], [ 'Complete', true ], false );
 
             case $T::STATUS_DOWNGRADED:
-                return self::verdict( 'created', 'downgraded', [ 'Downgraded', 'destructive' ], [ 'Unpaid — swept', false ], false );
+                return self::verdict( 'attention', 'downgraded', [ 'Downgraded', 'destructive' ], [ 'Unpaid — swept', false ], false );
 
             // Terminal in Stripe — staff voided it, or it was written off.
             // Neither is retryable; both are things worth a look.
@@ -781,8 +854,15 @@ class MyNJILGA_Page_Invoicing {
      * @param array{0:string,1:bool}   $validation
      * @return array<string,mixed>
      */
+    /** Whether an invoice can go into "Generate emails": it has a payment link to send. */
+    private static function emailable( object $row ): bool {
+        return (string) ( $row->hosted_invoice_url ?? '' ) !== '';
+    }
+
     private static function verdict( string $bucket, string $status, array $badge, array $validation, bool $createable ): array {
         return [
+            'join'       => false,
+            'emailable'  => false,
             'bucket'     => $bucket,
             'status'     => $status,
             'badge'      => $badge,
@@ -802,29 +882,40 @@ class MyNJILGA_Page_Invoicing {
      * @return array<string,int>
      */
     private static function tally( array $views ): array {
-        $t = [ 'firms' => 0, 'ready' => 0, 'created' => 0, 'attention' => 0, 'eligible' => 0, 'invoiced' => 0, 'joins' => 0 ];
+        $t = [
+            'firms' => 0, 'none' => 0, 'created' => 0, 'sent' => 0, 'paid' => 0, 'attention' => 0,
+            'eligible' => 0, 'invoiced' => 0, 'joins' => 0,
+            // Rows per tab, joins included (they sit under Paid).
+            'tabs' => [ 'none' => 0, 'attention' => 0, 'created' => 0, 'sent' => 0, 'paid' => 0 ],
+        ];
+        $invoicedStatuses = [
+            MyNJILGA_Dues_Invoice_Table::STATUS_CREATED, MyNJILGA_Dues_Invoice_Table::STATUS_SENT, MyNJILGA_Dues_Invoice_Table::STATUS_PROCESSING,
+            MyNJILGA_Dues_Invoice_Table::STATUS_PAID, MyNJILGA_Dues_Invoice_Table::STATUS_DOWNGRADED,
+        ];
 
         $firms         = [];
         $eligibleFirms = [];
         $invoicedFirms = [];
         foreach ( $views as $v ) {
-            if ( $v['c']['bucket'] === 'joins' ) {
+            $bucket = (string) $v['c']['bucket'];
+            if ( isset( $t['tabs'][ $bucket ] ) ) {
+                $t['tabs'][ $bucket ]++;
+            }
+            // Online joins are someone's own payment, not part of the batch:
+            // counted on their tab, never in the firm figures.
+            if ( ! empty( $v['c']['join'] ) ) {
                 $t['joins']++;
                 continue;
             }
             $companyId = (int) $v['row']->fluentcrm_company_id;
             $firms[ $companyId ] = true;
+            $t[ $bucket ] = (int) ( $t[ $bucket ] ?? 0 ) + 1;
 
-            $bucket = $v['c']['bucket'];
-            if ( $bucket === 'ready' ) {
-                $t['ready']++;
+            if ( $bucket === 'none' ) {
                 $eligibleFirms[ $companyId ] = true;
-            } elseif ( $bucket === 'created' ) {
-                $t['created']++;
+            } elseif ( in_array( (string) $v['row']->status, $invoicedStatuses, true ) ) {
                 $eligibleFirms[ $companyId ] = true;
                 $invoicedFirms[ $companyId ] = true;
-            } else {
-                $t['attention']++;
             }
         }
 
@@ -846,7 +937,7 @@ class MyNJILGA_Page_Invoicing {
     private static function annual_totals( array $views ): array {
         $totals = [];
         foreach ( $views as $v ) {
-            if ( $v['c']['bucket'] === 'joins' ) {
+            if ( ! empty( $v['c']['join'] ) ) {
                 continue;
             }
             $status            = (string) $v['row']->status;
@@ -925,18 +1016,268 @@ class MyNJILGA_Page_Invoicing {
     // Send (hidden form driven by the per-row Send buttons)
     // -------------------------------------------------------------------------
 
-    private static function render_send_form( int $duesYear ): void {
+    /** The hidden form every "Email" button posts through: it opens the review screen for those invoices. */
+    private static function render_email_pick_form( int $duesYear ): void {
         printf(
-            '<form id="njilga-inv-send" method="post" action="%s" hidden>
+            '<form id="njilga-inv-emailpick" method="post" action="%s" hidden>
                 <input type="hidden" name="action" value="%s">
                 <input type="hidden" name="dues_year" value="%d">
                 %s
-                <span id="njilga-send-ids"></span>
+                <span id="njilga-emailpick-ids"></span>
              </form>',
             esc_url( admin_url( 'admin-post.php' ) ),
-            esc_attr( self::ACTION_SEND ),
+            esc_attr( self::ACTION_EMAIL_PICK ),
             $duesYear,
-            wp_nonce_field( self::ACTION_SEND, '_wpnonce', true, false )
+            wp_nonce_field( self::ACTION_EMAIL_PICK, '_wpnonce', true, false )
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Generate emails — the review screen
+    // -------------------------------------------------------------------------
+
+    private static function email_batch_key( string $token ): string {
+        return 'njilga_email_batch_' . get_current_user_id() . '_' . preg_replace( '/[^A-Za-z0-9]/', '', $token );
+    }
+
+    /** @return array{year:int,live:bool,ids:array<int,int>}|null */
+    private static function email_batch( string $token ): ?array {
+        if ( $token === '' ) {
+            return null;
+        }
+        $b = get_transient( self::email_batch_key( $token ) );
+        return is_array( $b ) && ! empty( $b['ids'] ) ? $b : null;
+    }
+
+    private static function email_review_url( int $duesYear, string $token, array $args = [] ): string {
+        return self::page_url( $duesYear, array_merge( [ 'view' => 'email', 'batch' => $token ], $args ) );
+    }
+
+    /**
+     * "Generate emails": the invoices staff picked, the exact email each
+     * firm gets (the same compose() that sends it), a test to an address
+     * of their choosing, who it goes to, and — once confirmed — the send,
+     * queued in the background (MyNJILGA_Email_Run).
+     */
+    private static function render_email_review( int $duesYear, bool $live ): void {
+        $token = isset( $_GET['batch'] ) ? sanitize_key( wp_unslash( (string) $_GET['batch'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $batch = self::email_batch( $token );
+
+        printf( '<p class="njilga-back"><a href="%s">&larr; Back to %d invoicing</a></p>', esc_url( self::page_url( $duesYear ) ), $duesYear );
+        printf( '<h1 class="njilga-title">Email the %d invoices</h1>', $duesYear );
+        self::render_notice();
+
+        if ( ! $batch || (int) $batch['year'] !== $duesYear || (bool) $batch['live'] !== $live ) {
+            MyNJILGA_Admin_UI::callout( 'This selection has expired, or was made in the other Stripe mode. Go back, tick the invoices again, and click <strong>Generate Emails</strong>.', 'info' );
+            return;
+        }
+
+        $rows = array_values( MyNJILGA_Dues_Invoice_Table::get_many( $batch['ids'] ) );
+        usort( $rows, static function ( $a, $b ) { return strcasecmp( MyNJILGA_Dues_Snapshot::company_name( $a ), MyNJILGA_Dues_Snapshot::company_name( $b ) ); } );
+        $sel = MyNJILGA_Email_Run::sort_selection( $rows, $duesYear, $live );
+
+        // Emails that can't be built (no address for the bill-to) are found
+        // now, not halfway through the send.
+        $built   = [];
+        $cantBuild = [];
+        foreach ( array_merge( $sel['unsent'], $sel['sent'] ) as $row ) {
+            $m = MyNJILGA_Invoice_Sender::compose( $row );
+            if ( empty( $m['ok'] ) ) {
+                $cantBuild[] = [ 'row' => $row, 'reason' => (string) ( $m['error'] ?? 'The email could not be built.' ) ];
+            } else {
+                $built[ (int) $row->id ] = $m;
+            }
+        }
+        $unsent = array_values( array_filter( $sel['unsent'], static function ( $r ) use ( $built ) { return isset( $built[ (int) $r->id ] ); } ) );
+        $resent = array_values( array_filter( $sel['sent'], static function ( $r ) use ( $built ) { return isset( $built[ (int) $r->id ] ); } ) );
+        $refused = array_merge( $sel['refused'], $cantBuild );
+
+        $cents = 0;
+        foreach ( array_merge( $unsent, $resent ) as $r ) {
+            $cents += (int) $r->total_amount_cents;
+        }
+        MyNJILGA_Admin_UI::stat_cards( [
+            [ 'label' => 'Not emailed yet',       'value' => count( $unsent ),  'variant' => 'info',    'icon' => 'inbox', 'sub' => MyNJILGA_Invoicing::money( $cents ) . ' invoiced in all' ],
+            [ 'label' => 'Already emailed',       'value' => count( $resent ),  'variant' => 'default', 'icon' => 'refresh', 'sub' => 'Sent again only if you tick it below' ],
+            [ 'label' => 'Can\'t be emailed',     'value' => count( $refused ), 'variant' => $refused ? 'warning' : 'default', 'icon' => 'alert' ],
+        ], 3 );
+
+        if ( ! $built ) {
+            MyNJILGA_Admin_UI::callout( 'None of these invoices can be emailed — see why below.', 'warning' );
+            self::render_email_refused( $refused );
+            return;
+        }
+
+        // 1. Read it.
+        $pick = isset( $_GET['firm'] ) ? (int) $_GET['firm'] : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $ids  = array_keys( $built );
+        $show = in_array( $pick, $ids, true ) ? $pick : (int) $ids[0];
+        $showRow = null;
+        foreach ( $rows as $r ) {
+            if ( (int) $r->id === $show ) {
+                $showRow = $r;
+            }
+        }
+
+        MyNJILGA_Admin_UI::section( '1. Read the email', sprintf( 'Exactly what each firm receives — built by the code that sends it. Pick any firm to read theirs. To change the wording: <a href="%s">Settings → Invoice Email</a>.', esc_url( add_query_arg( 'tab', 'email', MyNJILGA_Admin_Menu::url( MyNJILGA_Admin_Menu::SLUG_SETTINGS ) ) ) ) );
+        printf(
+            '<form method="get" action="%s" class="njilga-inline-fields"><input type="hidden" name="page" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="view" value="email"><input type="hidden" name="batch" value="%s"><div class="njilga-field"><label for="njilga-email-firm"><strong>Firm</strong></label><select id="njilga-email-firm" name="firm" onchange="this.form.submit()">',
+            esc_url( admin_url( 'admin.php' ) ),
+            esc_attr( MyNJILGA_Admin_Menu::SLUG_INVOICING ),
+            $duesYear,
+            esc_attr( $token )
+        );
+        foreach ( $rows as $r ) {
+            if ( isset( $built[ (int) $r->id ] ) ) {
+                printf( '<option value="%d"%s>%s</option>', (int) $r->id, (int) $r->id === $show ? ' selected' : '', esc_html( MyNJILGA_Dues_Snapshot::company_name( $r ) ) );
+            }
+        }
+        echo '</select></div><noscript><button type="submit" class="njilga-btn njilga-btn-outline">Show</button></noscript></form>';
+        echo '<div class="njilga-card njilga-card-pad">';
+        MyNJILGA_Page_Launch::render_message( $built[ $show ] );
+        echo '</div>';
+
+        // 2. Test it.
+        $user = wp_get_current_user();
+        MyNJILGA_Admin_UI::section( '2. Send yourself a test', 'The email above goes only to the address you enter — never to the firm, with no CC — marked TEST so it can\'t be mistaken for the real thing. Check it arrives, and isn\'t in spam.' );
+        printf(
+            '<form method="post" action="%s" class="njilga-inline-fields">
+                <input type="hidden" name="action" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="batch" value="%s"><input type="hidden" name="row_id" value="%d">%s
+                <div class="njilga-field"><label for="njilga-email-test"><strong>Send the test to</strong></label><input type="email" id="njilga-email-test" name="to" value="%s" required></div>
+                <button type="submit" class="njilga-btn njilga-btn-outline">Send me a test</button>
+             </form>',
+            esc_url( admin_url( 'admin-post.php' ) ),
+            esc_attr( self::ACTION_EMAIL_TEST ),
+            $duesYear,
+            esc_attr( $token ),
+            $show,
+            wp_nonce_field( self::ACTION_EMAIL_TEST, '_wpnonce', true, false ),
+            esc_attr( (string) $user->user_email )
+        );
+
+        // 3. Who it goes to.
+        MyNJILGA_Admin_UI::section( '3. Who gets it', '', count( $unsent ) + count( $resent ) );
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Firm</th><th>To</th><th>CC</th><th>Status</th><th class="njilga-col-num">Total</th></tr></thead><tbody>';
+        foreach ( array_merge( $unsent, $resent ) as $r ) {
+            $m  = $built[ (int) $r->id ];
+            $cc = 0;
+            foreach ( (array) $m['headers'] as $h ) {
+                if ( stripos( $h, 'Cc:' ) === 0 ) {
+                    $cc = count( array_filter( array_map( 'trim', explode( ',', substr( $h, 3 ) ) ) ) );
+                }
+            }
+            $sentOn = substr( (string) ( $r->sent_at ?? '' ), 0, 10 );
+            printf(
+                '<tr><td>%s</td><td>%s<span class="njilga-subline">%s</span></td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td></tr>',
+                MyNJILGA_Admin_UI::company_link( (int) $r->fluentcrm_company_id, MyNJILGA_Dues_Snapshot::company_name( $r ) ),
+                MyNJILGA_Admin_UI::contact_link( (int) ( $m['bill_to']['contact_id'] ?? 0 ), (string) ( $m['bill_to']['name'] ?? '' ) ),
+                esc_html( (string) $m['to'] ),
+                $cc > 0 ? (int) $cc : MyNJILGA_Admin_UI::blank(),
+                (string) $r->status === MyNJILGA_Dues_Invoice_Table::STATUS_SENT
+                    ? self::pill( 'Emailed ' . $sentOn . ' — again only if ticked', 'muted' )
+                    : self::pill( 'Not emailed yet', 'info' ),
+                esc_html( MyNJILGA_Invoicing::money( (int) $r->total_amount_cents ) )
+            );
+        }
+        echo '</tbody></table></div></div>';
+        self::render_email_refused( $refused );
+
+        // 4. Send.
+        MyNJILGA_Admin_UI::section( '4. Send' );
+        $blocked = '';
+        if ( ! $live ) {
+            $blocked = '<strong>Sending to firms is switched off in Test mode</strong> — they would be emailed a test payment link. The preview and test above still work. Switch Stripe to Live (Settings → Payments) to send for real.';
+        } else {
+            $schedule = MyNJILGA_Launch_Schedule::get( $duesYear );
+            if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) ( $schedule['status'] ?? '' ) ) ) {
+                $blocked = sprintf( '<strong>A scheduled send for %d is still %s in the Launch Wizard.</strong> Let it finish, or cancel it there, so no firm is emailed by both.', $duesYear, esc_html( (string) $schedule['status'] ) );
+            }
+        }
+        if ( $blocked !== '' ) {
+            MyNJILGA_Admin_UI::callout( $blocked, 'warning' );
+            return;
+        }
+
+        $defaultResend = ! $unsent && $resent;
+        printf(
+            '<div class="njilga-card njilga-card-pad"><form method="post" action="%s" class="njilga-confirm-form">
+                <input type="hidden" name="action" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="batch" value="%s">%s
+                %s
+                <label class="njilga-ack"><input type="checkbox" name="confirm" value="1" required> I have read the email (and sent myself a test). Email these firms now.</label>
+                <div class="njilga-confirm-actions"><button type="submit" class="njilga-btn njilga-btn-primary" id="njilga-email-go" data-unsent="%d" data-resent="%d">%s <span>Email %d firm%s</span></button> <a class="njilga-btn njilga-btn-outline" href="%s">Cancel</a></div>
+                <p class="njilga-help">They go out in the background, %d at a time, and this page shows their progress — you can leave it while they send. An invoice paid or changed before its turn is skipped, and none is emailed twice.</p>
+             </form></div>',
+            esc_url( admin_url( 'admin-post.php' ) ),
+            esc_attr( self::ACTION_EMAIL_SEND ),
+            $duesYear,
+            esc_attr( $token ),
+            wp_nonce_field( self::ACTION_EMAIL_SEND, '_wpnonce', true, false ),
+            $resent
+                ? sprintf( '<p><label class="njilga-check-label"><input type="checkbox" name="resend" value="1"%s> Also email the %d invoice%s already emailed, again</label></p>', $defaultResend ? ' checked' : '', count( $resent ), count( $resent ) === 1 ? '' : 's' )
+                : '',
+            count( $unsent ),
+            count( $resent ),
+            self::icon( 'inbox' ),
+            count( $unsent ) + ( $defaultResend ? count( $resent ) : 0 ),
+            ( count( $unsent ) + ( $defaultResend ? count( $resent ) : 0 ) ) === 1 ? '' : 's',
+            esc_url( self::page_url( $duesYear ) ),
+            MyNJILGA_Email_Run::CHUNK
+        );
+        // The button says how many go; ticking "again" changes that. Sending
+        // once only: a second click while the first posts does nothing.
+        echo <<<'JS'
+<script>
+(function(){
+  var go=document.getElementById('njilga-email-go'); if(!go) return;
+  var form=go.form, again=form.querySelector('input[name="resend"]'), label=go.querySelector('span');
+  function sync(){ var n=parseInt(go.dataset.unsent,10)+((again&&again.checked)?parseInt(go.dataset.resent,10):0); label.textContent='Email '+n+' firm'+(n===1?'':'s'); }
+  if(again) again.addEventListener('change',sync);
+  var busy=false;
+  form.addEventListener('submit',function(e){ if(busy){ e.preventDefault(); return; } busy=true; go.classList.add('njilga-busy'); label.textContent='Queuing…'; });
+})();
+</script>
+JS;
+    }
+
+    /** @param array<int,array{row:object,reason:string}> $refused */
+    private static function render_email_refused( array $refused ): void {
+        if ( ! $refused ) {
+            return;
+        }
+        MyNJILGA_Admin_UI::section( 'Left out', 'Not emailed — fix the cause, then generate the emails for these again.', count( $refused ) );
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr><th>Firm</th><th>Why</th></tr></thead><tbody>';
+        foreach ( $refused as $x ) {
+            printf(
+                '<tr><td>%s</td><td>%s</td></tr>',
+                MyNJILGA_Admin_UI::company_link( (int) $x['row']->fluentcrm_company_id, MyNJILGA_Dues_Snapshot::company_name( $x['row'] ) ),
+                esc_html( $x['reason'] )
+            );
+        }
+        echo '</tbody></table></div></div>';
+    }
+
+    /**
+     * The Launch Wizard's pre-flight checks, on this page: is the site
+     * ready to bill this year. Behind a link rather than on every load —
+     * several checks ask Stripe.
+     */
+    private static function render_checks_view( int $duesYear ): void {
+        printf( '<p class="njilga-back"><a href="%s">&larr; Back to %d invoicing</a></p>', esc_url( self::page_url( $duesYear ) ), $duesYear );
+        printf( '<h1 class="njilga-title">Is the site ready to bill %d?</h1>', $duesYear );
+        $checks = MyNJILGA_Launch_Checks::evaluate( MyNJILGA_Launch_Checks::gather_facts( $duesYear ) );
+        $n      = MyNJILGA_Launch_Checks::summarize( $checks );
+        MyNJILGA_Admin_UI::stat_cards( [
+            [ 'label' => 'To fix',            'value' => $n['fail'], 'variant' => $n['fail'] > 0 ? 'destructive' : 'success', 'icon' => 'alert' ],
+            [ 'label' => 'Worth a look',      'value' => $n['warn'], 'variant' => $n['warn'] > 0 ? 'warning' : 'default', 'icon' => 'alert' ],
+            [ 'label' => 'Passed',            'value' => $n['ok'],   'variant' => 'success', 'icon' => 'check-circle' ],
+            [ 'label' => 'To confirm by eye', 'value' => $n['info'], 'variant' => 'info', 'icon' => 'file' ],
+        ], 4 );
+        MyNJILGA_Page_Launch::render_checks_table( $checks );
+        printf(
+            '<div class="njilga-actions"><a class="njilga-btn njilga-btn-outline" href="%s">Run the checks again</a> <a class="njilga-btn njilga-btn-primary" href="%s">Back to %d invoicing</a></div>',
+            esc_url( self::page_url( $duesYear, [ 'view' => 'checks' ] ) ),
+            esc_url( self::page_url( $duesYear ) ),
+            $duesYear
         );
     }
 
@@ -1321,6 +1662,8 @@ class MyNJILGA_Page_Invoicing {
             'voided_invoice'  => 'success',
             'wiped'           => 'success',
             'join_moved'      => 'success',
+            'emails_queued'   => 'success',
+            'email_test_sent' => 'success',
             'invoice_moved'   => 'success',
             'wiped_partial'   => 'warning',
             'nothing'         => 'info',
@@ -1371,6 +1714,10 @@ class MyNJILGA_Page_Invoicing {
                 return sprintf( '%d invoice%s sent.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'sent_partial':
                 return sprintf( '%d invoice%s sent, %d failed — see details below.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
+            case 'emails_queued':
+                return sprintf( '%d invoice email%s queued. They go out in the background — progress is shown below, and you can leave this page while they send.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
+            case 'email_test_sent':
+                return sprintf( 'Test sent to %s. Check it arrived (and isn\'t in spam) before sending to the firms.', isset( $_GET['to'] ) ? sanitize_email( wp_unslash( (string) $_GET['to'] ) ) : 'you' );
             case 'invoice_moved':
                 return sprintf(
                     'Paid invoice moved: it is now the firm\'s %d invoice, already paid, and %d member%s %s tagged Dues Paid %d. Refresh Firms leaves it as it is.',
@@ -1448,7 +1795,7 @@ class MyNJILGA_Page_Invoicing {
       if(submitting){ e.preventDefault(); return; }
       submitting=true;
       var btn=e.submitter;
-      var n=btn&&btn.name==='single'?1:(btn&&btn.name==='all'?null:createForm.querySelectorAll('input.njilga-check:checked').length);
+      var n=btn&&btn.name==='single'?1:(btn&&btn.name==='all'?null:createForm.querySelectorAll('input.njilga-check[data-act="create"]:checked').length);
       document.querySelectorAll('button[form="njilga-inv-form"],#njilga-inv-form button[type="submit"]').forEach(function(b){ b.classList.add('njilga-busy'); b.setAttribute('aria-disabled','true'); });
       if(btn){ btn.textContent=n===1?'Queuing…':(n?'Queuing '+n+' invoices…':'Queuing invoices…'); }
     });
@@ -1533,15 +1880,20 @@ class MyNJILGA_Page_Invoicing {
   }
   function updateBulk(){
     var checked=table.querySelectorAll('.njilga-check:checked');
-    var n=checked.length,total=0;
-    checked.forEach(function(cb){ total+=parseInt(cb.dataset.cents||'0',10); });
+    var n=checked.length,total=0,nc=0,ne=0;
+    checked.forEach(function(cb){
+      total+=parseInt(cb.dataset.cents||'0',10);
+      if(cb.dataset.act==='email') ne++; else nc++;
+    });
     var bar=document.getElementById('njilga-bulkbar');
     var cnt=document.getElementById('njilga-selcount');
     var tot=document.getElementById('njilga-seltotal');
     var btn=document.getElementById('njilga-bulkcreate');
+    var em=document.getElementById('njilga-bulkemail');
     if(cnt) cnt.textContent=n;
     if(tot) tot.textContent=money(total);
-    if(btn) btn.textContent=n>0?('Create '+n+' Invoice'+(n===1?'':'s')):'Create Invoices';
+    if(btn){ btn.hidden=(nc===0); btn.textContent='Create '+nc+' Invoice'+(nc===1?'':'s'); }
+    if(em){ em.hidden=(ne===0); em.textContent='Generate '+ne+' Email'+(ne===1?'':'s'); }
     if(bar) bar.hidden=(n===0);
   }
   function syncSelectAll(filtered){
@@ -1564,9 +1916,15 @@ class MyNJILGA_Page_Invoicing {
     tab.addEventListener('click',function(){
       root.querySelectorAll('.njilga-tab').forEach(function(t){t.classList.remove('active');});
       tab.classList.add('active');
-      state.tab=tab.dataset.tab; state.page=1; apply();
+      state.tab=tab.dataset.tab; state.page=1;
+      // A selection belongs to the stage it was made in.
+      table.querySelectorAll('.njilga-check:checked').forEach(function(cb){ cb.checked=false; });
+      showStage(); apply();
     });
   });
+  function showStage(){
+    root.querySelectorAll('.njilga-stage-note').forEach(function(n){ n.hidden=(n.dataset.stage!==state.tab); });
+  }
   var search=document.getElementById('njilga-search');
   if(search){
     search.addEventListener('input',function(){ state.q=search.value.trim().toLowerCase(); state.page=1; apply(); });
@@ -1603,15 +1961,31 @@ class MyNJILGA_Page_Invoicing {
     if(el) el.addEventListener('change',function(){ selectAll(el.checked); });
   });
 
-  // send (per-row) via the hidden send form
-  var sendForm=document.getElementById('njilga-inv-send');
-  var sendIds=document.getElementById('njilga-send-ids');
+  // Emails — the bulk button and each row's Email / Email again — all go
+  // to the review screen first: read the email, send yourself a test,
+  // then send. Nothing is emailed from here.
+  var pickForm=document.getElementById('njilga-inv-emailpick');
+  var pickIds=document.getElementById('njilga-emailpick-ids');
+  function pick(ids){
+    if(!pickForm||!pickIds||!ids.length) return;
+    pickIds.innerHTML='';
+    ids.forEach(function(id){
+      var i=document.createElement('input'); i.type='hidden'; i.name='row_ids[]'; i.value=String(parseInt(id,10)); pickIds.appendChild(i);
+    });
+    pickForm.submit();
+  }
+  var bulkEmail=document.getElementById('njilga-bulkemail');
+  if(bulkEmail) bulkEmail.addEventListener('click',function(){
+    var ids=[]; table.querySelectorAll('.njilga-check[data-act="email"]:checked').forEach(function(cb){ ids.push(cb.value); });
+    bulkEmail.classList.add('njilga-busy'); bulkEmail.textContent='Generating…';
+    pick(ids);
+  });
   root.addEventListener('click',function(e){
-    var b=e.target.closest('[data-send]'); if(!b||!sendForm||!sendIds) return;
-    sendIds.innerHTML='<input type="hidden" name="row_ids[]" value="'+parseInt(b.dataset.send,10)+'">';
-    sendForm.submit();
+    var b=e.target.closest('[data-send]'); if(!b) return;
+    pick([b.dataset.send]);
   });
 
+  showStage();
   apply();
 })();
 </script>
@@ -1736,6 +2110,105 @@ JS;
 
         self::store_errors( $errors );
         self::redirect( $duesYear, [ 'msg' => $fail > 0 ? 'sent_partial' : 'sent', 'count' => $ok, 'fail' => $fail ] );
+    }
+
+    /** Every "Email" button: remember the invoices picked, and open the review screen for them. */
+    public static function handle_email_pick(): void {
+        self::guard( self::ACTION_EMAIL_PICK );
+        $duesYear = self::post_year();
+        $ids      = ( isset( $_POST['row_ids'] ) && is_array( $_POST['row_ids'] ) ) ? array_values( array_unique( array_filter( array_map( 'intval', wp_unslash( $_POST['row_ids'] ) ) ) ) ) : [];
+        if ( ! $ids ) {
+            self::redirect( $duesYear, [ 'msg' => 'nothing' ] );
+        }
+        $token = strtolower( wp_generate_password( 16, false, false ) );
+        set_transient( self::email_batch_key( $token ), [
+            'year' => $duesYear,
+            'live' => MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE,
+            'ids'  => $ids,
+        ], self::EMAIL_BATCH_TTL );
+        wp_safe_redirect( self::email_review_url( $duesYear, $token ) );
+        exit;
+    }
+
+    /** The review screen's test: the shown firm's real email, to the address typed only. */
+    public static function handle_email_test(): void {
+        self::guard( self::ACTION_EMAIL_TEST );
+        $duesYear = self::post_year();
+        $token    = isset( $_POST['batch'] ) ? sanitize_key( wp_unslash( (string) $_POST['batch'] ) ) : '';
+        $batch    = self::email_batch( $token );
+        $rowId    = isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0;
+        $back     = static function ( array $args ) use ( $duesYear, $token, $rowId ): void {
+            wp_safe_redirect( self::email_review_url( $duesYear, $token, $args + [ 'firm' => $rowId ] ) );
+            exit;
+        };
+
+        $to = sanitize_email( wp_unslash( (string) ( $_POST['to'] ?? '' ) ) );
+        if ( $to === '' || ! is_email( $to ) ) {
+            $back( [ 'msg' => 'error', 'detail' => 'That doesn\'t look like an email address.' ] );
+        }
+        $live = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
+        $row  = MyNJILGA_Dues_Invoice_Table::get( $rowId );
+        if ( ! $batch || ! $row || ! in_array( $rowId, array_map( 'intval', $batch['ids'] ), true ) || MyNJILGA_Email_Run::refusal( $row, $duesYear, $live ) !== '' ) {
+            $back( [ 'msg' => 'error', 'detail' => 'That invoice isn\'t part of this selection any more — go back and generate the emails again.' ] );
+        }
+        $m = MyNJILGA_Invoice_Sender::compose( $row );
+        if ( empty( $m['ok'] ) ) {
+            $back( [ 'msg' => 'error', 'detail' => (string) $m['error'] ] );
+        }
+
+        // To the typed address ONLY: no firm, no CC, and a banner so it can never pass for the real thing.
+        $headers = [];
+        foreach ( (array) $m['headers'] as $h ) {
+            if ( stripos( $h, 'Reply-To:' ) === 0 ) {
+                $headers[] = $h;
+            }
+        }
+        $banner = '*** TEST — sent only to ' . $to . '. The real email goes to ' . (string) $m['to'] . ' when you send. ***';
+        $ok     = wp_mail( $to, '[TEST] ' . (string) $m['subject'], $banner . "\n\n" . (string) $m['body'], $headers );
+        $back( [ 'msg' => $ok ? 'email_test_sent' : 'error', 'to' => $to, 'detail' => $ok ? '' : 'The test could not be sent — the site\'s mail isn\'t working. Fix that before sending to firms.' ] );
+    }
+
+    /** The review screen's Send: queue the confirmed invoices to go out in the background. */
+    public static function handle_email_send(): void {
+        self::guard( self::ACTION_EMAIL_SEND );
+        $duesYear = self::post_year();
+        $token    = isset( $_POST['batch'] ) ? sanitize_key( wp_unslash( (string) $_POST['batch'] ) ) : '';
+        $batch    = self::email_batch( $token );
+        $live     = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
+
+        $fail = static function ( string $why ) use ( $duesYear, $token ): void {
+            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => $why ] ) );
+            exit;
+        };
+        if ( empty( $_POST['confirm'] ) ) {
+            $fail( 'Tick the box to confirm, then send.' );
+        }
+        if ( ! $batch || (int) $batch['year'] !== $duesYear || (bool) $batch['live'] !== $live ) {
+            $fail( 'This selection has expired, or was made in the other Stripe mode — go back and generate the emails again.' );
+        }
+        if ( ! $live ) {
+            $fail( 'Stripe is in Test mode, so nothing is sent to firms. Switch to Live first.' );
+        }
+        $schedule = MyNJILGA_Launch_Schedule::get( $duesYear );
+        if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) ( $schedule['status'] ?? '' ) ) ) {
+            $fail( 'A scheduled send for ' . $duesYear . ' is still open in the Launch Wizard — let it finish, or cancel it there, first.' );
+        }
+
+        $rows   = MyNJILGA_Dues_Invoice_Table::get_many( $batch['ids'] );
+        $resend = [];
+        if ( ! empty( $_POST['resend'] ) ) {
+            foreach ( $rows as $r ) {
+                if ( (string) $r->status === MyNJILGA_Dues_Invoice_Table::STATUS_SENT ) {
+                    $resend[] = (int) $r->id;
+                }
+            }
+        }
+        $result = MyNJILGA_Email_Run::queue( array_map( 'intval', $batch['ids'] ), $resend, $duesYear, $live );
+        if ( ! $result['ok'] ) {
+            $fail( $result['error'] );
+        }
+        delete_transient( self::email_batch_key( $token ) );
+        self::redirect( $duesYear, [ 'msg' => 'emails_queued', 'count' => $result['queued'] ] );
     }
 
     public static function handle_downgrade(): void {
