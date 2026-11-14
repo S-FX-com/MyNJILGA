@@ -90,13 +90,15 @@ class MyNJILGA_Invoice_Creator {
         $batchSize = max( 1, (int) MyNJILGA_Dues_Settings::general( 'batch_size', 25 ) );
 
         if ( function_exists( 'as_enqueue_async_action' ) ) {
-            $chunks = array_chunk( $eligible, $batchSize );
-            $queued = 0;
+            $chunks    = array_chunk( $eligible, $batchSize );
+            $queued    = 0;
+            $queuedIds = [];
             foreach ( $chunks as $chunk ) {
                 $actionId = as_enqueue_async_action( self::HOOK_CHUNK, [ 'row_ids' => $chunk, 'dues_year' => $duesYear ], self::AS_GROUP );
                 if ( $actionId ) {
                     MyNJILGA_Dues_Invoice_Table::mark_queued( $chunk );
                     $queued += count( $chunk );
+                    $queuedIds = array_merge( $queuedIds, $chunk );
                     $result['chunks']++;
                 } else {
                     // Scheduler refused — do this chunk right here rather than lose it.
@@ -107,6 +109,8 @@ class MyNJILGA_Invoice_Creator {
             }
             $result['mode']   = 'scheduled';
             $result['queued'] = $queued;
+            // So the Invoicing page and the Launch Wizard can show the run's progress.
+            MyNJILGA_Create_Progress::record( $duesYear, MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE, $queuedIds );
             return $result;
         }
 
