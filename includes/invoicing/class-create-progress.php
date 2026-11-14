@@ -162,24 +162,55 @@ class MyNJILGA_Create_Progress {
             return;
         }
 
-        $handled = $p['done'] + $p['failed'] + $p['stalled'];
-        $pct     = $p['total'] > 0 ? (int) floor( $handled * 100 / $p['total'] ) : 0;
+        self::card( $p, [
+            'ajax'      => self::AJAX,
+            'year'      => $year,
+            'reload'    => $reloadUrl,
+            'title'     => sprintf( 'Creating %d invoice%s in the background', $p['total'], $p['total'] === 1 ? '' : 's' ),
+            'verb'      => 'created',
+            'done'      => 'Finished creating invoices',
+            'fail'      => 'could not be created — each shows its error on the firm’s row, with a Retry button.',
+            'note'      => 'You can leave this page — creation carries on, and this shows where it has got to when you come back.',
+            'lost'      => 'Lost touch with the server — reload this page to see where creation has got to.',
+            'reload_as' => 'Show the new invoices',
+        ] );
+    }
+
+    /**
+     * A background run's progress card — shared by invoice creation and
+     * the invoice emails (MyNJILGA_Email_Run). $p carries total, done,
+     * failed, stalled and pending; $cfg the wording and where to poll.
+     * The bar's width is its one inline style, as on every njilga-progress
+     * bar: it is data, not design.
+     *
+     * @param array<string,mixed> $p
+     * @param array<string,mixed> $cfg ajax, year, reload, title, verb, done, fail, note, lost, reload_as
+     */
+    public static function card( array $p, array $cfg ): void {
+        $handled = (int) $p['total'] - (int) $p['pending'];
+        $pct     = (int) $p['total'] > 0 ? (int) floor( $handled * 100 / (int) $p['total'] ) : 0;
         printf(
-            '<div class="njilga-card njilga-card-pad njilga-createprogress" id="njilga-createprogress" data-ajax="%s" data-nonce="%s" data-year="%d" data-poll="%d" data-reload="%s">',
+            '<div class="njilga-card njilga-card-pad njilga-createprogress" data-ajax-url="%s" data-action="%s" data-nonce="%s" data-year="%d" data-poll="%d" data-reload="%s" data-verb="%s" data-done="%s" data-fail="%s" data-lost="%s" data-reload-as="%s">',
             esc_url( admin_url( 'admin-ajax.php' ) ),
-            esc_attr( wp_create_nonce( self::AJAX ) ),
-            $year,
+            esc_attr( (string) $cfg['ajax'] ),
+            esc_attr( wp_create_nonce( (string) $cfg['ajax'] ) ),
+            (int) $cfg['year'],
             self::POLL_MS,
-            esc_url( $reloadUrl )
+            esc_url( (string) $cfg['reload'] ),
+            esc_attr( (string) $cfg['verb'] ),
+            esc_attr( (string) $cfg['done'] ),
+            esc_attr( (string) $cfg['fail'] ),
+            esc_attr( (string) $cfg['lost'] ),
+            esc_attr( (string) $cfg['reload_as'] )
         );
         printf(
             '<div class="njilga-progress-top"><span class="njilga-progress-label"><span class="njilga-spin">%s</span> <span data-cp="headline">%s</span></span><span class="njilga-money-line" data-cp="counts">%s</span></div>',
             MyNJILGA_Admin_UI::icon( 'refresh' ),
-            esc_html( sprintf( 'Creating %d invoice%s in the background', $p['total'], $p['total'] === 1 ? '' : 's' ) ),
-            esc_html( self::counts( $p ) )
+            esc_html( (string) $cfg['title'] ),
+            esc_html( self::counts( $p, (string) $cfg['verb'] ) )
         );
         printf( '<div class="njilga-progress"><div class="njilga-progress-bar" data-cp="bar" style="width:%d%%"></div></div>', $pct );
-        echo '<p class="njilga-help" data-cp="note">You can leave this page — creation carries on, and this shows where it has got to when you come back.</p>';
+        printf( '<p class="njilga-help" data-cp="note">%s</p>', esc_html( (string) $cfg['note'] ) );
         echo '<div class="njilga-actions" data-cp="done" hidden></div>';
         echo '</div>';
 
@@ -187,8 +218,8 @@ class MyNJILGA_Create_Progress {
     }
 
     /** "42 of 166 created · 1 failed". */
-    public static function counts( array $p ): string {
-        $out = sprintf( '%d of %d created', $p['done'], $p['total'] );
+    public static function counts( array $p, string $verb = 'created' ): string {
+        $out = sprintf( '%d of %d %s', $p['done'], $p['total'], $verb );
         if ( $p['failed'] + $p['stalled'] > 0 ) {
             $out .= sprintf( ' · %d failed', $p['failed'] + $p['stalled'] );
         }
@@ -206,46 +237,49 @@ class MyNJILGA_Create_Progress {
         );
     }
 
-    /**
-     * Polls while the card is on screen. The bar's width is its one inline
-     * style, as on every njilga-progress bar: it is data, not design.
-     */
+    /** The polling script, once per page however many cards there are. */
     private static function script(): void {
+        static $printed = false;
+        if ( $printed ) {
+            return;
+        }
+        $printed = true;
         echo <<<'JS'
 <script>
 (function(){
-  var card=document.getElementById('njilga-createprogress');
-  if(!card) return;
-  var q=function(n){return card.querySelector('[data-cp="'+n+'"]');};
-  var timer=null, misses=0;
-  function done(p){
-    var bad=p.failed+p.stalled;
-    q('headline').textContent='Finished creating invoices';
-    card.querySelector('.njilga-spin').hidden=true;
-    q('note').textContent=p.done+' of '+p.total+' created.'+(bad?' '+bad+' could not be created — each shows its error on the firm’s row, with a Retry button.':'');
-    var box=q('done'); box.hidden=false;
-    var a=document.createElement('a'); a.className='njilga-btn njilga-btn-primary njilga-btn-sm'; a.href=card.getAttribute('data-reload'); a.textContent='Show the new invoices';
-    box.appendChild(a);
-  }
-  function tick(){
-    var fd=new FormData();
-    fd.append('action','njilga_create_progress');
-    fd.append('nonce',card.getAttribute('data-nonce'));
-    fd.append('dues_year',card.getAttribute('data-year'));
-    fetch(card.getAttribute('data-ajax'),{method:'POST',body:fd,credentials:'same-origin'})
-      .then(function(r){return r.json();})
-      .then(function(j){
-        misses=0;
-        var p=j&&j.success?j.data:null;
-        if(!p){ clearInterval(timer); return; }
-        var handled=p.done+p.failed+p.stalled;
-        q('bar').style.width=(p.total?Math.floor(handled*100/p.total):100)+'%';
-        q('counts').textContent=p.done+' of '+p.total+' created'+((p.failed+p.stalled)?' · '+(p.failed+p.stalled)+' failed':'');
-        if(p.finished){ clearInterval(timer); done(p); }
-      })
-      .catch(function(){ if(++misses>=5){ clearInterval(timer); q('note').textContent='Lost touch with the server — reload this page to see where creation has got to.'; } });
-  }
-  timer=setInterval(tick,parseInt(card.getAttribute('data-poll'),10)||4000);
+  document.querySelectorAll('.njilga-createprogress').forEach(function(card){
+    var q=function(n){return card.querySelector('[data-cp="'+n+'"]');};
+    var a=function(n){return card.getAttribute('data-'+n)||'';};
+    var timer=null, misses=0;
+    function done(p){
+      var bad=p.failed+p.stalled;
+      q('headline').textContent=a('done');
+      card.querySelector('.njilga-spin').hidden=true;
+      q('note').textContent=p.done+' of '+p.total+' '+a('verb')+'.'+(bad?' '+bad+' '+a('fail'):'');
+      var box=q('done'); box.hidden=false;
+      var l=document.createElement('a'); l.className='njilga-btn njilga-btn-primary njilga-btn-sm'; l.href=a('reload'); l.textContent=a('reload-as');
+      box.appendChild(l);
+    }
+    function tick(){
+      var fd=new FormData();
+      fd.append('action',a('action'));
+      fd.append('nonce',a('nonce'));
+      fd.append('dues_year',a('year'));
+      fetch(a('ajax-url'),{method:'POST',body:fd,credentials:'same-origin'})
+        .then(function(r){return r.json();})
+        .then(function(j){
+          misses=0;
+          var p=j&&j.success?j.data:null;
+          if(!p){ clearInterval(timer); return; }
+          var handled=p.total-p.pending;
+          q('bar').style.width=(p.total?Math.floor(handled*100/p.total):100)+'%';
+          q('counts').textContent=p.done+' of '+p.total+' '+a('verb')+((p.failed+p.stalled)?' \u00b7 '+(p.failed+p.stalled)+' failed':'');
+          if(p.finished){ clearInterval(timer); done(p); }
+        })
+        .catch(function(){ if(++misses>=5){ clearInterval(timer); q('note').textContent=a('lost'); } });
+    }
+    timer=setInterval(tick,parseInt(a('poll'),10)||4000);
+  });
 })();
 </script>
 JS;

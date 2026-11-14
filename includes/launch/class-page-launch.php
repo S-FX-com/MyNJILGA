@@ -271,7 +271,7 @@ class MyNJILGA_Page_Launch {
     /**
      * @param array<int,array<string,mixed>> $checks
      */
-    private static function render_checks_table( array $checks ): void {
+    public static function render_checks_table( array $checks ): void {
         $groups = [];
         foreach ( $checks as $c ) {
             $groups[ (string) $c['group'] ][] = $c;

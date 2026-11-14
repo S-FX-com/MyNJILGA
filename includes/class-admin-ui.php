@@ -657,6 +657,12 @@ ol.njilga-list{list-style:decimal}
 .njilga-bulkbar-total{font-size:13px;color:var(--muted-fg)}
 .njilga-bulkbar-total strong{color:var(--fg)}
 .njilga-bulkbar #njilga-bulkcreate{margin-left:auto}
+.njilga-bulkbar-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+.njilga-bulkbar-actions #njilga-bulkcreate{margin-left:0}
+.njilga-stage-note{padding:12px 20px;border-bottom:1px solid var(--border);background:var(--muted);font-size:13px;color:var(--muted-fg);line-height:1.55}
+.njilga-stage-note p{margin:0}
+.njilga-stage-note strong{color:var(--fg)}
+.njilga-stage-note .njilga-list{margin:8px 0 0}
 .njilga-firmcell{min-width:220px}
 .njilga-firmname{display:inline-flex;align-items:center;gap:8px;background:none;border:none;padding:0;
   font-size:14px;font-weight:600;color:var(--fg);cursor:pointer;text-align:left;flex-wrap:wrap;
