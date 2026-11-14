@@ -795,13 +795,12 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
-     * Move a PAID online join's row to another dues year
-     * (MyNJILGA_Join_Year_Move). Conditional on it still being that: a
-     * paid join, in $fromYear.
+     * Move a PAID row to another dues year (MyNJILGA_Paid_Year_Move).
+     * Conditional on it still being that: paid, of that kind, in $fromYear.
      *
      * @return bool Whether the row moved.
      */
-    public static function move_join_year( int $id, int $fromYear, int $toYear, string $snapshotJson ): bool {
+    public static function move_paid_year( int $id, int $fromYear, int $toYear, string $kind, string $snapshotJson ): bool {
         global $wpdb;
         $table = self::table_name();
         return (bool) $wpdb->query( $wpdb->prepare( // phpcs:ignore
@@ -810,7 +809,7 @@ class MyNJILGA_Dues_Invoice_Table {
             $snapshotJson,
             $id,
             $fromYear,
-            MyNJILGA_Dues_Snapshot::KIND_JOIN,
+            $kind,
             self::STATUS_PAID
         ) );
     }

@@ -490,7 +490,7 @@ class MyNJILGA_Page_Invoicing {
             case 'downgraded':
             case 'voided':
             case 'uncollectible':
-                $move = MyNJILGA_Join_Year_Move::offered( $row ) ? ' ' . self::move_join_button( $row ) : '';
+                $move = MyNJILGA_Paid_Year_Move::offered( $row ) ? ' ' . self::move_paid_button( $row ) : '';
                 if ( $link === '' ) {
                     return $move !== '' ? ltrim( $move ) : '<span class="njilga-dim">—</span>';
                 }
@@ -527,16 +527,20 @@ class MyNJILGA_Page_Invoicing {
     }
 
     /** A single POST + JS confirm() — voiding one invoice is a small enough blast radius not to need a full confirmation screen. */
-    /** A paid online join from this year: count it toward the coming year instead. */
-    private static function move_join_button( object $row ): string {
-        $to = MyNJILGA_Invoicing::default_dues_year();
+    /** A paid invoice or online join from this year: count it toward the coming year instead. */
+    private static function move_paid_button( object $row ): string {
+        $to   = MyNJILGA_Invoicing::default_dues_year();
+        $from = (int) $row->dues_year;
+        $text = (string) $row->invoice_kind === MyNJILGA_Dues_Snapshot::KIND_JOIN
+            ? sprintf( 'Count this online join toward %1$d dues instead of %2$d? Its members are tagged Dues Paid %1$d (keeping %2$d), and the %1$d invoices list them at $0 after the next Refresh Firms. Nothing changes in Stripe.', $to, $from )
+            : sprintf( 'Count this paid %2$d invoice toward %1$d dues instead? It becomes the firm\'s %1$d invoice, already paid: the firm\'s %1$d preview is replaced, its members are tagged Dues Paid %1$d (keeping %2$d), and the firm is not billed again for %1$d. Nothing changes in Stripe — the Stripe invoice still reads %2$d.', $to, $from );
         return MyNJILGA_Admin_UI::action_form(
             self::ACTION_MOVE_JOIN,
             sprintf( 'Count toward %d', $to ),
-            [ 'row_id' => (int) $row->id, 'dues_year' => (int) $row->dues_year ],
+            [ 'row_id' => (int) $row->id, 'dues_year' => $from ],
             'outline',
             '',
-            sprintf( 'Count this online join toward %1$d dues instead of %2$d? Its members are tagged Dues Paid %1$d (keeping %2$d), and the %1$d invoices list them at $0 after the next Refresh Firms. Nothing changes in Stripe.', $to, (int) $row->dues_year ),
+            $text,
             'sm'
         );
     }
@@ -1308,6 +1312,7 @@ class MyNJILGA_Page_Invoicing {
             'voided_invoice'  => 'success',
             'wiped'           => 'success',
             'join_moved'      => 'success',
+            'invoice_moved'   => 'success',
             'wiped_partial'   => 'warning',
             'nothing'         => 'info',
             'error'           => 'error',
@@ -1357,6 +1362,13 @@ class MyNJILGA_Page_Invoicing {
                 return sprintf( '%d invoice%s sent.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'sent_partial':
                 return sprintf( '%d invoice%s sent, %d failed — see details below.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
+            case 'invoice_moved':
+                return sprintf(
+                    'Paid invoice moved: it is now the firm\'s %d invoice, already paid, and %d member%s %s tagged Dues Paid %d. Refresh Firms leaves it as it is.',
+                    MyNJILGA_Invoicing::default_dues_year(),
+                    $g( 'n' ), $g( 'n' ) === 1 ? '' : 's', $g( 'n' ) === 1 ? 'is' : 'are',
+                    MyNJILGA_Invoicing::default_dues_year()
+                );
             case 'join_moved':
                 return sprintf(
                     'Online join moved: it now counts toward %d dues, and %d member%s %s tagged Dues Paid %d. Click Refresh Firms so the %d invoices list %s at $0.',
@@ -1725,12 +1737,12 @@ JS;
     public static function handle_move_join(): void {
         self::guard( self::ACTION_MOVE_JOIN );
         $rowId  = isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0;
-        $result = MyNJILGA_Join_Year_Move::move( $rowId );
+        $result = MyNJILGA_Paid_Year_Move::move( $rowId );
         if ( ! $result['ok'] ) {
             self::redirect( self::post_year(), [ 'msg' => 'error', 'detail' => $result['error'] ] );
         }
-        // On to the year it now counts toward, where it shows under Online joins.
-        self::redirect( $result['to_year'], [ 'msg' => 'join_moved', 'n' => $result['members'] ] );
+        // On to the year it now counts toward.
+        self::redirect( $result['to_year'], [ 'msg' => $result['join'] ? 'join_moved' : 'invoice_moved', 'n' => $result['members'] ] );
     }
 
     public static function handle_wipe(): void {
