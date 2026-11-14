@@ -106,7 +106,9 @@ class MyNJILGA_Invoice_Sender {
      * claimed=false and sends nothing. $invoiceRow is the row as the caller
      * read it — the claim only succeeds if it is still exactly that.
      *
-     * @return array{ok:bool, error?:string, claimed?:bool}
+     * @return array{ok:bool, error?:string, claimed?:bool, transport?:bool, warning?:string}
+     *   claimed=false: another sender had it — nothing sent, not an error of this invoice's.
+     *   transport=true: the mail system failed — nothing went; the claim was handed back.
      */
     public static function send_for_row( object $invoiceRow ): array {
         $m = self::compose( $invoiceRow );
@@ -124,22 +126,55 @@ class MyNJILGA_Invoice_Sender {
             return [ 'ok' => false, 'claimed' => false, 'error' => 'Another send had this invoice at the same moment, or it changed (paid, voided, emailed) since it was read — it was not emailed again.' ];
         }
 
-        // Whatever happens in the mail call — false, or an exception from a
-        // mail plugin — an email that didn't go hands the claim back, so the
-        // invoice is not left marked emailed.
+        // The mail call. A claim is handed back only when the email clearly
+        // did NOT reach the firm — a duplicate can't be taken back, so when
+        // in doubt the invoice stays marked emailed, with a note saying so:
+        //  - wp_mail() false because the relay rejected only some CC
+        //    addresses (PHPMailer still delivered to the rest, the bill-to
+        //    included): it went. Kept, with a warning naming the problem.
+        //  - an exception AFTER the message was handed off (a
+        //    wp_mail_succeeded listener, a replacement wp_mail()): it went.
+        $failure  = null;
+        $listener = static function ( $error ) use ( &$failure ): void { $failure = $error; };
+        add_action( 'wp_mail_failed', $listener );
+        $handedOffBefore = function_exists( 'did_action' ) ? did_action( 'wp_mail_succeeded' ) : 0;
+        $thrown          = null;
         try {
             $mailed = wp_mail( $m['to'], $m['subject'], $m['body'], $m['headers'] );
         } catch ( \Throwable $e ) {
-            MyNJILGA_Dues_Invoice_Table::release_email_claim( $invoiceRow, $stamp );
-            return [ 'ok' => false, 'error' => 'The mail system failed while sending: ' . $e->getMessage() ];
+            $mailed = false;
+            $thrown = $e;
         }
+        remove_action( 'wp_mail_failed', $listener );
+        $handedOff = function_exists( 'did_action' ) && did_action( 'wp_mail_succeeded' ) > $handedOffBefore;
+        $failText  = is_object( $failure ) && method_exists( $failure, 'get_error_message' ) ? (string) $failure->get_error_message() : '';
+
+        $warning = '';
         if ( ! $mailed ) {
-            MyNJILGA_Dues_Invoice_Table::release_email_claim( $invoiceRow, $stamp );
-            return [ 'ok' => false, 'error' => "wp_mail() failed — check the site's mail configuration." ];
+            if ( $thrown !== null && $handedOff ) {
+                $warning = 'Emailed, but something on the site failed right after sending: ' . $thrown->getMessage();
+            } elseif ( $thrown === null && self::partly_delivered( $failText, (string) $m['to'] ) ) {
+                $warning = 'Emailed, but the mail server refused some CC addresses — ' . $failText;
+            } else {
+                MyNJILGA_Dues_Invoice_Table::release_email_claim( $invoiceRow, $stamp );
+                return [
+                    'ok'        => false,
+                    'transport' => true,
+                    'error'     => $thrown !== null
+                        ? 'The mail system failed while sending: ' . $thrown->getMessage()
+                        : "wp_mail() failed — check the site's mail configuration." . ( $failText !== '' ? ' (' . $failText . ')' : '' ),
+                ];
+            }
         }
 
-        MyNJILGA_Dues_Invoice_Table::mark_sent( [ (int) $invoiceRow->id ] );
-        MyNJILGA_Dues_Invoice_Table::clear_error( (int) $invoiceRow->id );
+        // The claim already marked it emailed (status sent, sent_at = the
+        // claim's stamp); all that's left is to drop the claim's
+        // "not confirmed" marker — or replace it with the warning.
+        if ( $warning !== '' ) {
+            MyNJILGA_Dues_Invoice_Table::set_error( (int) $invoiceRow->id, $warning );
+        } else {
+            MyNJILGA_Dues_Invoice_Table::clear_error( (int) $invoiceRow->id );
+        }
 
         $ccCount = 0;
         foreach ( $m['headers'] as $h ) {
@@ -162,7 +197,20 @@ class MyNJILGA_Invoice_Sender {
             )
         );
 
-        return [ 'ok' => true ];
+        return $warning !== '' ? [ 'ok' => true, 'warning' => $warning ] : [ 'ok' => true ];
+    }
+
+    /**
+     * PURE: whether a failed wp_mail() still reached the firm — PHPMailer's
+     * "recipients failed" error (the relay refused some addresses at RCPT
+     * TO, and DATA went to the rest) that does not name the bill-to
+     * address among those refused.
+     */
+    public static function partly_delivered( string $errorMessage, string $to ): bool {
+        if ( $errorMessage === '' || $to === '' || stripos( $errorMessage, 'The following recipients failed' ) === false ) {
+            return false;
+        }
+        return stripos( $errorMessage, $to ) === false;
     }
 
     /**

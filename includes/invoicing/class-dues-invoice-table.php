@@ -972,13 +972,17 @@ class MyNJILGA_Dues_Invoice_Table {
         $id     = (int) $row->id;
         $status = (string) ( $row->status ?? '' );
 
+        // The claim also leaves a marker that only a confirmed send removes:
+        // a process that dies mid-send (a host timeout, a worker restart)
+        // leaves the invoice saying so, never silently "emailed".
+        $marker = self::claim_marker( $now );
         if ( $status === self::STATUS_CREATED ) {
-            $n = $wpdb->query( $wpdb->prepare( "UPDATE $table SET status = %s, sent_at = %s WHERE id = %d AND status = %s", self::STATUS_SENT, $now, $id, self::STATUS_CREATED ) ); // phpcs:ignore
+            $n = $wpdb->query( $wpdb->prepare( "UPDATE $table SET status = %s, sent_at = %s, last_error = %s WHERE id = %d AND status = %s", self::STATUS_SENT, $now, $marker, $id, self::STATUS_CREATED ) ); // phpcs:ignore
         } elseif ( $status === self::STATUS_SENT ) {
             $prev = (string) ( $row->sent_at ?? '' );
             $n    = $prev === ''
-                ? $wpdb->query( $wpdb->prepare( "UPDATE $table SET sent_at = %s WHERE id = %d AND status = %s AND sent_at IS NULL", $now, $id, self::STATUS_SENT ) ) // phpcs:ignore
-                : $wpdb->query( $wpdb->prepare( "UPDATE $table SET sent_at = %s WHERE id = %d AND status = %s AND sent_at = %s", $now, $id, self::STATUS_SENT, $prev ) ); // phpcs:ignore
+                ? $wpdb->query( $wpdb->prepare( "UPDATE $table SET sent_at = %s, last_error = %s WHERE id = %d AND status = %s AND sent_at IS NULL", $now, $marker, $id, self::STATUS_SENT ) ) // phpcs:ignore
+                : $wpdb->query( $wpdb->prepare( "UPDATE $table SET sent_at = %s, last_error = %s WHERE id = %d AND status = %s AND sent_at = %s", $now, $marker, $id, self::STATUS_SENT, $prev ) ); // phpcs:ignore
         } else {
             return null;
         }
@@ -989,6 +993,53 @@ class MyNJILGA_Dues_Invoice_Table {
             throw new \RuntimeException( 'Database error while claiming the invoice for its email' . ( ! empty( $wpdb->last_error ) ? ': ' . $wpdb->last_error : '' ) . ' — it was not emailed.' );
         }
         return (int) $n === 1 ? $now : null;
+    }
+
+    /** Option: Stripe invoice ids retired by a reissue — events for them belong to no row. */
+    const OPTION_RETIRED = 'njilga_retired_invoice_ids';
+
+    /**
+     * Put a VOIDED annual invoice row back to draft, cleared of everything
+     * its Stripe invoice gave it, so it can be priced and created again —
+     * a voided Stripe invoice can never be reopened. Only a voided,
+     * non-join row with nothing paid against it.
+     *
+     * @return bool Whether the row was reopened.
+     */
+    public static function reopen_voided( int $id ): bool {
+        global $wpdb;
+        $table = self::table_name();
+        $sql   = "UPDATE $table SET status = %s, gateway_invoice_id = NULL, gateway_invoice_number = NULL, hosted_invoice_url = NULL, invoice_pdf_url = NULL,"
+            . ' stripe_status = NULL, primary_method = NULL, amount_paid_cents = 0, amount_due_cents = 0, amount_refunded_cents = 0, paid_off_stripe_cents = 0,'
+            . ' last_error = NULL, approved_at = NULL, queued_at = NULL, sent_at = NULL, due_date = NULL, finalized_at = NULL, processing_at = NULL, voided_at = NULL, last_synced_at = NULL'
+            . ' WHERE id = %d AND status = %s AND invoice_kind <> %s AND amount_paid_cents = 0 AND paid_off_stripe_cents = 0';
+        return (bool) $wpdb->query( $wpdb->prepare( $sql, self::STATUS_DRAFT, $id, self::STATUS_VOIDED, MyNJILGA_Dues_Snapshot::KIND_JOIN ) ); // phpcs:ignore
+    }
+
+    /** Remember a Stripe invoice id a reissue has left behind (kept to the last 500). */
+    public static function retire_invoice_id( string $invoiceId ): void {
+        if ( $invoiceId === '' ) {
+            return;
+        }
+        $ids   = get_option( self::OPTION_RETIRED, [] );
+        $ids   = is_array( $ids ) ? $ids : [];
+        $ids[] = $invoiceId;
+        update_option( self::OPTION_RETIRED, array_slice( array_values( array_unique( $ids ) ), -500 ), false );
+    }
+
+    public static function is_retired_invoice_id( string $invoiceId ): bool {
+        if ( $invoiceId === '' || ! function_exists( 'get_option' ) ) {
+            return false;
+        }
+        $ids = get_option( self::OPTION_RETIRED, [] );
+        return is_array( $ids ) && in_array( $invoiceId, $ids, true );
+    }
+
+    /** Start of the marker claim_for_email() leaves until the send is confirmed. */
+    const CLAIM_MARKER = 'Email started';
+
+    public static function claim_marker( string $stamp ): string {
+        return self::CLAIM_MARKER . ' ' . $stamp . ' but not confirmed sent — check the firm got it before sending again.';
     }
 
     /**

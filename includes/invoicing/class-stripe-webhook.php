@@ -352,6 +352,16 @@ class MyNJILGA_Stripe_Webhook {
      * @return object|null
      */
     private static function resolve_invoice_row( string $type, array $dataObject ) {
+        // The Stripe invoice this event is about, when it says.
+        $eventInvoiceId = strpos( $type, 'invoice.' ) === 0
+            ? (string) ( $dataObject['id'] ?? '' )
+            : self::extract_ref_id( $dataObject['invoice'] ?? null );
+        // An invoice voided and since re-issued for its row belongs to no
+        // row: a late event for it must not touch the new invoice.
+        if ( MyNJILGA_Dues_Invoice_Table::is_retired_invoice_id( $eventInvoiceId ) ) {
+            return null;
+        }
+
         $rowId = 0;
         if ( isset( $dataObject['metadata']['njilga_row_id'] ) && (string) $dataObject['metadata']['njilga_row_id'] !== '' ) {
             $rowId = (int) $dataObject['metadata']['njilga_row_id'];
@@ -363,7 +373,11 @@ class MyNJILGA_Stripe_Webhook {
             // deleted id to a new row after a restart — a late event for
             // a voided 2026 invoice must never land on a 2027 one.
             $metaYear = (int) ( $dataObject['metadata']['njilga_dues_year'] ?? 0 );
-            if ( $row && ( $metaYear === 0 || $metaYear === (int) $row->dues_year ) ) {
+            // And when both sides know their Stripe invoice, it must be the
+            // same one — a row re-issued after a void carries a new id.
+            $rowInvoiceId = (string) ( $row->gateway_invoice_id ?? '' );
+            $sameInvoice  = $eventInvoiceId === '' || $rowInvoiceId === '' || $eventInvoiceId === $rowInvoiceId;
+            if ( $row && $sameInvoice && ( $metaYear === 0 || $metaYear === (int) $row->dues_year ) ) {
                 return $row;
             }
         }

@@ -513,6 +513,15 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway, MyNJI
         return max( 0, (int) get_option( self::attempt_option( $invoiceRowId ), 0 ) );
     }
 
+    /**
+     * A row whose Stripe invoice was voided is being issued again
+     * (MyNJILGA_Invoice_Reissue): its next create must not be handed the
+     * voided invoice back by Stripe's idempotency replay.
+     */
+    public static function fresh_attempt( int $invoiceRowId ): void {
+        self::bump_attempt( $invoiceRowId );
+    }
+
     private static function bump_attempt( int $invoiceRowId ): void {
         if ( $invoiceRowId <= 0 || ! function_exists( 'update_option' ) ) {
             return;
