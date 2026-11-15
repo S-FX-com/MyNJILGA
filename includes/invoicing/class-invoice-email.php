@@ -37,6 +37,9 @@ class MyNJILGA_Invoice_Email {
     const COLOR_CARD   = '#f5f6f8';
     const COLOR_LINE   = '#e5e7eb';
 
+    /** The image across the top of the HTML email when none is set on the Invoice Email tab. */
+    const DEFAULT_HEADER_IMAGE = 'https://njilga.org/wp-content/uploads/2026/06/fallback_image_njilga.png';
+
     /** Merge tag => what it becomes. */
     const TAGS = [
         'firm'       => 'The firm\'s name (or "your firm" if there isn\'t one)',
@@ -304,7 +307,7 @@ class MyNJILGA_Invoice_Email {
 
     /**
      * The HTML email — the same content as build()'s plain text, laid out
-     * the way NJILGA's dues emails look: logo, heading, the opening,
+     * the way NJILGA's dues emails look: header image, heading, the opening,
      * an invoice summary card, a "Pay My Dues Online" button, the
      * mail-a-check address and the sign-off.
      *
@@ -316,7 +319,7 @@ class MyNJILGA_Invoice_Email {
      *   covers_note     string  "Paying this invoice marks everyone listed above as current for 2027."
      *   invoice_number  string  '' = none yet
      *   due_date        string  already formatted ('' = none)
-     *   logo_url        string  '' = the site name in text instead
+     *   logo_url        string  the header image, shown the full width of the email ('' = the site name in text instead)
      *   site_name / site_url  string
      *   heading_tpl / button_tpl  string  custom wording ('' = built-in)
      *   banner          string  a TEST / SAMPLE notice shown above everything ('' = none)
@@ -376,16 +379,21 @@ class MyNJILGA_Invoice_Email {
             $h .= '<tr><td style="padding:12px 24px;background:#fef3c7;border-radius:8px 8px 0 0;font-size:14px;line-height:1.5;color:#92400e;' . $font . '">' . nl2br( $e( $banner ) ) . '</td></tr>';
         }
 
-        // Logo (or the site's name).
+        // Header image, the full width of the email (or the site's name in text).
         $logo = (string) ( $in['logo_url'] ?? '' );
-        $h   .= '<tr><td align="center" style="padding:32px 32px 8px 32px;">';
-        $h   .= $logo !== ''
-            ? '<img src="' . $e( $logo ) . '" alt="' . $e( $site !== '' ? $site : 'NJILGA' ) . '" width="300" style="display:block;width:100%;max-width:300px;height:auto;border:0;">'
-            : '<div style="font-size:28px;font-weight:700;letter-spacing:1px;color:' . self::COLOR_ACCENT . ';' . $font . '">' . $e( $site !== '' ? $site : 'NJILGA' ) . '</div>';
-        $h   .= '</td></tr>';
+        if ( $logo !== '' ) {
+            $corner = $banner !== '' ? '0' : '8px 8px 0 0'; // square under a TEST banner
+            $h     .= '<tr><td align="center" style="padding:0;">';
+            $h     .= '<img src="' . $e( $logo ) . '" alt="' . $e( $site !== '' ? $site : 'NJILGA' ) . '" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;border-radius:' . $corner . ';">';
+            $h     .= '</td></tr>';
+        } else {
+            $h .= '<tr><td align="center" style="padding:32px 32px 8px 32px;">';
+            $h .= '<div style="font-size:28px;font-weight:700;letter-spacing:1px;color:' . self::COLOR_ACCENT . ';' . $font . '">' . $e( $site !== '' ? $site : 'NJILGA' ) . '</div>';
+            $h .= '</td></tr>';
+        }
 
         // Heading.
-        $h .= '<tr><td align="center" style="padding:16px 32px 8px 32px;"><h1 style="margin:0;font-size:26px;line-height:1.3;font-weight:700;color:#111827;' . $font . '">' . $e( $heading ) . '</h1></td></tr>';
+        $h .= '<tr><td align="center" style="padding:' . ( $logo !== '' ? '28px' : '16px' ) . ' 32px 8px 32px;"><h1 style="margin:0;font-size:26px;line-height:1.3;font-weight:700;color:#111827;' . $font . '">' . $e( $heading ) . '</h1></td></tr>';
 
         // Opening.
         $h .= '<tr><td style="padding:24px 32px 0 32px;' . $font . '">' . self::text_to_html( $intro ) . '</td></tr>';

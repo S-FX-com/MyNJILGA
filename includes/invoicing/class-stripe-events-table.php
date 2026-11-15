@@ -128,30 +128,25 @@ class MyNJILGA_Stripe_Events_Table {
     }
 
     /**
-     * The newest events, newest first — the Setup page's audit trail
-     * (spec §5.4: "an audit trail staff can read without leaving
-     * WordPress"). Deliberately capped rather than paginated: the table
-     * is pruned to PRUNE_AFTER_DAYS by the daily reconcile job, so it is
-     * never the long-term record, and the question staff ask of it is
-     * "what has Stripe sent us lately", not "let me page through six
-     * months". $limit is clamped so a caller can't turn this into a
-     * whole-table read by accident.
+     * The newest invoice event about a Stripe invoice that was recorded
+     * against a row — the row, its mode, and when it arrived — or null.
+     * How a reissued invoice's old Stripe id is traced back to its row
+     * when it predates the retired-invoice map. Only invoice.* events:
+     * a charge, payment or checkout session is not an invoice.
      *
-     * @param bool|null $livemode null = both modes.
-     * @return array<int,object>
+     * @return array{row:int,live:int,at:string}|null
      */
-    /**
-     * The invoice row a Stripe object (an invoice id) was last recorded
-     * against, or 0 — how a reissued invoice's old Stripe id is traced
-     * back to its row when it predates the retired-invoice map.
-     */
-    public static function row_for_object( string $objectId ): int {
-        if ( $objectId === '' ) {
-            return 0;
+    public static function invoice_trace( string $invoiceId ): ?array {
+        if ( $invoiceId === '' ) {
+            return null;
         }
         global $wpdb;
         $table = self::table_name();
-        return (int) $wpdb->get_var( $wpdb->prepare( "SELECT invoice_row_id FROM $table WHERE object_id = %s AND invoice_row_id IS NOT NULL AND invoice_row_id > 0 ORDER BY id DESC LIMIT 1", $objectId ) ); // phpcs:ignore
+        $hit   = $wpdb->get_row( $wpdb->prepare( "SELECT invoice_row_id, livemode, received_at FROM $table WHERE object_id = %s AND type LIKE %s AND invoice_row_id > 0 ORDER BY id DESC LIMIT 1", $invoiceId, 'invoice.%' ) ); // phpcs:ignore
+        if ( ! $hit || (int) $hit->invoice_row_id <= 0 ) {
+            return null;
+        }
+        return [ 'row' => (int) $hit->invoice_row_id, 'live' => (int) $hit->livemode, 'at' => (string) $hit->received_at ];
     }
 
     /**
@@ -173,6 +168,19 @@ class MyNJILGA_Stripe_Events_Table {
         return (array) $wpdb->get_results( $sql ); // phpcs:ignore
     }
 
+    /**
+     * The newest events, newest first — the Setup page's audit trail
+     * (spec §5.4: "an audit trail staff can read without leaving
+     * WordPress"). Deliberately capped rather than paginated: the table
+     * is pruned to PRUNE_AFTER_DAYS by the daily reconcile job, so it is
+     * never the long-term record, and the question staff ask of it is
+     * "what has Stripe sent us lately", not "let me page through six
+     * months". $limit is clamped so a caller can't turn this into a
+     * whole-table read by accident.
+     *
+     * @param bool|null $livemode null = both modes.
+     * @return array<int,object>
+     */
     public static function recent( int $limit = self::RECENT_LIMIT, ?bool $livemode = null ): array {
         global $wpdb;
         $table = self::table_name();

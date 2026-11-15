@@ -85,6 +85,52 @@ class AbilitiesTest extends NJILGA_TestCase {
 
     // ---- results match the declared output schemas --------------------
 
+    // ---- tracing an invoice that was issued again ----------------------
+
+    /** The row a retired invoice names is shown only while it is still that firm's invoice for that year. */
+    public function testATracedRowMustStillBeTheSameFirmsInvoice(): void {
+        $trace = [ 'row' => 41, 'company' => 12, 'year' => 2027, 'live' => 1, 'at' => '2026-11-14 09:00:00' ];
+        $same  = $this->row( [ 'id' => 41 ] );
+        $this->assertTrue( MyNJILGA_Abilities::row_fits_trace( $same, $trace ) );
+
+        $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( null, $trace ), 'the row is gone' );
+        $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( $this->row( [ 'id' => 42 ] ), $trace ), 'another row' );
+        $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( $this->row( [ 'id' => 41, 'fluentcrm_company_id' => 99 ] ), $trace ), 'the id now belongs to another firm (a wiped year\'s id reused)' );
+        $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( $this->row( [ 'id' => 41, 'dues_year' => 2028 ] ), $trace ), 'another year' );
+        $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( $this->row( [ 'id' => 41, 'livemode' => 0 ] ), $trace ), 'the other mode' );
+        $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( $this->row( [ 'id' => 41, 'created_at' => '2026-11-20 08:00:00' ] ), $trace ), 'created after the invoice was retired: a reused id' );
+        $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( $this->row( [ 'id' => 41, 'invoice_kind' => MyNJILGA_Dues_Snapshot::KIND_JOIN ] ), $trace ), 'a join is never issued again' );
+
+        // The webhook history knows only the row, its mode and when the event arrived.
+        $history = [ 'row' => 41, 'live' => 1, 'at' => '2026-11-13 18:02:12' ];
+        $this->assertTrue( MyNJILGA_Abilities::row_fits_trace( $same, $history ) );
+        $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( $this->row( [ 'id' => 41, 'created_at' => '2027-01-05 08:00:00' ] ), $history ), 'a row created after the event is a reused id' );
+    }
+
+    /** If the named row no longer fits, the firm's one invoice for that year is shown — never a guess between several. */
+    public function testATraceFallsBackToTheFirmsOneInvoiceForThatYear(): void {
+        $trace    = [ 'row' => 41, 'company' => 12, 'year' => 2027, 'live' => 1, 'at' => '2026-11-14 09:00:00' ];
+        $same     = $this->row( [ 'id' => 41 ] );
+        $replaced = $this->row( [ 'id' => 77, 'created_at' => '2026-11-20 08:00:00' ] ); // Refresh Firms, new billing contact
+        $this->assertSame( $same, MyNJILGA_Abilities::pick_traced_row( $trace, $same, [ $replaced ] ), 'the named row first' );
+        $this->assertSame( $replaced, MyNJILGA_Abilities::pick_traced_row( $trace, null, [ $replaced, $this->row( [ 'id' => 78, 'dues_year' => 2026 ] ), $this->row( [ 'id' => 79, 'invoice_kind' => MyNJILGA_Dues_Snapshot::KIND_JOIN ] ) ] ), 'the firm\'s one annual 2027 invoice' );
+        $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( $trace, null, [ $replaced, $this->row( [ 'id' => 80 ] ) ] ), 'two candidates: no guess' );
+        $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( $trace, null, [] ) );
+        $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( [ 'row' => 41, 'live' => 1, 'at' => '2026-11-13 18:02:12' ], null, [ $replaced ] ), 'a webhook-history trace doesn\'t know the firm: no fallback' );
+    }
+
+    /** A reference no reissue retired — a charge, a payment, someone else's invoice — is not traced or labelled. */
+    public function testAnUnknownReferenceIsNotTracedOrLabelledReissued(): void {
+        global $wpdb;
+        $wpdb->reset();
+        foreach ( [ 'ch_3Refund', 'pi_3Join', 'in_NotOurs' ] as $ref ) {
+            $this->assertSame( [ 'found' => false, 'invoice' => null, 'note' => null ], MyNJILGA_Abilities::get_invoice( [ 'stripe_invoice' => $ref ] ), $ref );
+        }
+        foreach ( $wpdb->queries as $sql ) {
+            $this->assertTrue( strpos( $sql, 'stripe_events' ) === false, 'the webhook history is not asked: ' . $sql );
+        }
+    }
+
     public function testResultsMatchTheirOutputSchemas(): void {
         $defs = ( new ReflectionMethod( 'MyNJILGA_Abilities', 'definitions' ) );
         $defs->setAccessible( true );
@@ -104,6 +150,7 @@ class AbilitiesTest extends NJILGA_TestCase {
         $this->assertConforms( [ 'invoices' => [ $summary ], 'total' => 1 ], $schemas['my-njilga/flagged-invoices']['output_schema'], 'flagged-invoices' );
         $this->assertConforms( [ 'found' => true, 'invoice' => MyNJILGA_Abilities::invoice_detail( $this->row() ) ], $schemas['my-njilga/get-invoice']['output_schema'], 'get-invoice' );
         $this->assertConforms( [ 'found' => false, 'invoice' => null, 'note' => null ], $schemas['my-njilga/get-invoice']['output_schema'], 'get-invoice, not found' );
+        $this->assertConforms( [ 'found' => false, 'invoice' => null, 'note' => 'Stripe invoice in_OLD was voided … can no longer be traced' ], $schemas['my-njilga/get-invoice']['output_schema'], 'get-invoice, retired but untraceable' );
         $this->assertConforms( [ 'found' => true, 'invoice' => MyNJILGA_Abilities::invoice_detail( $this->row() ) + [ 'stripe_invoice_retired' => true ], 'note' => 'Stripe invoice in_OLD was voided…' ], $schemas['my-njilga/get-invoice']['output_schema'], 'get-invoice, traced from a retired invoice' );
         $this->assertConforms( [ 'firms' => [ [ 'company_id' => 12, 'name' => 'Jost' ] ] ], $schemas['my-njilga/find-firm']['output_schema'], 'find-firm' );
         $this->assertConforms( [ 'events' => [ [ 'type' => 'invoice.voided', 'status' => 'processed', 'received_at' => '2026-11-13 18:02:11', 'processed_at' => null, 'message' => null, 'stripe_object' => 'in_1Abc' ] ] ], $schemas['my-njilga/invoice-stripe-events']['output_schema'], 'invoice-stripe-events' );

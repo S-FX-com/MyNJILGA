@@ -58,7 +58,7 @@ class MyNJILGA_Invoice_Reissue {
         if ( ! MyNJILGA_Dues_Invoice_Table::reopen_voided( $rowId ) ) {
             return [ 'ok' => false, 'error' => 'The invoice changed while this was running — reload the page and try again.', 'year' => $year ];
         }
-        MyNJILGA_Dues_Invoice_Table::retire_invoice_id( $oldId, $oldNumber, $rowId );
+        MyNJILGA_Dues_Invoice_Table::retire_invoice_id( $oldId, $oldNumber, $row );
         if ( class_exists( 'MyNJILGA_Stripe_Invoice_Gateway' ) ) {
             MyNJILGA_Stripe_Invoice_Gateway::fresh_attempt( $rowId );
         }

@@ -45,6 +45,28 @@ class InvoiceEmailHtmlTest extends NJILGA_TestCase {
         $this->has( 'src="https://www.njilga.org/logo.png"', $h );
     }
 
+    /** The header image spans the email; without one, the site's name stands in. */
+    public function testTheHeaderImageSpansTheEmail(): void {
+        $h = MyNJILGA_Invoice_Email::build_html( $this->input() );
+        $this->has( 'width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;border-radius:8px 8px 0 0;"', $h, 'full width, the card\'s top corners' );
+        $this->has( 'alt="NJILGA"', $h );
+
+        $test = MyNJILGA_Invoice_Email::build_html( $this->input( [ 'banner' => 'TEST — not sent to the firm' ] ) );
+        $this->has( 'border-radius:0;"', $test, 'square under the TEST banner' );
+
+        $none = MyNJILGA_Invoice_Email::build_html( $this->input( [ 'logo_url' => '' ] ) );
+        $this->assertTrue( strpos( $none, '<img' ) === false, 'no image' );
+        $this->has( 'letter-spacing:1px;color:#1d2b4f;', $none, 'the site name in text' );
+    }
+
+    /** Blank on the Invoice Email tab = NJILGA's header image; a URL set there wins. */
+    public function testTheHeaderImageDefaultsToNjilgas(): void {
+        $this->assertSame( MyNJILGA_Invoice_Email::DEFAULT_HEADER_IMAGE, MyNJILGA_Invoice_Sender::logo_url( [ 'logo_url' => '' ] ) );
+        $this->assertSame( MyNJILGA_Invoice_Email::DEFAULT_HEADER_IMAGE, MyNJILGA_Invoice_Sender::logo_url( [ 'logo_url' => '   ' ] ) );
+        $this->assertSame( 'https://njilga.org/wp-content/uploads/2026/06/fallback_image_njilga.png', MyNJILGA_Invoice_Email::DEFAULT_HEADER_IMAGE );
+        $this->assertSame( 'https://njilga.org/custom.png', MyNJILGA_Invoice_Sender::logo_url( [ 'logo_url' => 'https://njilga.org/custom.png' ] ) );
+    }
+
     public function testEverythingTypedIsEscaped(): void {
         $h = MyNJILGA_Invoice_Email::build_html( $this->input( [
             'firm' => 'Evil <script>alert(1)</script> LLP',

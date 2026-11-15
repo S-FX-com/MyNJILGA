@@ -86,7 +86,7 @@ class MyNJILGA_Invoice_Sender {
         $msg = MyNJILGA_Invoice_Email::build( $in );
 
         // The HTML version: the same content, plus the invoice's lines as a
-        // table, its number and due date, the logo and the custom heading
+        // table, its number and due date, the header image and the custom heading
         // and button wording.
         $lines   = MyNJILGA_Dues_Roster::email_rows( $members, $duesYear, $kind );
         $htmlIn  = $in + [
@@ -262,25 +262,14 @@ class MyNJILGA_Invoice_Sender {
     }
 
     /**
-     * The logo at the top of the HTML email: the one set on the Invoice
-     * Email tab, else the site's own logo, else its site icon; '' = the
-     * site name in text.
+     * The header image across the top of the HTML email: the one set on
+     * the Invoice Email tab, else NJILGA's header image.
      *
      * @param array<string,string>|null $override unsaved Invoice Email edits (logo_url)
      */
     public static function logo_url( ?array $override = null ): string {
         $set = trim( (string) ( $override['logo_url'] ?? ( class_exists( 'MyNJILGA_Dues_Settings' ) ? MyNJILGA_Dues_Settings::general( 'email_logo_url', '' ) : '' ) ) );
-        if ( $set !== '' ) {
-            return $set;
-        }
-        if ( function_exists( 'get_theme_mod' ) && function_exists( 'wp_get_attachment_image_url' ) ) {
-            $id  = (int) get_theme_mod( 'custom_logo' );
-            $url = $id > 0 ? (string) wp_get_attachment_image_url( $id, 'full' ) : '';
-            if ( $url !== '' ) {
-                return $url;
-            }
-        }
-        return function_exists( 'get_site_icon_url' ) ? (string) get_site_icon_url( 256 ) : '';
+        return $set !== '' ? $set : MyNJILGA_Invoice_Email::DEFAULT_HEADER_IMAGE;
     }
 
     /**
