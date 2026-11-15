@@ -21,9 +21,21 @@ class MyNJILGA_Invoice_Email {
     /** Settings key for each editable piece. */
     const FIELDS = [
         'subject' => 'email_subject',
+        'heading' => 'email_heading',
         'intro'   => 'email_intro',
         'closing' => 'email_closing',
+        'button'  => 'email_button',
     ];
+
+    /** The one-line pieces (no line breaks, length of a subject). */
+    const ONE_LINE = [ 'subject', 'heading', 'button' ];
+
+    /** The HTML email's colours: NJILGA navy, and the summary card's grey. */
+    const COLOR_ACCENT = '#1d2b4f';
+    const COLOR_TEXT   = '#1f2937';
+    const COLOR_MUTED  = '#6b7280';
+    const COLOR_CARD   = '#f5f6f8';
+    const COLOR_LINE   = '#e5e7eb';
 
     /** Merge tag => what it becomes. */
     const TAGS = [
@@ -56,6 +68,10 @@ class MyNJILGA_Invoice_Email {
                 return "Hi {name},\n\n{firm}'s {year} NJILGA {invoice} totals {total}.";
             case 'closing':
                 return "Thank you,\nNJILGA";
+            case 'heading':
+                return 'NJILGA Membership Dues – Action Required';
+            case 'button':
+                return 'Pay My Dues Online';
         }
         return '';
     }
@@ -72,7 +88,7 @@ class MyNJILGA_Invoice_Email {
         $s = str_replace( [ "\r\n", "\r" ], "\n", $raw );
         $s = strip_tags( $s );
         $s = (string) preg_replace( '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $s );
-        if ( $field === 'subject' ) {
+        if ( in_array( $field, self::ONE_LINE, true ) ) {
             $s = trim( (string) preg_replace( '/\s+/', ' ', $s ) );
             return self::cut( $s, self::MAX_SUBJECT );
         }
@@ -218,6 +234,235 @@ class MyNJILGA_Invoice_Email {
         }
 
         return [ 'subject' => $subject, 'body' => implode( "\n\n", $blocks ) ];
+    }
+
+    // -------------------------------------------------------------------------
+    // The HTML version
+    // -------------------------------------------------------------------------
+
+    /**
+     * Staff's plain wording as email HTML — escaped first, so nothing they
+     * type can become markup, then a little light formatting:
+     *   a blank line         → a new paragraph
+     *   a line "- text"      → a bullet (consecutive ones form one list)
+     *   **text**             → bold
+     *   http(s)://…          → a link
+     *   any other line break → a line break
+     */
+    public static function text_to_html( string $text ): string {
+        $text = str_replace( [ "\r\n", "\r" ], "\n", trim( $text ) );
+        if ( $text === '' ) {
+            return '';
+        }
+        $pStyle  = 'margin:0 0 16px 0;font-size:16px;line-height:1.6;color:' . self::COLOR_TEXT . ';';
+        $ulStyle = 'margin:0 0 16px 0;padding-left:24px;font-size:16px;line-height:1.6;color:' . self::COLOR_TEXT . ';';
+        $out     = '';
+        foreach ( preg_split( '/\n\s*\n/', $text ) as $block ) {
+            $para    = [];
+            $bullets = [];
+            foreach ( explode( "\n", trim( $block ) ) as $line ) {
+                if ( preg_match( '/^\s*[-•*]\s+(.*)$/u', $line, $m ) ) {
+                    if ( $para ) {
+                        $out .= '<p style="' . $pStyle . '">' . implode( '<br>', $para ) . '</p>';
+                        $para = [];
+                    }
+                    $bullets[] = '<li style="margin:0 0 6px 0;">' . self::inline_html( $m[1] ) . '</li>';
+                } else {
+                    if ( $bullets ) {
+                        $out .= '<ul style="' . $ulStyle . '">' . implode( '', $bullets ) . '</ul>';
+                        $bullets = [];
+                    }
+                    $para[] = self::inline_html( $line );
+                }
+            }
+            if ( $para ) {
+                $out .= '<p style="' . $pStyle . '">' . implode( '<br>', $para ) . '</p>';
+            }
+            if ( $bullets ) {
+                $out .= '<ul style="' . $ulStyle . '">' . implode( '', $bullets ) . '</ul>';
+            }
+        }
+        return $out;
+    }
+
+    /** One line of staff wording: escaped, then **bold** and links. */
+    private static function inline_html( string $line ): string {
+        $h = htmlspecialchars( trim( $line ), ENT_QUOTES, 'UTF-8' );
+        $h = (string) preg_replace( '/\*\*(.+?)\*\*/u', '<strong>$1</strong>', $h );
+        // Already escaped, so a URL's own "&" is "&amp;" — and any other entity
+        // (a quote around the URL) ends it. Trailing punctuation stays text.
+        return (string) preg_replace_callback(
+            '#\bhttps?://(?:[^\s<&]|&amp;)+#i',
+            static function ( array $m ): string {
+                $url  = rtrim( $m[0], '.,;:!?)' );
+                $tail = (string) substr( $m[0], strlen( $url ) );
+                return '<a href="' . $url . '" style="color:' . self::COLOR_ACCENT . ';text-decoration:underline;">' . $url . '</a>' . $tail;
+            },
+            $h
+        );
+    }
+
+    /**
+     * The HTML email — the same content as build()'s plain text, laid out
+     * the way NJILGA's dues emails look: logo, heading, the opening,
+     * an invoice summary card, a "Pay My Dues Online" button, the
+     * mail-a-check address and the sign-off.
+     *
+     * Email HTML, so tables and inline styles only (mail apps ignore
+     * <style> blocks and modern CSS); 600px wide, readable on a phone.
+     *
+     * Input — build()'s, plus:
+     *   rows            array<int,array{name:string,item:string,amount:string}>  the invoice's lines
+     *   covers_note     string  "Paying this invoice marks everyone listed above as current for 2027."
+     *   invoice_number  string  '' = none yet
+     *   due_date        string  already formatted ('' = none)
+     *   logo_url        string  '' = the site name in text instead
+     *   site_name / site_url  string
+     *   heading_tpl / button_tpl  string  custom wording ('' = built-in)
+     *   banner          string  a TEST / SAMPLE notice shown above everything ('' = none)
+     *
+     * @param array<string,mixed> $in
+     */
+    public static function build_html( array $in ): string {
+        $e        = static function ( $v ): string { return htmlspecialchars( (string) $v, ENT_QUOTES, 'UTF-8' ); };
+        $isAssess = ! empty( $in['is_assessment'] );
+        $year     = (int) ( $in['year'] ?? 0 );
+        $firm     = trim( (string) ( $in['firm'] ?? '' ) );
+        $label    = trim( (string) ( $in['assessment_label'] ?? '' ) );
+        $name     = (string) ( $in['name'] ?? '' );
+        $total    = (string) ( $in['total'] ?? '' );
+        $link     = (string) ( $in['link'] ?? '' );
+        $vars     = self::vars( $in );
+        $site     = trim( (string) ( $in['site_name'] ?? '' ) );
+        $siteUrl  = (string) ( $in['site_url'] ?? '' );
+
+        // Heading and button: custom wording, else the built-in.
+        $heading = trim( (string) preg_replace( '/\s+/', ' ', self::render( trim( (string) ( $in['heading_tpl'] ?? '' ) ), $vars ) ) );
+        if ( $heading === '' ) {
+            $heading = $isAssess
+                ? sprintf( 'NJILGA %s – Action Required', $label !== '' ? $label : 'Assessment' )
+                : self::default_template( 'heading' );
+        }
+        $button = trim( (string) preg_replace( '/\s+/', ' ', self::render( trim( (string) ( $in['button_tpl'] ?? '' ) ), $vars ) ) );
+        if ( $button === '' ) {
+            $button = $isAssess ? 'Pay Online' : self::default_template( 'button' );
+        }
+
+        // The opening: the custom one, else the built-in words build() uses.
+        $introTpl = trim( (string) ( $in['intro_tpl'] ?? '' ) );
+        if ( $introTpl !== '' ) {
+            $intro = self::render( $introTpl, $vars );
+        } else {
+            $intro = sprintf( 'Hi %s,', $name ) . "\n\n" . ( $isAssess
+                ? sprintf( 'Your %d NJILGA %s invoice totals %s.', $year, $label !== '' ? $label : 'assessment', $total )
+                : sprintf( '%s %d NJILGA membership dues invoice totals %s.', $firm !== '' ? $firm . "'s" : 'Your', $year, $total ) );
+        }
+        $closingTpl = trim( (string) ( $in['closing_tpl'] ?? '' ) );
+        $closing    = $closingTpl !== '' ? self::render( $closingTpl, $vars ) : "Thank you,\nNJILGA";
+
+        $font  = "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;";
+        $muted = 'color:' . self::COLOR_MUTED . ';';
+        $h     = '';
+
+        $h .= '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="x-apple-disable-message-reformatting"><title>' . $e( $heading ) . '</title></head>';
+        $h .= '<body style="margin:0;padding:0;background:#f4f4f5;' . $font . '">';
+        // Preheader: the line mail apps show beside the subject.
+        $h .= '<div style="display:none;max-height:0;overflow:hidden;opacity:0;">' . $e( sprintf( '%s %d invoice: %s', $firm !== '' ? $firm : 'Your', $year, $total ) ) . '</div>';
+        $h .= '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f5;"><tr><td align="center" style="padding:24px 12px;">';
+        $h .= '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#ffffff;border-radius:8px;">';
+
+        $banner = trim( (string) ( $in['banner'] ?? '' ) );
+        if ( $banner !== '' ) {
+            $h .= '<tr><td style="padding:12px 24px;background:#fef3c7;border-radius:8px 8px 0 0;font-size:14px;line-height:1.5;color:#92400e;' . $font . '">' . nl2br( $e( $banner ) ) . '</td></tr>';
+        }
+
+        // Logo (or the site's name).
+        $logo = (string) ( $in['logo_url'] ?? '' );
+        $h   .= '<tr><td align="center" style="padding:32px 32px 8px 32px;">';
+        $h   .= $logo !== ''
+            ? '<img src="' . $e( $logo ) . '" alt="' . $e( $site !== '' ? $site : 'NJILGA' ) . '" width="300" style="display:block;width:100%;max-width:300px;height:auto;border:0;">'
+            : '<div style="font-size:28px;font-weight:700;letter-spacing:1px;color:' . self::COLOR_ACCENT . ';' . $font . '">' . $e( $site !== '' ? $site : 'NJILGA' ) . '</div>';
+        $h   .= '</td></tr>';
+
+        // Heading.
+        $h .= '<tr><td align="center" style="padding:16px 32px 8px 32px;"><h1 style="margin:0;font-size:26px;line-height:1.3;font-weight:700;color:#111827;' . $font . '">' . $e( $heading ) . '</h1></td></tr>';
+
+        // Opening.
+        $h .= '<tr><td style="padding:24px 32px 0 32px;' . $font . '">' . self::text_to_html( $intro ) . '</td></tr>';
+
+        // The invoice, summarised.
+        $rows = (array) ( $in['rows'] ?? [] );
+        $h   .= '<tr><td style="padding:8px 32px 0 32px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:' . self::COLOR_CARD . ';border:1px solid ' . self::COLOR_LINE . ';border-radius:8px;">';
+        $h   .= '<tr><td style="padding:18px 20px 6px 20px;' . $font . '">';
+        $h   .= '<div style="font-size:13px;text-transform:uppercase;letter-spacing:.06em;' . $muted . '">' . $e( $isAssess ? sprintf( '%d %s invoice', $year, $label !== '' ? $label : 'Assessment' ) : sprintf( '%d membership dues invoice', $year ) ) . '</div>';
+        if ( $firm !== '' ) {
+            $h .= '<div style="font-size:18px;font-weight:700;color:#111827;margin-top:4px;">' . $e( $firm ) . '</div>';
+        }
+        $meta = [];
+        if ( (string) ( $in['invoice_number'] ?? '' ) !== '' ) {
+            $meta[] = 'Invoice ' . $e( $in['invoice_number'] );
+        }
+        if ( (string) ( $in['due_date'] ?? '' ) !== '' ) {
+            $meta[] = 'Due ' . $e( $in['due_date'] );
+        }
+        if ( $meta ) {
+            $h .= '<div style="font-size:14px;margin-top:4px;' . $muted . '">' . implode( ' &middot; ', $meta ) . '</div>';
+        }
+        $h .= '</td></tr>';
+        if ( $rows ) {
+            $h .= '<tr><td style="padding:8px 20px 4px 20px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="' . $font . '">';
+            foreach ( $rows as $r ) {
+                $who  = (string) ( $r['name'] ?? '' );
+                $h   .= '<tr>';
+                $h   .= '<td style="padding:8px 0;border-top:1px solid ' . self::COLOR_LINE . ';font-size:15px;line-height:1.4;color:' . self::COLOR_TEXT . ';">'
+                    . ( $who !== '' ? '<strong>' . $e( $who ) . '</strong><br>' : '' )
+                    . '<span style="' . $muted . 'font-size:14px;">' . $e( $r['item'] ?? '' ) . '</span></td>';
+                $h   .= '<td align="right" valign="top" style="padding:8px 0 8px 12px;border-top:1px solid ' . self::COLOR_LINE . ';font-size:15px;white-space:nowrap;color:' . self::COLOR_TEXT . ';">' . $e( $r['amount'] ?? '' ) . '</td>';
+                $h   .= '</tr>';
+            }
+            $h .= '<tr><td style="padding:12px 0;border-top:2px solid ' . self::COLOR_LINE . ';font-size:16px;font-weight:700;color:#111827;">Total</td>';
+            $h .= '<td align="right" style="padding:12px 0;border-top:2px solid ' . self::COLOR_LINE . ';font-size:16px;font-weight:700;color:#111827;white-space:nowrap;">' . $e( $total ) . '</td></tr>';
+            $h .= '</table></td></tr>';
+        }
+        $coversNote = trim( (string) ( $in['covers_note'] ?? '' ) );
+        if ( $coversNote !== '' ) {
+            $h .= '<tr><td style="padding:0 20px 16px 20px;font-size:14px;line-height:1.5;' . $muted . $font . '">' . $e( $coversNote ) . '</td></tr>';
+        }
+        $h .= '</table></td></tr>';
+
+        // The button — "bulletproof": a coloured table cell, so it shows in Outlook too.
+        $realLink = (bool) preg_match( '#^https?://#i', $link );
+        $h       .= '<tr><td align="center" style="padding:28px 32px 8px 32px;">';
+        if ( $realLink ) {
+            $h .= '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="' . self::COLOR_ACCENT . '" style="border-radius:6px;background:' . self::COLOR_ACCENT . ';">'
+                . '<a href="' . $e( $link ) . '" target="_blank" style="display:inline-block;padding:14px 28px;font-size:17px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:6px;' . $font . '">' . $e( $button ) . '</a>'
+                . '</td></tr></table>';
+            $h .= '<div style="margin-top:12px;font-size:13px;line-height:1.5;word-break:break-all;' . $muted . $font . '">Button not working? Open this link: <a href="' . $e( $link ) . '" style="color:' . self::COLOR_ACCENT . ';">' . $e( $link ) . '</a></div>';
+        } else {
+            // A preview of an invoice not created yet: no link to go to.
+            $h .= '<div style="display:inline-block;padding:14px 28px;font-size:17px;font-weight:600;color:#ffffff;background:#9ca3af;border-radius:6px;' . $font . '">' . $e( $button ) . '</div>';
+            $h .= '<div style="margin-top:12px;font-size:13px;' . $muted . $font . '">' . $e( $link ) . '</div>';
+        }
+        $h .= '</td></tr>';
+
+        // Paying by check.
+        $remittance = trim( (string) ( $in['remittance'] ?? '' ) );
+        if ( $remittance !== '' ) {
+            $h .= '<tr><td style="padding:20px 32px 0 32px;font-size:15px;line-height:1.6;color:' . self::COLOR_TEXT . ';' . $font . '"><strong>Prefer to pay by check?</strong> Mail it to:<br>' . nl2br( $e( $remittance ) ) . '</td></tr>';
+        }
+
+        // Sign-off.
+        $h .= '<tr><td style="padding:24px 32px 32px 32px;' . $font . '">' . self::text_to_html( $closing ) . '</td></tr>';
+
+        $h .= '</table>';
+        if ( $site !== '' || $siteUrl !== '' ) {
+            $h .= '<div style="max-width:600px;margin:16px auto 0 auto;font-size:12px;line-height:1.5;text-align:center;' . $muted . $font . '">'
+                . $e( $site )
+                . ( $siteUrl !== '' ? ( $site !== '' ? ' &middot; ' : '' ) . '<a href="' . $e( $siteUrl ) . '" style="' . $muted . '">' . $e( preg_replace( '#^https?://#', '', rtrim( $siteUrl, '/' ) ) ) . '</a>' : '' )
+                . '</div>';
+        }
+        $h .= '</td></tr></table></body></html>';
+        return $h;
     }
 
     // -------------------------------------------------------------------------

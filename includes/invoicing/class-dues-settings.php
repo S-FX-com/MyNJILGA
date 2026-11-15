@@ -78,6 +78,9 @@ class MyNJILGA_Dues_Settings {
                 'email_subject'            => '',
                 'email_intro'              => '',
                 'email_closing'            => '',
+                'email_heading'            => '',
+                'email_button'             => '',
+                'email_logo_url'           => '',
                 'downgrade_remove_roles'   => true,
                 // Confirmed by NJILGA 2026-08: joining is an approval process and
                 // the approved applicant is invoiced right away.

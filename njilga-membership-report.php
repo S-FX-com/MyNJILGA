@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, a member-facing dues status and membership overview, a public firm renewal lookup, a Dues History tab on FluentCRM contacts and companies, and tools to bring earlier years' dues in from PMPro or a spreadsheet — driven entirely from FluentCRM tags on the local install.
- * Version:     3.23.0
+ * Version:     3.25.1
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -79,6 +79,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-creator.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-create-progress.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-email-run.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-reissue.php';
+require_once NJILGA_REPORT_DIR . 'includes/ai/class-abilities.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-email.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-role-sync.php';
@@ -179,6 +180,8 @@ add_action( 'admin_init', [ 'MyNJILGA_Stripe_Connection', 'maybe_sync_webhook_ev
 MyNJILGA_Invoice_Creator::register();
 MyNJILGA_Create_Progress::register();
 MyNJILGA_Email_Run::register();
+// Read-only invoicing tools for AI assistants (Abilities API + MCP Adapter).
+MyNJILGA_Abilities::boot();
 
 // Stripe webhook receiver — registers its own REST route (rest_api_init)
 // and its Action Scheduler processing hook; must run on every request so

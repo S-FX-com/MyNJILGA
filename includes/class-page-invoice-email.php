@@ -29,7 +29,7 @@ class MyNJILGA_Page_Invoice_Email {
     const ACTION_SUBMIT = 'my_njilga_email_submit';
 
     /** The `general` settings this tab owns (tests/SettingsTabsTest.php checks every setting has exactly one home). */
-    const KEYS = [ 'send_cc_mode', 'send_cc_emails', 'send_reply_to', 'email_subject', 'email_intro', 'email_closing' ];
+    const KEYS = [ 'send_cc_mode', 'send_cc_emails', 'send_reply_to', 'email_subject', 'email_intro', 'email_closing', 'email_heading', 'email_button', 'email_logo_url' ];
 
     /** The longest an email address can be (RFC 5321). A longer one is rejected, never truncated. */
     const MAX_ADDRESS = 254;
@@ -108,6 +108,9 @@ class MyNJILGA_Page_Invoice_Email {
             'subject'   => (string) $g['email_subject'],
             'intro'     => (string) $g['email_intro'],
             'closing'   => (string) $g['email_closing'],
+            'heading'   => (string) ( $g['email_heading'] ?? '' ),
+            'button'    => (string) ( $g['email_button'] ?? '' ),
+            'logo_url'  => (string) ( $g['email_logo_url'] ?? '' ),
             'to'        => '',
             'firm'      => MyNJILGA_Invoice_Email::SAMPLE_FIRM,
         ];
@@ -243,15 +246,21 @@ class MyNJILGA_Page_Invoice_Email {
         echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
         echo '<tr><th scope="row"><label for="em-subject">Subject</label></th><td>';
         printf( '<input type="text" id="em-subject" name="subject" value="%s" class="large-text" maxlength="%d" placeholder="%s"></td></tr>', esc_attr( $v['subject'] ), (int) MyNJILGA_Invoice_Email::MAX_SUBJECT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'subject' ) ) );
+        echo '<tr><th scope="row"><label for="em-heading">Heading</label></th><td>';
+        printf( '<input type="text" id="em-heading" name="heading" value="%s" class="large-text" maxlength="%d" placeholder="%s"><p class="njilga-help">The large title under the logo.</p></td></tr>', esc_attr( $v['heading'] ), (int) MyNJILGA_Invoice_Email::MAX_SUBJECT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'heading' ) ) );
         echo '<tr><th scope="row"><label for="em-intro">Opening</label></th><td>';
         printf( '<textarea id="em-intro" name="intro" rows="4" class="large-text" maxlength="%d" placeholder="%s">%s</textarea><p class="njilga-help">The greeting and the sentence giving the total.</p></td></tr>', (int) MyNJILGA_Invoice_Email::MAX_TEXT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'intro' ) ), esc_textarea( $v['intro'] ) );
         echo '<tr><th scope="row"><label for="em-closing">Sign-off</label></th><td>';
         printf( '<textarea id="em-closing" name="closing" rows="3" class="large-text" maxlength="%d" placeholder="%s">%s</textarea></td></tr>', (int) MyNJILGA_Invoice_Email::MAX_TEXT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'closing' ) ), esc_textarea( $v['closing'] ) );
+        echo '<tr><th scope="row"><label for="em-button">Pay button</label></th><td>';
+        printf( '<input type="text" id="em-button" name="button" value="%s" class="regular-text" maxlength="%d" placeholder="%s"><p class="njilga-help">It opens the firm\'s own invoice in Stripe, where they pay by card or bank transfer.</p></td></tr>', esc_attr( $v['button'] ), (int) MyNJILGA_Invoice_Email::MAX_SUBJECT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'button' ) ) );
+        echo '<tr><th scope="row"><label for="em-logo">Logo image</label></th><td>';
+        printf( '<input type="url" id="em-logo" name="logo_url" value="%s" class="large-text" placeholder="%s"><p class="njilga-help">The address of the image at the top of the email (Media Library → the image → Copy URL). Blank = the site\'s own logo.</p></td></tr>', esc_attr( $v['logo_url'] ), esc_attr( MyNJILGA_Invoice_Sender::logo_url( [ 'logo_url' => '' ] ) ) );
         echo '<tr><th scope="row">Merge tags</th><td><p class="njilga-help">You can use these in any of the three:</p><ul class="njilga-timeline">';
         foreach ( MyNJILGA_Invoice_Email::TAGS as $tag => $what ) {
             printf( '<li><code>{%s}</code> — %s</li>', esc_html( $tag ), esc_html( $what ) );
         }
-        echo '</ul><p class="njilga-help">The same wording is used for every invoice email, including a separate assessment invoice if you bill assessments separately — use <code>{invoice}</code> to name which one it is. Plain text only.</p></td></tr>';
+        echo '</ul><p class="njilga-help">The same wording is used for every invoice email, including a separate assessment invoice if you bill assessments separately — use <code>{invoice}</code> to name which one it is.</p><p class="njilga-help">The email is sent formatted (with a plain-text copy for mail apps that don\'t show formatting). In the Opening and Sign-off: a blank line starts a new paragraph, a line starting with <code>- </code> becomes a bullet, <code>**words**</code> are bold, and web addresses become links.</p></td></tr>';
         echo '</tbody></table></div>';
     }
 
@@ -307,6 +316,7 @@ class MyNJILGA_Page_Invoice_Email {
     private static function message_for( array $v, int $year, bool $live ): array {
         $override = [
             'subject' => $v['subject'], 'intro' => $v['intro'], 'closing' => $v['closing'],
+            'heading' => $v['heading'], 'button' => $v['button'], 'logo_url' => $v['logo_url'],
             'cc_mode' => $v['cc_mode'], 'cc_emails' => $v['cc_emails'], 'reply_to' => $v['reply_to'],
         ];
         if ( ctype_digit( $v['firm'] ) && (int) $v['firm'] > 0 ) {
@@ -361,9 +371,18 @@ class MyNJILGA_Page_Invoice_Email {
         $s['general']['email_subject']  = $v['subject'];
         $s['general']['email_intro']    = $v['intro'];
         $s['general']['email_closing']  = $v['closing'];
+        $s['general']['email_heading']  = $v['heading'];
+        $s['general']['email_button']   = $v['button'];
+        $s['general']['email_logo_url'] = $v['logo_url'];
         MyNJILGA_Dues_Settings::save( $s );
         delete_transient( self::draft_key() );
         self::back( [ 'msg' => 'saved', 'firm' => $v['firm'] ] );
+    }
+
+    /** An http(s) image URL for the email's logo, or '' (= the site's own logo). */
+    private static function clean_logo_url( string $raw ): string {
+        $url = esc_url_raw( trim( $raw ), [ 'http', 'https' ] );
+        return strlen( $url ) <= 1000 ? $url : '';
     }
 
     /**
@@ -382,6 +401,9 @@ class MyNJILGA_Page_Invoice_Email {
             'subject'   => MyNJILGA_Invoice_Email::clean( 'subject', (string) ( $in['subject'] ?? '' ) ),
             'intro'     => MyNJILGA_Invoice_Email::clean( 'intro', (string) ( $in['intro'] ?? '' ) ),
             'closing'   => MyNJILGA_Invoice_Email::clean( 'closing', (string) ( $in['closing'] ?? '' ) ),
+            'heading'   => MyNJILGA_Invoice_Email::clean( 'heading', (string) ( $in['heading'] ?? '' ) ),
+            'button'    => MyNJILGA_Invoice_Email::clean( 'button', (string) ( $in['button'] ?? '' ) ),
+            'logo_url'  => self::clean_logo_url( (string) ( $in['logo_url'] ?? '' ) ),
             // EXACTLY as typed, never run through sanitize_text_field(): that deletes percent-encoded octets, so the valid
             // address "john%20doe@x.com" would become "johndoe@x.com" and the test would go to someone else. It is
             // validated by typed_address() when a test is sent and escaped where it is shown. The cap below only keeps
@@ -421,7 +443,11 @@ class MyNJILGA_Page_Invoice_Email {
                 $headers[] = $h;
             }
         }
-        $sent = wp_mail( $to, '[TEST] ' . (string) $m['subject'], self::test_banner( $to, $m, ! empty( $m['sample'] ) ) . "\n\n" . (string) $m['body'], $headers );
+        try {
+            $sent = MyNJILGA_Invoice_Sender::deliver( $to, '[TEST] ' . (string) $m['subject'], $m, $headers, self::test_banner( $to, $m, ! empty( $m['sample'] ) ) );
+        } catch ( \Throwable $e ) {
+            $sent = false;
+        }
         self::back( [ 'draft' => '1', 'firm' => $v['firm'], 'msg' => $sent ? 'test_sent' : 'test_failed', 'to' => $to ] );
     }
 

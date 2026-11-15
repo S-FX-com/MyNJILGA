@@ -140,6 +140,25 @@ class MyNJILGA_Stripe_Events_Table {
      * @param bool|null $livemode null = both modes.
      * @return array<int,object>
      */
+    /**
+     * The events about one invoice row — matched by the row id the plugin
+     * recorded, or by its Stripe invoice id — newest first. For the
+     * read-only AI tools (MyNJILGA_Abilities).
+     *
+     * @return array<int,object>
+     */
+    public static function for_invoice( int $rowId, string $stripeInvoiceId, int $limit = 50 ): array {
+        global $wpdb;
+        $table = self::table_name();
+        $limit = max( 1, min( 100, $limit ) );
+        if ( $stripeInvoiceId !== '' ) {
+            $sql = $wpdb->prepare( "SELECT * FROM $table WHERE invoice_row_id = %d OR object_id = %s ORDER BY id DESC LIMIT %d", $rowId, $stripeInvoiceId, $limit ); // phpcs:ignore
+        } else {
+            $sql = $wpdb->prepare( "SELECT * FROM $table WHERE invoice_row_id = %d ORDER BY id DESC LIMIT %d", $rowId, $limit ); // phpcs:ignore
+        }
+        return (array) $wpdb->get_results( $sql ); // phpcs:ignore
+    }
+
     public static function recent( int $limit = self::RECENT_LIMIT, ?bool $livemode = null ): array {
         global $wpdb;
         $table = self::table_name();

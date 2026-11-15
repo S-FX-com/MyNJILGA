@@ -487,6 +487,7 @@ class MyNJILGA_Admin_UI {
 .njilga-emailsample{white-space:pre-wrap;word-break:break-word;background:var(--muted);border:1px solid var(--border);
   border-radius:var(--radius-control);padding:14px 16px;font-size:13px;line-height:1.55;max-width:780px;
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.njilga-email-frame{display:block;width:100%;max-width:680px;height:900px;border:1px solid var(--border);border-radius:var(--radius-control);background:#f4f4f5;margin:4px 0 12px}
 .njilga-emailmeta{font-size:13px;line-height:1.7;margin:0 0 8px}
 .njilga-timeline li{margin:4px 0;font-size:13px}
 

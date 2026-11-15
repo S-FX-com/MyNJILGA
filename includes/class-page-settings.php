@@ -213,6 +213,7 @@ class MyNJILGA_Page_Settings {
 
         if ( $tab === 'advanced' ) {
             self::render_reset_card();
+            MyNJILGA_Abilities::render_settings_card();
         }
     }
 

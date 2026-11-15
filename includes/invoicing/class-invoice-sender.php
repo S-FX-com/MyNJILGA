@@ -67,8 +67,8 @@ class MyNJILGA_Invoice_Sender {
 
         $covers = MyNJILGA_Dues_Roster::email_summary( $members, $duesYear, $kind );
 
-        $tpl = array_merge( MyNJILGA_Invoice_Email::settings(), array_intersect_key( (array) $override, [ 'subject' => 1, 'intro' => 1, 'closing' => 1 ] ) );
-        $msg = MyNJILGA_Invoice_Email::build( [
+        $tpl = array_merge( MyNJILGA_Invoice_Email::settings(), array_intersect_key( (array) $override, array_flip( array_keys( MyNJILGA_Invoice_Email::FIELDS ) ) ) );
+        $in  = [
             'is_assessment'    => $isAssess,
             'year'             => $duesYear,
             'firm'             => $firm,
@@ -82,13 +82,32 @@ class MyNJILGA_Invoice_Sender {
             'subject_tpl'      => $tpl['subject'],
             'intro_tpl'        => $tpl['intro'],
             'closing_tpl'      => $tpl['closing'],
-        ] );
+        ];
+        $msg = MyNJILGA_Invoice_Email::build( $in );
+
+        // The HTML version: the same content, plus the invoice's lines as a
+        // table, its number and due date, the logo and the custom heading
+        // and button wording.
+        $lines   = MyNJILGA_Dues_Roster::email_rows( $members, $duesYear, $kind );
+        $htmlIn  = $in + [
+            'rows'           => $lines['rows'],
+            'covers_note'    => $lines['note'],
+            'invoice_number' => (string) ( $invoiceRow->gateway_invoice_number ?? '' ),
+            'due_date'       => self::due_date( (string) ( $invoiceRow->due_date ?? '' ) ),
+            'logo_url'       => self::logo_url( $override ),
+            'site_name'      => function_exists( 'get_bloginfo' ) ? (string) get_bloginfo( 'name' ) : '',
+            'site_url'       => function_exists( 'home_url' ) ? (string) home_url( '/' ) : '',
+            'heading_tpl'    => (string) ( $tpl['heading'] ?? '' ),
+            'button_tpl'     => (string) ( $tpl['button'] ?? '' ),
+        ];
 
         return [
             'ok'         => true,
             'to'         => (string) $billTo['email'],
             'subject'    => $msg['subject'],
             'body'       => $msg['body'],
+            'html'       => MyNJILGA_Invoice_Email::build_html( $htmlIn ),
+            'html_in'    => $htmlIn,
             'headers'    => self::headers( $billTo['email'], $members, $override ),
             'bill_to'    => $billTo,
             'dues_year'  => $duesYear,
@@ -140,7 +159,7 @@ class MyNJILGA_Invoice_Sender {
         $handedOffBefore = function_exists( 'did_action' ) ? did_action( 'wp_mail_succeeded' ) : 0;
         $thrown          = null;
         try {
-            $mailed = wp_mail( $m['to'], $m['subject'], $m['body'], $m['headers'] );
+            $mailed = self::deliver( (string) $m['to'], (string) $m['subject'], $m, (array) $m['headers'] );
         } catch ( \Throwable $e ) {
             $mailed = false;
             $thrown = $e;
@@ -198,6 +217,70 @@ class MyNJILGA_Invoice_Sender {
         );
 
         return $warning !== '' ? [ 'ok' => true, 'warning' => $warning ] : [ 'ok' => true ];
+    }
+
+    /**
+     * Send a composed invoice email: the HTML version, with the plain-text
+     * version attached for mail apps that don't show HTML. Every path uses
+     * this — the real send, and the tests and samples staff send
+     * themselves, which pass a $banner ("TEST — …") shown at the top of
+     * both versions. May throw (a mail plugin); callers handle that.
+     *
+     * @param array<string,mixed> $m       compose()'s result
+     * @param array<int,string>   $headers
+     */
+    public static function deliver( string $to, string $subject, array $m, array $headers, string $banner = '' ): bool {
+        $html = isset( $m['html_in'] ) ? MyNJILGA_Invoice_Email::build_html( (array) $m['html_in'] + [ 'banner' => $banner ] ) : '';
+        $text = ( $banner !== '' ? $banner . "\n\n" : '' ) . (string) ( $m['body'] ?? '' );
+        if ( $html === '' ) {
+            return wp_mail( $to, $subject, $text, $headers );
+        }
+        $headers[] = 'Content-Type: text/html; charset=UTF-8';
+        // wp_mail() clears AltBody before it fires phpmailer_init, so this is
+        // the moment to add the plain-text part — for this message only.
+        $alt = static function ( $phpmailer ) use ( $text ): void {
+            $phpmailer->AltBody = $text;
+        };
+        add_action( 'phpmailer_init', $alt );
+        try {
+            return wp_mail( $to, $subject, $html, $headers );
+        } finally {
+            remove_action( 'phpmailer_init', $alt );
+        }
+    }
+
+    /** "December 31, 2026" from a Y-m-d, or '' when there's none. */
+    private static function due_date( string $ymd ): string {
+        if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}/', $ymd ) || strpos( $ymd, '0000' ) === 0 ) {
+            return '';
+        }
+        $ts = strtotime( substr( $ymd, 0, 10 ) . ' 12:00:00' );
+        if ( ! $ts ) {
+            return '';
+        }
+        return function_exists( 'date_i18n' ) ? date_i18n( 'F j, Y', $ts ) : gmdate( 'F j, Y', $ts );
+    }
+
+    /**
+     * The logo at the top of the HTML email: the one set on the Invoice
+     * Email tab, else the site's own logo, else its site icon; '' = the
+     * site name in text.
+     *
+     * @param array<string,string>|null $override unsaved Invoice Email edits (logo_url)
+     */
+    public static function logo_url( ?array $override = null ): string {
+        $set = trim( (string) ( $override['logo_url'] ?? ( class_exists( 'MyNJILGA_Dues_Settings' ) ? MyNJILGA_Dues_Settings::general( 'email_logo_url', '' ) : '' ) ) );
+        if ( $set !== '' ) {
+            return $set;
+        }
+        if ( function_exists( 'get_theme_mod' ) && function_exists( 'wp_get_attachment_image_url' ) ) {
+            $id  = (int) get_theme_mod( 'custom_logo' );
+            $url = $id > 0 ? (string) wp_get_attachment_image_url( $id, 'full' ) : '';
+            if ( $url !== '' ) {
+                return $url;
+            }
+        }
+        return function_exists( 'get_site_icon_url' ) ? (string) get_site_icon_url( 256 ) : '';
     }
 
     /**

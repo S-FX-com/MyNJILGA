@@ -176,6 +176,43 @@ class MyNJILGA_Dues_Roster {
         );
     }
 
+    /**
+     * PURE: the invoice's lines for the HTML email's summary card — the
+     * same people, charges and wording as email_summary(), one row per
+     * charge, the person's name on their first.
+     *
+     * @param array<int,array<string,mixed>> $members
+     * @return array{rows:array<int,array{name:string,item:string,amount:string}>,note:string}
+     */
+    public static function email_rows( array $members, int $duesYear, string $invoiceKind = MyNJILGA_Dues_Snapshot::KIND_COMBINED ): array {
+        $rows = [];
+        foreach ( $members as $m ) {
+            $name  = (string) ( $m['name'] ?? '' );
+            $first = true;
+            $add   = static function ( string $item, string $amount ) use ( &$rows, &$first, $name ): void {
+                $rows[] = [ 'name' => $first ? $name : '', 'item' => $item, 'amount' => $amount ];
+                $first  = false;
+            };
+            $dues = (int) ( $m['dues_cents'] ?? 0 );
+            $fee  = (int) ( $m['assessment_cents'] ?? 0 );
+            if ( $invoiceKind !== MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT ) {
+                $category = (string) ( $m['category_label'] ?? 'Membership dues' );
+                if ( $dues > 0 ) {
+                    $add( $category . ( ! empty( $m['tier_label'] ) ? ' (' . $m['tier_label'] . ')' : '' ), self::money( $dues ) );
+                } else {
+                    $add( 'No charge — ' . self::no_charge_reason( $m ), self::money( 0 ) );
+                }
+            }
+            if ( $fee > 0 ) {
+                $add( (string) ( $m['assessment_label'] ?? 'Assessment' ) . ( ! empty( $m['assessment_qualifier'] ) ? ' (' . $m['assessment_qualifier'] . ')' : '' ), self::money( $fee ) );
+            }
+        }
+        $note = $invoiceKind === MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT
+            ? sprintf( 'Paying this invoice settles the %d assessment for everyone listed above.', $duesYear )
+            : sprintf( 'Paying this invoice marks everyone listed above as current for %d.', $duesYear );
+        return [ 'rows' => $rows, 'note' => $members ? $note : '' ];
+    }
+
     public static function money( int $cents ): string {
         return '$' . number_format( $cents / 100, 2 );
     }
