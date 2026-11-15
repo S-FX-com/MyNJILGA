@@ -141,6 +141,20 @@ class MyNJILGA_Stripe_Events_Table {
      * @return array<int,object>
      */
     /**
+     * The invoice row a Stripe object (an invoice id) was last recorded
+     * against, or 0 — how a reissued invoice's old Stripe id is traced
+     * back to its row when it predates the retired-invoice map.
+     */
+    public static function row_for_object( string $objectId ): int {
+        if ( $objectId === '' ) {
+            return 0;
+        }
+        global $wpdb;
+        $table = self::table_name();
+        return (int) $wpdb->get_var( $wpdb->prepare( "SELECT invoice_row_id FROM $table WHERE object_id = %s AND invoice_row_id IS NOT NULL AND invoice_row_id > 0 ORDER BY id DESC LIMIT 1", $objectId ) ); // phpcs:ignore
+    }
+
+    /**
      * The events about one invoice row — matched by the row id the plugin
      * recorded, or by its Stripe invoice id — newest first. For the
      * read-only AI tools (MyNJILGA_Abilities).

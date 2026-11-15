@@ -234,7 +234,7 @@ class MyNJILGA_Abilities {
 
             'my-njilga/get-invoice' => [
                 'label'         => 'Get one invoice in full',
-                'description'   => 'One invoice row by its id (from list-firm-invoices) or by its Stripe invoice id / number: its status, every timestamp (created, approved, queued, sent, finalized, paid, voided, synced…), amounts, the error on it, its roster size, whether it can be issued again after a void, and whether its Stripe invoice was retired by a reissue. Read-only.',
+                'description'   => 'One invoice row by its id (from list-firm-invoices) or by its Stripe invoice id / number: its status, every timestamp (created, approved, queued, sent, finalized, paid, voided, synced…), amounts, the error on it, its roster size, whether it can be issued again after a void. An old Stripe invoice that was voided and issued again is traced to its firm\'s invoice (stripe_invoice_retired, with a note). Read-only.',
                 'input_schema'  => [
                     'type' => 'object',
                     'properties' => [
@@ -248,6 +248,7 @@ class MyNJILGA_Abilities {
                     'properties' => [
                         'found'   => $bool,
                         'invoice' => [ 'type' => [ 'object', 'null' ] ],
+                        'note'    => $strN,
                     ],
                 ],
                 'execute_callback' => [ __CLASS__, 'get_invoice' ],
@@ -387,25 +388,38 @@ class MyNJILGA_Abilities {
 
     /** @param array<string,mixed>|null $in */
     public static function get_invoice( $in = null ): array {
-        $row = null;
-        $id  = (int) ( $in['invoice_id'] ?? 0 );
+        $row     = null;
+        $retired = false;
+        $id      = (int) ( $in['invoice_id'] ?? 0 );
+        $ref     = trim( (string) ( $in['stripe_invoice'] ?? '' ) );
         if ( $id > 0 ) {
             $row = MyNJILGA_Dues_Invoice_Table::get( $id );
-        } else {
-            $ref = trim( (string) ( $in['stripe_invoice'] ?? '' ) );
-            if ( $ref !== '' ) {
-                $row = MyNJILGA_Dues_Invoice_Table::get_by_order_id( $ref ) ?: self::find_by_number( $ref );
+        } elseif ( $ref !== '' ) {
+            $row = MyNJILGA_Dues_Invoice_Table::get_by_order_id( $ref ) ?: self::find_by_number( $ref );
+            if ( ! $row ) {
+                // A Stripe invoice voided and then issued again no longer sits
+                // on its row: trace it through the retired-invoice map, else
+                // (a reissue from before that map) the webhook history.
+                $rowId = MyNJILGA_Dues_Invoice_Table::retired_invoice_row( $ref ) ?: MyNJILGA_Stripe_Events_Table::row_for_object( $ref );
+                $row   = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
+                $retired = (bool) $row;
             }
         }
         if ( ! $row ) {
-            return [ 'found' => false, 'invoice' => null ];
+            return [ 'found' => false, 'invoice' => null, 'note' => null ];
         }
         $detail = self::invoice_detail( $row );
         $why    = class_exists( 'MyNJILGA_Invoice_Reissue' ) ? MyNJILGA_Invoice_Reissue::refusal( $row ) : 'n/a';
-        $detail['can_issue_again']    = $why === '';
-        $detail['issue_again_reason'] = $why === '' ? null : $why;
-        $detail['stripe_invoice_retired'] = MyNJILGA_Dues_Invoice_Table::is_retired_invoice_id( (string) ( $row->gateway_invoice_id ?? '' ) );
-        return [ 'found' => true, 'invoice' => $detail ];
+        $detail['can_issue_again']        = $why === '';
+        $detail['issue_again_reason']     = $why === '' ? null : $why;
+        $detail['stripe_invoice_retired'] = $retired;
+        return [
+            'found'   => true,
+            'invoice' => $detail,
+            'note'    => $retired
+                ? sprintf( 'Stripe invoice %s was voided and this firm\'s invoice was issued again. Shown: the invoice row it belonged to, as it is now (its new Stripe invoice, if created yet, is stripe_invoice). The old one stays voided in Stripe.', $ref )
+                : null,
+        ];
     }
 
     /** @param array<string,mixed>|null $in */
