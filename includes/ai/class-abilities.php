@@ -142,7 +142,7 @@ class MyNJILGA_Abilities {
             self::ROUTE,
             'My NJILGA invoicing (read-only)',
             'Read-only diagnostics for NJILGA dues invoices: firms, invoice history, Stripe webhook events, firm notes and Stripe health. Nothing here changes data or sends email.',
-            defined( 'NJILGA_REPORT_VERSION' ) ? (string) NJILGA_REPORT_VERSION : '1.0.0',
+            self::plugin_version(),
             [ '\\WP\\MCP\\Transport\\HttpTransport' ],
             $errorHandler,
             null,
@@ -153,6 +153,14 @@ class MyNJILGA_Abilities {
                 return current_user_can( self::CAP );
             }
         );
+    }
+
+    /** The plugin's Version header — the one place it is kept. */
+    private static function plugin_version(): string {
+        $data = function_exists( 'get_file_data' ) && defined( 'NJILGA_REPORT_DIR' )
+            ? get_file_data( NJILGA_REPORT_DIR . 'njilga-membership-report.php', [ 'Version' => 'Version' ] )
+            : [];
+        return (string) ( $data['Version'] ?? '' ) !== '' ? (string) $data['Version'] : '1.0.0';
     }
 
     /** The REST URL Claude connects to. */
@@ -433,7 +441,7 @@ class MyNJILGA_Abilities {
                 $out[] = [
                     'title' => self::redact( (string) ( $n->title ?? '' ) ),
                     'text'  => self::redact( wp_strip_all_tags( (string) ( $n->description ?? '' ) ) ),
-                    'by'    => $user ? (string) $user->display_name : null,
+                    'by'    => $user ? self::redact( (string) $user->display_name ) : null,
                     'at'    => self::nullable( $n->created_at ?? null ),
                 ];
             }
@@ -501,7 +509,8 @@ class MyNJILGA_Abilities {
             'kind'           => (string) ( $row->invoice_kind ?? '' ),
             'status'         => (string) ( $row->status ?? '' ),
             'stage'          => self::stage( $row ),
-            'bill_to'        => (string) $billTo['name'],
+            // A contact with no name on file is named by their email: redacted like any other.
+            'bill_to'        => self::redact( (string) $billTo['name'] ),
             'total_cents'    => (int) ( $row->total_amount_cents ?? 0 ),
             'stripe_invoice' => self::nullable( $row->gateway_invoice_id ?? null ),
             'stripe_number'  => self::nullable( $row->gateway_invoice_number ?? null ),

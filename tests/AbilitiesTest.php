@@ -43,6 +43,14 @@ class AbilitiesTest extends NJILGA_TestCase {
         $this->assertTrue( strpos( $json, '[email]' ) !== false, 'the email in the error is redacted, the error kept' );
     }
 
+    /** A contact with no name on file is named by their email in the snapshot — it is redacted too. */
+    public function testABillToNamedByEmailIsRedacted(): void {
+        $snap = json_decode( $this->row()->roster_snapshot, true );
+        $snap['bill_to']['name'] = 'nameless@firm.test';
+        $s = MyNJILGA_Abilities::invoice_summary( $this->row( [ 'roster_snapshot' => json_encode( $snap ) ] ) );
+        $this->assertSame( '[email]', $s['bill_to'] );
+    }
+
     public function testTheDetailCarriesWhatADiagnosisNeeds(): void {
         $d = MyNJILGA_Abilities::invoice_detail( $this->row() );
         $this->assertSame( 'voided', $d['status'] );
