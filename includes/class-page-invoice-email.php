@@ -247,15 +247,15 @@ class MyNJILGA_Page_Invoice_Email {
         echo '<tr><th scope="row"><label for="em-subject">Subject</label></th><td>';
         printf( '<input type="text" id="em-subject" name="subject" value="%s" class="large-text" maxlength="%d" placeholder="%s"></td></tr>', esc_attr( $v['subject'] ), (int) MyNJILGA_Invoice_Email::MAX_SUBJECT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'subject' ) ) );
         echo '<tr><th scope="row"><label for="em-heading">Heading</label></th><td>';
-        printf( '<input type="text" id="em-heading" name="heading" value="%s" class="large-text" maxlength="%d" placeholder="%s"><p class="njilga-help">The large title under the logo.</p></td></tr>', esc_attr( $v['heading'] ), (int) MyNJILGA_Invoice_Email::MAX_SUBJECT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'heading' ) ) );
+        printf( '<input type="text" id="em-heading" name="heading" value="%s" class="large-text" maxlength="%d" placeholder="%s"><p class="njilga-help">The large title under the header image.</p></td></tr>', esc_attr( $v['heading'] ), (int) MyNJILGA_Invoice_Email::MAX_SUBJECT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'heading' ) ) );
         echo '<tr><th scope="row"><label for="em-intro">Opening</label></th><td>';
         printf( '<textarea id="em-intro" name="intro" rows="4" class="large-text" maxlength="%d" placeholder="%s">%s</textarea><p class="njilga-help">The greeting and the sentence giving the total.</p></td></tr>', (int) MyNJILGA_Invoice_Email::MAX_TEXT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'intro' ) ), esc_textarea( $v['intro'] ) );
         echo '<tr><th scope="row"><label for="em-closing">Sign-off</label></th><td>';
         printf( '<textarea id="em-closing" name="closing" rows="3" class="large-text" maxlength="%d" placeholder="%s">%s</textarea></td></tr>', (int) MyNJILGA_Invoice_Email::MAX_TEXT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'closing' ) ), esc_textarea( $v['closing'] ) );
         echo '<tr><th scope="row"><label for="em-button">Pay button</label></th><td>';
         printf( '<input type="text" id="em-button" name="button" value="%s" class="regular-text" maxlength="%d" placeholder="%s"><p class="njilga-help">It opens the firm\'s own invoice in Stripe, where they pay by card or bank transfer.</p></td></tr>', esc_attr( $v['button'] ), (int) MyNJILGA_Invoice_Email::MAX_SUBJECT, esc_attr( MyNJILGA_Invoice_Email::default_template( 'button' ) ) );
-        echo '<tr><th scope="row"><label for="em-logo">Logo image</label></th><td>';
-        printf( '<input type="url" id="em-logo" name="logo_url" value="%s" class="large-text" placeholder="%s"><p class="njilga-help">The address of the image at the top of the email (Media Library → the image → Copy URL). Blank = the site\'s own logo.</p></td></tr>', esc_attr( $v['logo_url'] ), esc_attr( MyNJILGA_Invoice_Sender::logo_url( [ 'logo_url' => '' ] ) ) );
+        echo '<tr><th scope="row"><label for="em-logo">Header image</label></th><td>';
+        printf( '<input type="url" id="em-logo" name="logo_url" value="%s" class="large-text" placeholder="%s"><p class="njilga-help">The image across the top of the email, shown the full width of the email (600px), so a wide image works best. Its address: Media Library → the image → Copy URL. Blank = the NJILGA header image.</p></td></tr>', esc_attr( $v['logo_url'] ), esc_attr( MyNJILGA_Invoice_Sender::logo_url( [ 'logo_url' => '' ] ) ) );
         echo '<tr><th scope="row">Merge tags</th><td><p class="njilga-help">You can use these in any of the three:</p><ul class="njilga-timeline">';
         foreach ( MyNJILGA_Invoice_Email::TAGS as $tag => $what ) {
             printf( '<li><code>{%s}</code> — %s</li>', esc_html( $tag ), esc_html( $what ) );
@@ -379,7 +379,7 @@ class MyNJILGA_Page_Invoice_Email {
         self::back( [ 'msg' => 'saved', 'firm' => $v['firm'] ] );
     }
 
-    /** An http(s) image URL for the email's logo, or '' (= the site's own logo). */
+    /** An http(s) image URL for the email's header image, or '' (= the NJILGA header image). */
     private static function clean_logo_url( string $raw ): string {
         $url = esc_url_raw( trim( $raw ), [ 'http', 'https' ] );
         return strlen( $url ) <= 1000 ? $url : '';
