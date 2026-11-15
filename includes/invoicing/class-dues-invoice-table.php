@@ -1047,9 +1047,10 @@ class MyNJILGA_Dues_Invoice_Table {
     /**
      * PURE: what the retired map keeps about the row a retired invoice
      * belonged to — enough to tell later whether a row with that id is
-     * still the same firm's invoice for the same year.
+     * still the same firm's invoice for the same year, and which of the
+     * firm's invoices took its place if it is gone.
      *
-     * @return array{row:int,company:int,year:int,live:int,at:string}
+     * @return array{row:int,company:int,year:int,live:int,kind:string,bill_to:int,mode:string,at:string}
      */
     public static function retired_entry( object $row, string $at ): array {
         return [
@@ -1057,6 +1058,9 @@ class MyNJILGA_Dues_Invoice_Table {
             'company' => (int) ( $row->fluentcrm_company_id ?? 0 ),
             'year'    => (int) ( $row->dues_year ?? 0 ),
             'live'    => empty( $row->livemode ) ? 0 : 1,
+            'kind'    => (string) ( $row->invoice_kind ?? '' ),
+            'bill_to' => (int) ( $row->bill_to_contact_id ?? 0 ),
+            'mode'    => (string) ( $row->billing_mode ?? '' ),
             'at'      => $at,
         ];
     }

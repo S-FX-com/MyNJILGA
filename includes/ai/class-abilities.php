@@ -480,6 +480,9 @@ class MyNJILGA_Abilities {
         if ( isset( $trace['year'] ) && (int) ( $row->dues_year ?? 0 ) !== (int) $trace['year'] ) {
             return false;
         }
+        if ( isset( $trace['kind'] ) && (string) ( $row->invoice_kind ?? '' ) !== (string) $trace['kind'] ) {
+            return false;
+        }
         $created = (string) ( $row->created_at ?? '' );
         $at      = (string) ( $trace['at'] ?? '' );
         return $created === '' || $at === '' || strcmp( $created, $at ) <= 0;
@@ -487,10 +490,14 @@ class MyNJILGA_Abilities {
 
     /**
      * PURE: the row a trace leads to — the row it names, if that still
-     * fits; otherwise, for a trace that knows the firm and year (the
-     * retired map's), the firm's one annual invoice for that year and
-     * mode — e.g. after Refresh Firms replaced the row for a new billing
-     * contact. Null when neither, or when the firm has more than one.
+     * fits; otherwise, for a trace that knows the firm, year and kind of
+     * invoice (the retired map's, from 3.25.5), the one invoice of that
+     * kind the firm has for that year and mode now — e.g. after Refresh
+     * Firms replaced the row for a new billing contact. Billed per
+     * member (individual / split-assessment), a row stands for one
+     * person, so it must also be the same billing contact; only a firm
+     * billed as a whole may have changed its contact. Null when none
+     * fits, or more than one does — never a guess.
      *
      * @param array<string,mixed> $trace
      * @param array<int,object>   $firmRows
@@ -499,15 +506,22 @@ class MyNJILGA_Abilities {
         if ( self::row_fits_trace( $byId, $trace ) ) {
             return $byId;
         }
-        if ( ! isset( $trace['company'], $trace['year'] ) || (int) $trace['company'] <= 0 ) {
+        if ( ! isset( $trace['company'], $trace['year'], $trace['kind'] ) || (int) $trace['company'] <= 0 || (string) $trace['kind'] === '' ) {
             return null;
         }
-        $live = (int) ( $trace['live'] ?? 1 );
-        $hits = array_values( array_filter( $firmRows, static function ( $r ) use ( $trace, $live ) {
-            return (int) ( $r->fluentcrm_company_id ?? 0 ) === (int) $trace['company']
-                && (int) ( $r->dues_year ?? 0 ) === (int) $trace['year']
-                && ( empty( $r->livemode ) ? 0 : 1 ) === $live
-                && (string) ( $r->invoice_kind ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN;
+        $live      = (int) ( $trace['live'] ?? 1 );
+        $firmWhole = (string) ( $trace['mode'] ?? '' ) === MyNJILGA_Dues_Settings::MODE_FIRM;
+        $hits      = array_values( array_filter( $firmRows, static function ( $r ) use ( $trace, $live, $firmWhole ) {
+            if ( (int) ( $r->fluentcrm_company_id ?? 0 ) !== (int) $trace['company']
+                || (int) ( $r->dues_year ?? 0 ) !== (int) $trace['year']
+                || ( empty( $r->livemode ) ? 0 : 1 ) !== $live
+                || (string) ( $r->invoice_kind ?? '' ) !== (string) $trace['kind'] ) {
+                return false;
+            }
+            if ( (int) ( $r->bill_to_contact_id ?? 0 ) === (int) ( $trace['bill_to'] ?? -1 ) ) {
+                return true;
+            }
+            return $firmWhole && (string) ( $r->billing_mode ?? '' ) === MyNJILGA_Dues_Settings::MODE_FIRM;
         } ) );
         return count( $hits ) === 1 ? $hits[0] : null;
     }
