@@ -1023,6 +1023,10 @@ class MyNJILGA_Page_Launch {
             }
             if ( ! empty( $res['ok'] ) ) {
                 $ok++;
+            } elseif ( isset( $res['claimed'] ) && $res['claimed'] === false ) {
+                // Another sender had it at the same moment: it went (or is
+                // going) out once from there — not a failure, no error.
+                continue;
             } else {
                 $fail++;
                 MyNJILGA_Dues_Invoice_Table::set_error( (int) $row->id, (string) ( $res['error'] ?? 'Unknown error' ) );

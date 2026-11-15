@@ -8,6 +8,7 @@ declare( strict_types=1 );
 
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-invoice-creator.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-email-run.php';
+require_once dirname( __DIR__ ) . '/includes/invoicing/class-invoice-sender.php';
 
 class EmailRunTest extends NJILGA_TestCase {
 
@@ -73,7 +74,7 @@ class EmailRunTest extends NJILGA_TestCase {
         $wpdb->reset();
         $this->assertSame( null, MyNJILGA_Dues_Invoice_Table::claim_for_email( $this->row( 1, 'created' ), self::NOW ), 'lost the race: do not send' );
         $sql = $wpdb->last_query();
-        foreach ( [ "SET status = 'sent'", 'WHERE id = 1', "AND status = 'created'" ] as $needle ) {
+        foreach ( [ "SET status = 'sent'", "last_error = 'Email started 2026-11-20 09:05:00", 'WHERE id = 1', "AND status = 'created'" ] as $needle ) {
             $this->assertTrue( strpos( $sql, $needle ) !== false, "Expected \"$needle\" in: $sql" );
         }
 
@@ -122,6 +123,29 @@ class EmailRunTest extends NJILGA_TestCase {
         foreach ( [ "SET status = 'created', sent_at = NULL", 'WHERE id = 1', "AND status = 'sent'", "AND sent_at = '2026-11-20 09:01:00'" ] as $needle ) {
             $this->assertTrue( strpos( $sql, $needle ) !== false, "Expected \"$needle\" in: $sql" );
         }
+    }
+
+    /** A failed wp_mail() that still reached the firm: the relay refused only some CCs, not the bill-to. */
+    public function testPartlyDelivered(): void {
+        $err = 'SMTP Error: The following recipients failed: typo@exampel.test: 550 No such domain';
+        $this->assertTrue( MyNJILGA_Invoice_Sender::partly_delivered( $err, 'owner@firm.test' ) );
+        $this->assertFalse( MyNJILGA_Invoice_Sender::partly_delivered( 'SMTP Error: The following recipients failed: owner@firm.test: 550', 'owner@firm.test' ), 'the firm itself was refused' );
+        $this->assertFalse( MyNJILGA_Invoice_Sender::partly_delivered( 'SMTP connect() failed.', 'owner@firm.test' ), 'nothing went' );
+        $this->assertFalse( MyNJILGA_Invoice_Sender::partly_delivered( '', 'owner@firm.test' ) );
+    }
+
+    /** A send that failed, or one that died mid-send, is never counted as sent — even with a sent_at inside the run. */
+    public function testFailedAndUnconfirmedSendsAreNeverCountedAsSent(): void {
+        $rows = [
+            $this->row( 1, 'sent', [ 'sent_at' => '2026-11-20 09:01:00', 'last_error' => 'Email not sent: wp_mail() failed' ] ),
+            $this->row( 2, 'sent', [ 'sent_at' => '2026-11-20 09:02:00', 'last_error' => MyNJILGA_Dues_Invoice_Table::claim_marker( '2026-11-20 09:02:00' ), 'queued_at' => '2026-11-20 07:00:00' ] ),
+            $this->row( 3, 'sent', [ 'sent_at' => '2026-11-20 09:03:00', 'last_error' => MyNJILGA_Dues_Invoice_Table::claim_marker( '2026-11-20 09:03:00' ), 'queued_at' => self::SINCE ] ),
+            $this->row( 4, 'sent', [ 'sent_at' => '2026-11-20 09:04:00', 'last_error' => 'Emailed, but the mail server refused some CC addresses — x' ] ),
+        ];
+        $p = MyNJILGA_Email_Run::progress( $rows, [ 1, 2, 3, 4 ], self::SINCE, self::NOW );
+        $this->assertSame( 2, $p['failed'], 'a failed resend, and a send that died' );
+        $this->assertSame( 1, $p['pending'], 'mid-send while its job is live' );
+        $this->assertSame( 1, $p['done'], 'sent, with a warning about a CC' );
     }
 
     public function testProgressIsReadFromTheRows(): void {

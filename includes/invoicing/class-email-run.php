@@ -36,6 +36,9 @@ class MyNJILGA_Email_Run {
     /** Emails per background job — small, so one slow mail server can't run a job past PHP's time limit. */
     const CHUNK = 10;
 
+    /** How a failed send from a run starts its row's last_error. */
+    const ERROR_PREFIX = 'Email not sent:';
+
     public static function register(): void {
         add_action( self::HOOK, [ __CLASS__, 'run_chunk' ], 10, 4 );
         add_action( 'wp_ajax_' . self::AJAX, [ __CLASS__, 'ajax' ] );
@@ -200,7 +203,7 @@ class MyNJILGA_Email_Run {
                 MyNJILGA_Dues_Invoice_Table::clear_queued( (int) $row->id );
                 $out['skipped']++;
             } else {
-                MyNJILGA_Dues_Invoice_Table::set_error( (int) $row->id, 'Email not sent: ' . (string) ( $r['error'] ?? 'unknown error' ) );
+                MyNJILGA_Dues_Invoice_Table::set_error( (int) $row->id, self::ERROR_PREFIX . ' ' . (string) ( $r['error'] ?? 'unknown error' ) );
                 $out['failed']++;
             }
         }
@@ -267,11 +270,21 @@ class MyNJILGA_Email_Run {
             $out['total']++;
             $sentAt = (string) ( $row->sent_at ?? '' );
             $queued = (string) ( $row->queued_at ?? '' );
-            if ( $sentAt !== '' && $sentAt >= $startedAt && $queued === '' ) {
-                $out['done']++;
-            } elseif ( (string) ( $row->last_error ?? '' ) !== '' ) {
+            $error  = (string) ( $row->last_error ?? '' );
+            $active = MyNJILGA_Invoice_Creator::is_actively_queued( $queued, $nowMysql );
+            if ( strpos( $error, self::ERROR_PREFIX ) === 0 ) {
+                // Checked before "done": a failed resend can carry a sent_at
+                // inside the run's window from before it.
                 $out['failed']++;
-            } elseif ( MyNJILGA_Invoice_Creator::is_actively_queued( $queued, $nowMysql ) ) {
+            } elseif ( strpos( $error, MyNJILGA_Dues_Invoice_Table::CLAIM_MARKER ) === 0 ) {
+                // Claimed for sending: mid-send while its job is live, else
+                // the send died before it could be confirmed.
+                $out[ $active ? 'pending' : 'failed' ]++;
+            } elseif ( $sentAt !== '' && $sentAt >= $startedAt && $queued === '' ) {
+                $out['done']++;
+            } elseif ( $error !== '' ) {
+                $out['failed']++;
+            } elseif ( $active ) {
                 $out['pending']++;
             } elseif ( $queued === '' ) {
                 $out['skipped']++;

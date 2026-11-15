@@ -253,7 +253,7 @@ class MyNJILGA_Launch_Schedule {
      * (no email on file) — which must not stop everyone else's.
      */
     public static function is_transport_failure( string $error ): bool {
-        return stripos( $error, 'wp_mail' ) !== false || stripos( $error, 'mail configuration' ) !== false;
+        return stripos( $error, 'wp_mail' ) !== false || stripos( $error, 'mail configuration' ) !== false || stripos( $error, 'mail system failed' ) !== false;
     }
 
     public static function is_open( string $status ): bool {
@@ -620,6 +620,12 @@ class MyNJILGA_Launch_Schedule {
                 if ( ! empty( $res['ok'] ) ) {
                     $sent++;
                     $consecutive = 0;
+                } elseif ( isset( $res['claimed'] ) && $res['claimed'] === false ) {
+                    // Another sender (an Invoicing email run, a hand-send)
+                    // had it at the same moment: not ours, not a failure,
+                    // and not an attempt that counts against it.
+                    unset( $attempts[ $id ] );
+                    continue;
                 } else {
                     $failed++;
                     $message = (string) ( $res['error'] ?? 'Unknown error' );
@@ -627,7 +633,7 @@ class MyNJILGA_Launch_Schedule {
                     $p['mark_error']( $id, $message );
                     // Only a MAIL problem counts toward halting; a firm with no
                     // email on file must not stop everyone else's invoice.
-                    $consecutive = self::is_transport_failure( $message ) ? $consecutive + 1 : 0;
+                    $consecutive = ( ! empty( $res['transport'] ) || self::is_transport_failure( $message ) ) ? $consecutive + 1 : 0;
                     if ( $consecutive >= self::MAX_CONSECUTIVE_FAILURES ) {
                         $stopped = 'failures';
                         break;
