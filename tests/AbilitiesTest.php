@@ -107,16 +107,34 @@ class AbilitiesTest extends NJILGA_TestCase {
         $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( $this->row( [ 'id' => 41, 'created_at' => '2027-01-05 08:00:00' ] ), $history ), 'a row created after the event is a reused id' );
     }
 
-    /** If the named row no longer fits, the firm's one invoice for that year is shown — never a guess between several. */
+    /** If the named row no longer fits, the firm's one invoice of that kind for that year is shown — never a guess. */
     public function testATraceFallsBackToTheFirmsOneInvoiceForThatYear(): void {
-        $trace    = [ 'row' => 41, 'company' => 12, 'year' => 2027, 'live' => 1, 'at' => '2026-11-14 09:00:00' ];
+        $trace    = [ 'row' => 41, 'company' => 12, 'year' => 2027, 'live' => 1, 'kind' => 'combined', 'bill_to' => 5, 'mode' => 'firm', 'at' => '2026-11-14 09:00:00' ];
         $same     = $this->row( [ 'id' => 41 ] );
-        $replaced = $this->row( [ 'id' => 77, 'created_at' => '2026-11-20 08:00:00' ] ); // Refresh Firms, new billing contact
+        $replaced = $this->row( [ 'id' => 77, 'bill_to_contact_id' => 6, 'created_at' => '2026-11-20 08:00:00' ] ); // Refresh Firms, new billing contact
         $this->assertSame( $same, MyNJILGA_Abilities::pick_traced_row( $trace, $same, [ $replaced ] ), 'the named row first' );
-        $this->assertSame( $replaced, MyNJILGA_Abilities::pick_traced_row( $trace, null, [ $replaced, $this->row( [ 'id' => 78, 'dues_year' => 2026 ] ), $this->row( [ 'id' => 79, 'invoice_kind' => MyNJILGA_Dues_Snapshot::KIND_JOIN ] ) ] ), 'the firm\'s one annual 2027 invoice' );
-        $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( $trace, null, [ $replaced, $this->row( [ 'id' => 80 ] ) ] ), 'two candidates: no guess' );
+        $this->assertSame( $replaced, MyNJILGA_Abilities::pick_traced_row( $trace, null, [ $replaced, $this->row( [ 'id' => 78, 'dues_year' => 2026 ] ), $this->row( [ 'id' => 79, 'invoice_kind' => MyNJILGA_Dues_Snapshot::KIND_JOIN ] ) ] ), 'billed as a whole: the firm\'s one 2027 invoice, whoever it is now addressed to' );
+        $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( $trace, null, [ $replaced, $this->row( [ 'id' => 80, 'bill_to_contact_id' => 7 ] ) ] ), 'two candidates: no guess' );
         $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( $trace, null, [] ) );
         $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( [ 'row' => 41, 'live' => 1, 'at' => '2026-11-13 18:02:12' ], null, [ $replaced ] ), 'a webhook-history trace doesn\'t know the firm: no fallback' );
+        $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( [ 'row' => 41, 'company' => 12, 'year' => 2027, 'live' => 1, 'at' => '2026-11-14 09:00:00' ], null, [ $replaced ] ), 'an entry that doesn\'t know the kind of invoice (3.25.4): no fallback' );
+    }
+
+    /** Billed per member, a voided assessment invoice never "becomes" the firm's dues invoice or another member's. */
+    public function testThePerMemberFallbackNeedsTheSameKindAndPerson(): void {
+        $split = [ 'row' => 50, 'company' => 9, 'year' => 2027, 'live' => 1, 'kind' => 'assessment', 'bill_to' => 21, 'mode' => 'split_assessment', 'at' => '2026-11-14 09:00:00' ];
+        $dues  = $this->row( [ 'id' => 40, 'fluentcrm_company_id' => 9, 'invoice_kind' => 'dues', 'billing_mode' => 'split_assessment', 'bill_to_contact_id' => 20 ] );
+        $other = $this->row( [ 'id' => 51, 'fluentcrm_company_id' => 9, 'invoice_kind' => 'assessment', 'billing_mode' => 'split_assessment', 'bill_to_contact_id' => 22 ] );
+        $again = $this->row( [ 'id' => 52, 'fluentcrm_company_id' => 9, 'invoice_kind' => 'assessment', 'billing_mode' => 'split_assessment', 'bill_to_contact_id' => 21 ] );
+        $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( $split, null, [ $dues ] ), 'not the firm\'s dues invoice' );
+        $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( $split, null, [ $dues, $other ] ), 'not another member\'s assessment' );
+        $this->assertSame( $again, MyNJILGA_Abilities::pick_traced_row( $split, null, [ $dues, $other, $again ] ), 'the same member\'s assessment' );
+
+        $individual = [ 'row' => 60, 'company' => 9, 'year' => 2027, 'live' => 1, 'kind' => 'combined', 'bill_to' => 31, 'mode' => 'individual', 'at' => '2026-11-14 09:00:00' ];
+        $owner      = $this->row( [ 'id' => 61, 'fluentcrm_company_id' => 9, 'billing_mode' => 'individual', 'bill_to_contact_id' => 30 ] );
+        $this->assertSame( null, MyNJILGA_Abilities::pick_traced_row( $individual, null, [ $owner ] ), 'a member who left: not the Owner\'s invoice' );
+
+        $this->assertFalse( MyNJILGA_Abilities::row_fits_trace( $this->row( [ 'id' => 50, 'fluentcrm_company_id' => 9, 'invoice_kind' => 'dues' ] ), $split ), 'the named row must still be the same kind of invoice' );
     }
 
     /** A reference no reissue retired — a charge, a payment, someone else's invoice — is not traced or labelled. */

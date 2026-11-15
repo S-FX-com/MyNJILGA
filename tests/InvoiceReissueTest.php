@@ -43,8 +43,8 @@ class InvoiceReissueTest extends NJILGA_TestCase {
 
     /** A retired invoice's id AND number both lead to its entry; the map keeps only the newest. */
     public function testTheRetiredInvoiceMapTracesBothIdAndNumber(): void {
-        $entry = MyNJILGA_Dues_Invoice_Table::retired_entry( $this->row( [ 'id' => 41, 'fluentcrm_company_id' => 12, 'livemode' => 1 ] ), '2026-11-14 09:00:00' );
-        $this->assertSame( [ 'row' => 41, 'company' => 12, 'year' => 2027, 'live' => 1, 'at' => '2026-11-14 09:00:00' ], $entry, 'the firm, year and mode it belonged to, and when' );
+        $entry = MyNJILGA_Dues_Invoice_Table::retired_entry( $this->row( [ 'id' => 41, 'fluentcrm_company_id' => 12, 'livemode' => 1, 'bill_to_contact_id' => 5, 'billing_mode' => 'firm' ] ), '2026-11-14 09:00:00' );
+        $this->assertSame( [ 'row' => 41, 'company' => 12, 'year' => 2027, 'live' => 1, 'kind' => 'combined', 'bill_to' => 5, 'mode' => 'firm', 'at' => '2026-11-14 09:00:00' ], $entry, 'the firm, year, mode, kind and contact it belonged to, and when' );
 
         $map = MyNJILGA_Dues_Invoice_Table::retired_map_add( [], 'in_OLD', 'NJILGA-2290', $entry );
         $this->assertSame( [ 'in_OLD' => $entry, 'NJILGA-2290' => $entry ], $map );
