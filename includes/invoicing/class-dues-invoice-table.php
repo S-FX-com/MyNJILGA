@@ -998,6 +998,12 @@ class MyNJILGA_Dues_Invoice_Table {
     /** Option: Stripe invoice ids retired by a reissue — events for them belong to no row. */
     const OPTION_RETIRED = 'njilga_retired_invoice_ids';
 
+    /** Option: [ Stripe invoice id or number => the row it belonged to ] — so a retired invoice can still be traced. */
+    const OPTION_RETIRED_ROWS = 'njilga_retired_invoice_rows';
+
+    /** How many retired invoices are remembered. */
+    const RETIRED_KEEP = 500;
+
     /**
      * Put a VOIDED annual invoice row back to draft, cleared of everything
      * its Stripe invoice gave it, so it can be priced and created again —
@@ -1016,15 +1022,51 @@ class MyNJILGA_Dues_Invoice_Table {
         return (bool) $wpdb->query( $wpdb->prepare( $sql, self::STATUS_DRAFT, $id, self::STATUS_VOIDED, MyNJILGA_Dues_Snapshot::KIND_JOIN ) ); // phpcs:ignore
     }
 
-    /** Remember a Stripe invoice id a reissue has left behind (kept to the last 500). */
-    public static function retire_invoice_id( string $invoiceId ): void {
+    /**
+     * Remember a Stripe invoice a reissue has left behind (the last
+     * RETIRED_KEEP): its id, so webhook events for it belong to no row,
+     * and its id and number → the row it belonged to, so it can still be
+     * traced (the row itself no longer carries them).
+     */
+    public static function retire_invoice_id( string $invoiceId, string $invoiceNumber = '', int $rowId = 0 ): void {
         if ( $invoiceId === '' ) {
             return;
         }
         $ids   = get_option( self::OPTION_RETIRED, [] );
         $ids   = is_array( $ids ) ? $ids : [];
         $ids[] = $invoiceId;
-        update_option( self::OPTION_RETIRED, array_slice( array_values( array_unique( $ids ) ), -500 ), false );
+        update_option( self::OPTION_RETIRED, array_slice( array_values( array_unique( $ids ) ), -self::RETIRED_KEEP ), false );
+
+        if ( $rowId > 0 ) {
+            $map = get_option( self::OPTION_RETIRED_ROWS, [] );
+            update_option( self::OPTION_RETIRED_ROWS, self::retired_map_add( is_array( $map ) ? $map : [], $invoiceId, $invoiceNumber, $rowId ), false );
+        }
+    }
+
+    /**
+     * PURE: add a retired invoice's id (and number) → row to the map,
+     * keeping the newest RETIRED_KEEP references.
+     *
+     * @param array<string,int> $map
+     * @return array<string,int>
+     */
+    public static function retired_map_add( array $map, string $invoiceId, string $invoiceNumber, int $rowId ): array {
+        foreach ( [ $invoiceId, $invoiceNumber ] as $ref ) {
+            if ( $ref !== '' ) {
+                unset( $map[ $ref ] ); // re-adding moves it to the newest end
+                $map[ $ref ] = $rowId;
+            }
+        }
+        return count( $map ) > self::RETIRED_KEEP ? array_slice( $map, -self::RETIRED_KEEP, null, true ) : $map;
+    }
+
+    /** The row a retired Stripe invoice id or number belonged to, or 0. */
+    public static function retired_invoice_row( string $ref ): int {
+        if ( $ref === '' || ! function_exists( 'get_option' ) ) {
+            return 0;
+        }
+        $map = get_option( self::OPTION_RETIRED_ROWS, [] );
+        return is_array( $map ) && isset( $map[ $ref ] ) ? (int) $map[ $ref ] : 0;
     }
 
     public static function is_retired_invoice_id( string $invoiceId ): bool {

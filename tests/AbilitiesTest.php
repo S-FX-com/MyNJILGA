@@ -103,7 +103,8 @@ class AbilitiesTest extends NJILGA_TestCase {
         $this->assertConforms( [ 'invoices' => [ $summary ] ], $schemas['my-njilga/list-firm-invoices']['output_schema'], 'list-firm-invoices' );
         $this->assertConforms( [ 'invoices' => [ $summary ], 'total' => 1 ], $schemas['my-njilga/flagged-invoices']['output_schema'], 'flagged-invoices' );
         $this->assertConforms( [ 'found' => true, 'invoice' => MyNJILGA_Abilities::invoice_detail( $this->row() ) ], $schemas['my-njilga/get-invoice']['output_schema'], 'get-invoice' );
-        $this->assertConforms( [ 'found' => false, 'invoice' => null ], $schemas['my-njilga/get-invoice']['output_schema'], 'get-invoice, not found' );
+        $this->assertConforms( [ 'found' => false, 'invoice' => null, 'note' => null ], $schemas['my-njilga/get-invoice']['output_schema'], 'get-invoice, not found' );
+        $this->assertConforms( [ 'found' => true, 'invoice' => MyNJILGA_Abilities::invoice_detail( $this->row() ) + [ 'stripe_invoice_retired' => true ], 'note' => 'Stripe invoice in_OLD was voided…' ], $schemas['my-njilga/get-invoice']['output_schema'], 'get-invoice, traced from a retired invoice' );
         $this->assertConforms( [ 'firms' => [ [ 'company_id' => 12, 'name' => 'Jost' ] ] ], $schemas['my-njilga/find-firm']['output_schema'], 'find-firm' );
         $this->assertConforms( [ 'events' => [ [ 'type' => 'invoice.voided', 'status' => 'processed', 'received_at' => '2026-11-13 18:02:11', 'processed_at' => null, 'message' => null, 'stripe_object' => 'in_1Abc' ] ] ], $schemas['my-njilga/invoice-stripe-events']['output_schema'], 'invoice-stripe-events' );
         $this->assertConforms( [ 'notes' => [ [ 'title' => 'Invoice voided', 'text' => 'x', 'by' => null, 'at' => '2026-11-13 18:02:11' ] ] ], $schemas['my-njilga/firm-notes']['output_schema'], 'firm-notes' );

@@ -9,6 +9,7 @@ declare( strict_types=1 );
 require_once dirname( __DIR__ ) . '/includes/invoicing/interface-invoice-gateway.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-stripe-invoice-gateway.php';
 require_once dirname( __DIR__ ) . '/includes/invoicing/class-invoice-reissue.php';
+require_once dirname( __DIR__ ) . '/includes/invoicing/class-stripe-events-table.php';
 
 class InvoiceReissueTest extends NJILGA_TestCase {
 
@@ -38,6 +39,38 @@ class InvoiceReissueTest extends NJILGA_TestCase {
         foreach ( [ "SET status = 'draft'", 'gateway_invoice_id = NULL', 'hosted_invoice_url = NULL', 'sent_at = NULL', 'voided_at = NULL', 'WHERE id = 7', "AND status = 'voided'", "invoice_kind <> 'join'", 'amount_paid_cents = 0 AND paid_off_stripe_cents = 0' ] as $needle ) {
             $this->assertTrue( strpos( $sql, $needle ) !== false, "Expected \"$needle\" in: $sql" );
         }
+    }
+
+    /** A retired invoice's id AND number both lead back to its row; the map keeps only the newest entries. */
+    public function testTheRetiredInvoiceMapTracesBothIdAndNumber(): void {
+        $map = MyNJILGA_Dues_Invoice_Table::retired_map_add( [], 'in_OLD', 'NJILGA-2290', 41 );
+        $this->assertSame( [ 'in_OLD' => 41, 'NJILGA-2290' => 41 ], $map );
+
+        $map = MyNJILGA_Dues_Invoice_Table::retired_map_add( $map, 'in_OTHER', '', 7 );
+        $this->assertSame( 7, $map['in_OTHER'], 'an invoice with no number still maps by id' );
+
+        $big = [];
+        for ( $i = 0; $i < MyNJILGA_Dues_Invoice_Table::RETIRED_KEEP; $i++ ) {
+            $big[ 'in_' . $i ] = $i;
+        }
+        $big = MyNJILGA_Dues_Invoice_Table::retired_map_add( $big, 'in_NEWEST', '', 999 );
+        $this->assertCount( MyNJILGA_Dues_Invoice_Table::RETIRED_KEEP, $big );
+        $this->assertSame( 999, $big['in_NEWEST'], 'the newest is kept' );
+        $this->assertFalse( isset( $big['in_0'] ), 'the oldest drops off' );
+    }
+
+    /** The webhook-history fallback asks for the newest event about that Stripe invoice that names a row. */
+    public function testTheWebhookHistoryFallbackQuery(): void {
+        global $wpdb;
+        $wpdb->reset();
+        $this->assertSame( 0, MyNJILGA_Stripe_Events_Table::row_for_object( 'in_OLD' ) );
+        $sql = $wpdb->last_query();
+        foreach ( [ "object_id = 'in_OLD'", 'invoice_row_id IS NOT NULL', 'ORDER BY id DESC LIMIT 1' ] as $needle ) {
+            $this->assertTrue( strpos( $sql, $needle ) !== false, "Expected \"$needle\" in: $sql" );
+        }
+        $wpdb->reset();
+        $this->assertSame( 0, MyNJILGA_Stripe_Events_Table::row_for_object( '' ) );
+        $this->assertCount( 0, $wpdb->queries, 'no reference, no query' );
     }
 
     /** A new Stripe key for the next create, so Stripe doesn't replay the voided invoice. */
