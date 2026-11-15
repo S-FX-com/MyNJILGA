@@ -41,35 +41,39 @@ class InvoiceReissueTest extends NJILGA_TestCase {
         }
     }
 
-    /** A retired invoice's id AND number both lead back to its row; the map keeps only the newest entries. */
+    /** A retired invoice's id AND number both lead to its entry; the map keeps only the newest. */
     public function testTheRetiredInvoiceMapTracesBothIdAndNumber(): void {
-        $map = MyNJILGA_Dues_Invoice_Table::retired_map_add( [], 'in_OLD', 'NJILGA-2290', 41 );
-        $this->assertSame( [ 'in_OLD' => 41, 'NJILGA-2290' => 41 ], $map );
+        $entry = MyNJILGA_Dues_Invoice_Table::retired_entry( $this->row( [ 'id' => 41, 'fluentcrm_company_id' => 12, 'livemode' => 1 ] ), '2026-11-14 09:00:00' );
+        $this->assertSame( [ 'row' => 41, 'company' => 12, 'year' => 2027, 'live' => 1, 'at' => '2026-11-14 09:00:00' ], $entry, 'the firm, year and mode it belonged to, and when' );
 
-        $map = MyNJILGA_Dues_Invoice_Table::retired_map_add( $map, 'in_OTHER', '', 7 );
-        $this->assertSame( 7, $map['in_OTHER'], 'an invoice with no number still maps by id' );
+        $map = MyNJILGA_Dues_Invoice_Table::retired_map_add( [], 'in_OLD', 'NJILGA-2290', $entry );
+        $this->assertSame( [ 'in_OLD' => $entry, 'NJILGA-2290' => $entry ], $map );
+
+        $other = MyNJILGA_Dues_Invoice_Table::retired_entry( $this->row( [ 'fluentcrm_company_id' => 30, 'livemode' => 0 ] ), '2026-11-14 09:05:00' );
+        $map   = MyNJILGA_Dues_Invoice_Table::retired_map_add( $map, 'in_OTHER', '', $other );
+        $this->assertSame( $other, $map['in_OTHER'], 'an invoice with no number still maps by id' );
 
         $big = [];
         for ( $i = 0; $i < MyNJILGA_Dues_Invoice_Table::RETIRED_KEEP; $i++ ) {
-            $big[ 'in_' . $i ] = $i;
+            $big[ 'in_' . $i ] = $entry;
         }
-        $big = MyNJILGA_Dues_Invoice_Table::retired_map_add( $big, 'in_NEWEST', '', 999 );
+        $big = MyNJILGA_Dues_Invoice_Table::retired_map_add( $big, 'in_NEWEST', '', $other );
         $this->assertCount( MyNJILGA_Dues_Invoice_Table::RETIRED_KEEP, $big );
-        $this->assertSame( 999, $big['in_NEWEST'], 'the newest is kept' );
+        $this->assertSame( $other, $big['in_NEWEST'], 'the newest is kept' );
         $this->assertFalse( isset( $big['in_0'] ), 'the oldest drops off' );
     }
 
-    /** The webhook-history fallback asks for the newest event about that Stripe invoice that names a row. */
-    public function testTheWebhookHistoryFallbackQuery(): void {
+    /** The webhook-history trace reads only invoice events that name a row — never a charge, payment or session. */
+    public function testTheWebhookHistoryTraceReadsOnlyInvoiceEvents(): void {
         global $wpdb;
         $wpdb->reset();
-        $this->assertSame( 0, MyNJILGA_Stripe_Events_Table::row_for_object( 'in_OLD' ) );
+        $this->assertSame( null, MyNJILGA_Stripe_Events_Table::invoice_trace( 'in_OLD' ) );
         $sql = $wpdb->last_query();
-        foreach ( [ "object_id = 'in_OLD'", 'invoice_row_id IS NOT NULL', 'ORDER BY id DESC LIMIT 1' ] as $needle ) {
+        foreach ( [ "object_id = 'in_OLD'", "type LIKE 'invoice.%'", 'invoice_row_id > 0', 'ORDER BY id DESC LIMIT 1' ] as $needle ) {
             $this->assertTrue( strpos( $sql, $needle ) !== false, "Expected \"$needle\" in: $sql" );
         }
         $wpdb->reset();
-        $this->assertSame( 0, MyNJILGA_Stripe_Events_Table::row_for_object( '' ) );
+        $this->assertSame( null, MyNJILGA_Stripe_Events_Table::invoice_trace( '' ) );
         $this->assertCount( 0, $wpdb->queries, 'no reference, no query' );
     }
 

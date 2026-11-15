@@ -397,16 +397,20 @@ class MyNJILGA_Abilities {
         } elseif ( $ref !== '' ) {
             $row = MyNJILGA_Dues_Invoice_Table::get_by_order_id( $ref ) ?: self::find_by_number( $ref );
             if ( ! $row ) {
-                // A Stripe invoice voided and then issued again no longer sits
-                // on its row: trace it through the retired-invoice map, else
-                // (a reissue from before that map) the webhook history.
-                $rowId = MyNJILGA_Dues_Invoice_Table::retired_invoice_row( $ref ) ?: MyNJILGA_Stripe_Events_Table::row_for_object( $ref );
-                $row   = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
-                $retired = (bool) $row;
+                // A Stripe invoice voided and then issued again no longer
+                // sits on its row: trace it, but only if a reissue really
+                // retired it, and only to a row that is still that firm's.
+                [ $row, $retired ] = self::trace_retired( $ref );
             }
         }
         if ( ! $row ) {
-            return [ 'found' => false, 'invoice' => null, 'note' => null ];
+            return [
+                'found'   => false,
+                'invoice' => null,
+                'note'    => $retired
+                    ? sprintf( 'Stripe invoice %s was voided and the firm\'s invoice was issued again, but it can no longer be traced to an invoice here: the row it belonged to is gone (for example, its dues year was wiped) or the webhook record of it has expired. Look the firm up with find-firm instead. It stays voided in Stripe.', $ref )
+                    : null,
+            ];
         }
         $detail = self::invoice_detail( $row );
         $why    = class_exists( 'MyNJILGA_Invoice_Reissue' ) ? MyNJILGA_Invoice_Reissue::refusal( $row ) : 'n/a';
@@ -417,9 +421,95 @@ class MyNJILGA_Abilities {
             'found'   => true,
             'invoice' => $detail,
             'note'    => $retired
-                ? sprintf( 'Stripe invoice %s was voided and this firm\'s invoice was issued again. Shown: the invoice row it belonged to, as it is now (its new Stripe invoice, if created yet, is stripe_invoice). The old one stays voided in Stripe.', $ref )
+                ? sprintf( 'Stripe invoice %s was voided and this firm\'s invoice was issued again. Shown: the firm\'s %d invoice as it is now (its new Stripe invoice, if created yet, is stripe_invoice). The old one stays voided in Stripe.', $ref, (int) $row->dues_year )
                 : null,
         ];
+    }
+
+    /**
+     * A Stripe invoice id or number a reissue left behind → the firm's
+     * invoice row now (or null), and whether $ref is known to have been
+     * retired at all. The retired map is asked first; for an id retired
+     * before that map existed, the webhook history (invoice events only).
+     * Anything a reissue never retired — a charge, a payment, an invoice
+     * that simply isn't ours — is not traced. The row must still be the
+     * one the invoice belonged to: a wiped year's deleted id can come
+     * back as another firm's row.
+     *
+     * @return array{0:?object,1:bool}
+     */
+    private static function trace_retired( string $ref ): array {
+        $trace = MyNJILGA_Dues_Invoice_Table::retired_trace( $ref );
+        if ( ! $trace ) {
+            if ( ! MyNJILGA_Dues_Invoice_Table::is_retired_invoice_id( $ref ) ) {
+                return [ null, false ];
+            }
+            $trace = MyNJILGA_Stripe_Events_Table::invoice_trace( $ref );
+            if ( ! $trace ) {
+                return [ null, true ];
+            }
+        }
+        $byId     = MyNJILGA_Dues_Invoice_Table::get( (int) $trace['row'] ) ?: null;
+        $firmRows = ( ! self::row_fits_trace( $byId, $trace ) && (int) ( $trace['company'] ?? 0 ) > 0 )
+            ? MyNJILGA_Dues_Invoice_Table::get_for_companies( [ (int) $trace['company'] ], ! empty( $trace['live'] ) )
+            : [];
+        return [ self::pick_traced_row( $trace, $byId, $firmRows ), true ];
+    }
+
+    /**
+     * PURE: is $row still the invoice row $trace describes — same id, an
+     * annual invoice (a join is never issued again), and, as far as the
+     * trace knows them, the same mode, firm and year, created no later
+     * than the trace (a row created after it is a deleted id reused)?
+     *
+     * @param array<string,mixed> $trace
+     */
+    public static function row_fits_trace( ?object $row, array $trace ): bool {
+        if ( ! $row || (int) ( $row->id ?? 0 ) !== (int) ( $trace['row'] ?? 0 ) ) {
+            return false;
+        }
+        if ( (string) ( $row->invoice_kind ?? '' ) === MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
+            return false;
+        }
+        if ( isset( $trace['live'] ) && ( empty( $row->livemode ) ? 0 : 1 ) !== (int) $trace['live'] ) {
+            return false;
+        }
+        if ( isset( $trace['company'] ) && (int) ( $row->fluentcrm_company_id ?? 0 ) !== (int) $trace['company'] ) {
+            return false;
+        }
+        if ( isset( $trace['year'] ) && (int) ( $row->dues_year ?? 0 ) !== (int) $trace['year'] ) {
+            return false;
+        }
+        $created = (string) ( $row->created_at ?? '' );
+        $at      = (string) ( $trace['at'] ?? '' );
+        return $created === '' || $at === '' || strcmp( $created, $at ) <= 0;
+    }
+
+    /**
+     * PURE: the row a trace leads to — the row it names, if that still
+     * fits; otherwise, for a trace that knows the firm and year (the
+     * retired map's), the firm's one annual invoice for that year and
+     * mode — e.g. after Refresh Firms replaced the row for a new billing
+     * contact. Null when neither, or when the firm has more than one.
+     *
+     * @param array<string,mixed> $trace
+     * @param array<int,object>   $firmRows
+     */
+    public static function pick_traced_row( array $trace, ?object $byId, array $firmRows ): ?object {
+        if ( self::row_fits_trace( $byId, $trace ) ) {
+            return $byId;
+        }
+        if ( ! isset( $trace['company'], $trace['year'] ) || (int) $trace['company'] <= 0 ) {
+            return null;
+        }
+        $live = (int) ( $trace['live'] ?? 1 );
+        $hits = array_values( array_filter( $firmRows, static function ( $r ) use ( $trace, $live ) {
+            return (int) ( $r->fluentcrm_company_id ?? 0 ) === (int) $trace['company']
+                && (int) ( $r->dues_year ?? 0 ) === (int) $trace['year']
+                && ( empty( $r->livemode ) ? 0 : 1 ) === $live
+                && (string) ( $r->invoice_kind ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN;
+        } ) );
+        return count( $hits ) === 1 ? $hits[0] : null;
     }
 
     /** @param array<string,mixed>|null $in */
