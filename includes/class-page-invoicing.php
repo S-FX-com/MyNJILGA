@@ -2223,7 +2223,11 @@ JS;
             }
         }
         $banner = '*** TEST — sent only to ' . $to . '. The real email goes to ' . (string) $m['to'] . ' when you send. ***';
-        $ok     = wp_mail( $to, '[TEST] ' . (string) $m['subject'], $banner . "\n\n" . (string) $m['body'], $headers );
+        try {
+            $ok = MyNJILGA_Invoice_Sender::deliver( $to, '[TEST] ' . (string) $m['subject'], $m, $headers, $banner );
+        } catch ( \Throwable $e ) {
+            $ok = false;
+        }
         $back( [ 'msg' => $ok ? 'email_test_sent' : 'error', 'to' => $to, 'detail' => $ok ? '' : 'The test could not be sent — the site\'s mail isn\'t working. Fix that before sending to firms.' ] );
     }
 

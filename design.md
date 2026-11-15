@@ -20,10 +20,12 @@ WordPress's styles can't bleed into ours.
 ## 1. Rules
 
 1. **Never write inline styles in a page class.** If you need a look that
-   doesn't exist, add a class to the stylesheet and use it. The one
-   exception is the Excel exporters (`class-report-xls.php`,
-   `class-report-summary.php`) — Excel only understands literal inline
-   styles, so those stay as they are.
+   doesn't exist, add a class to the stylesheet and use it. The
+   exceptions are the Excel exporters (`class-report-xls.php`,
+   `class-report-summary.php`) and the HTML invoice email
+   (`MyNJILGA_Invoice_Email::build_html()`) — Excel and mail apps only
+   understand literal inline styles (and an email is tables, not this
+   design system), so those stay as they are.
 2. **Never use WordPress admin classes** — `widefat`, `striped`,
    `button`, `button-primary`, `notice notice-*`, `form-table`,
    `nav-tab`, `description`. Each has a `njilga-*` replacement below.

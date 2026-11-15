@@ -11,9 +11,10 @@ Short version: never write inline styles in a page class, never use
 WordPress admin classes (`widefat`, `button`, `notice notice-*`,
 `form-table`, `nav-tab`, `description`) — each has a `njilga-*`
 replacement. Open pages with `MyNJILGA_Admin_UI::open()` / `::close()`.
-The only place inline styles are still correct is the Excel exporters
-(`class-report-xls.php`, `class-report-summary.php`), because Excel only
-understands literal styling.
+The only places inline styles are still correct are the Excel exporters
+(`class-report-xls.php`, `class-report-summary.php`) and the HTML invoice
+email (`MyNJILGA_Invoice_Email::build_html()`), because Excel and mail apps
+only understand literal styling.
 
 ## ALWAYS bump the plugin version when you change the repo
 

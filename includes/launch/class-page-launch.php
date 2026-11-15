@@ -556,13 +556,24 @@ class MyNJILGA_Page_Launch {
             }
         }
         printf(
-            '<p class="njilga-emailmeta"><strong>To:</strong> %s<br>%s%s<strong>Subject:</strong> %s</p><div class="njilga-emailsample">%s</div>',
+            '<p class="njilga-emailmeta"><strong>To:</strong> %s<br>%s%s<strong>Subject:</strong> %s</p>',
             esc_html( (string) $m['to'] ),
             $cc !== '' ? '<strong>Cc:</strong> ' . esc_html( $cc ) . '<br>' : '',
             $reply !== '' ? '<strong>Reply-To:</strong> ' . esc_html( $reply ) . '<br>' : '',
-            esc_html( (string) $m['subject'] ),
-            esc_html( (string) $m['body'] )
+            esc_html( (string) $m['subject'] )
         );
+        if ( (string) ( $m['html'] ?? '' ) !== '' ) {
+            // The formatted email exactly as sent, in a sandboxed frame: its
+            // own styles can't touch this page, and it can't run script.
+            // allow-same-origin only so this page can size the frame to fit.
+            printf(
+                '<iframe class="njilga-email-frame" title="Email preview" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" srcdoc="%s" onload="try{this.style.height=(this.contentDocument.documentElement.scrollHeight+8)+\'px\'}catch(e){}"></iframe>',
+                esc_attr( (string) $m['html'] )
+            );
+            printf( '<details class="njilga-details"><summary>Plain-text version</summary><div class="njilga-emailsample">%s</div></details>', esc_html( (string) $m['body'] ) );
+        } else {
+            printf( '<div class="njilga-emailsample">%s</div>', esc_html( (string) $m['body'] ) );
+        }
     }
 
     /** B. Read the exact email a firm will get, and send yourself (or anyone) a marked sample. */
@@ -975,7 +986,11 @@ class MyNJILGA_Page_Launch {
         if ( ! empty( $m['placeholder'] ) ) {
             $banner .= "\n*** The payment link below is a placeholder: this invoice has not been created yet. ***";
         }
-        $sent = wp_mail( $to, '[SAMPLE] ' . (string) $m['subject'], $banner . "\n\n" . (string) $m['body'], $headers );
+        try {
+            $sent = MyNJILGA_Invoice_Sender::deliver( $to, '[SAMPLE] ' . (string) $m['subject'], $m, $headers, $banner );
+        } catch ( \Throwable $e ) {
+            $sent = false;
+        }
         self::back( $year, 5, [ 'msg' => $sent ? 'sample_sent' : 'mailtest_failed', 'sample' => (int) $row->id, 'to' => $to ] );
     }
 
