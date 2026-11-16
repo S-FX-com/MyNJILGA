@@ -265,6 +265,30 @@ class MyNJILGA_Launch_Schedule {
     }
 
     /**
+     * PURE: the invoices an open schedule will still try to email (id =>
+     * true) — its confirmed list, less any it has set aside after too many
+     * failed tries. Empty when there is no open schedule in this Stripe
+     * mode. Whether each is still unsent is the row's own status.
+     *
+     * @param array<string,mixed>|null $rec
+     * @return array<int,true>
+     */
+    public static function waiting_ids( ?array $rec, bool $live ): array {
+        if ( ! $rec || ! self::is_open( (string) ( $rec['status'] ?? '' ) ) || (bool) ( $rec['livemode'] ?? false ) !== $live ) {
+            return [];
+        }
+        $attempts = (array) ( $rec['attempts'] ?? [] );
+        $out      = [];
+        foreach ( (array) ( $rec['row_ids'] ?? [] ) as $id ) {
+            $id = (int) $id;
+            if ( $id > 0 && (int) ( $attempts[ $id ] ?? 0 ) < self::MAX_ATTEMPTS_PER_ROW ) {
+                $out[ $id ] = true;
+            }
+        }
+        return $out;
+    }
+
+    /**
      * A short fingerprint of a list of invoice ids, so a confirmation can be
      * tied to the exact list the admin was shown (not merely its length).
      *
@@ -796,9 +820,9 @@ class MyNJILGA_Launch_Schedule {
             }
         }
         if ( $failed > 0 ) {
-            $lines[] = sprintf( '%d invoice%s could not be sent and need%s a person — see the failures listed on the Launch Wizard.', $failed, $failed === 1 ? '' : 's', $failed === 1 ? 's' : '' );
+            $lines[] = sprintf( '%d invoice%s could not be sent and need%s a person — see the failures listed with the scheduled send.', $failed, $failed === 1 ? '' : 's', $failed === 1 ? 's' : '' );
         }
-        $lines[] = 'Open My NJILGA → Launch Wizard → Send to see the details.';
+        $lines[] = sprintf( 'Open My NJILGA → Invoicing (%d) to see the details — the scheduled send\'s status is at the top of the page.', $year );
         return [ 'subject' => $subject, 'body' => implode( "\n\n", $lines ) ];
     }
 

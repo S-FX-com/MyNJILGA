@@ -35,6 +35,7 @@ class MyNJILGA_Page_Invoicing {
     const ACTION_EMAIL_PICK = 'my_njilga_dues_email_pick';
     const ACTION_EMAIL_TEST = 'my_njilga_dues_email_test';
     const ACTION_EMAIL_SEND = 'my_njilga_dues_email_send';
+    const ACTION_EMAIL_SCHEDULE = 'my_njilga_dues_email_schedule';
     const ACTION_REISSUE    = 'my_njilga_dues_reissue';
 
     /** How long a "Generate emails" selection waits for staff on the review screen. */
@@ -151,6 +152,7 @@ class MyNJILGA_Page_Invoicing {
 
         MyNJILGA_Create_Progress::render( $duesYear, $liveMode, self::page_url( $duesYear ) );
         MyNJILGA_Email_Run::render( $duesYear, $liveMode, self::page_url( $duesYear ) );
+        self::render_scheduled_send( $duesYear );
 
         self::render_workspace( $duesYear, $views, $canCreate, $liveMode );
         self::render_email_pick_form( $duesYear );
@@ -548,6 +550,16 @@ class MyNJILGA_Page_Invoicing {
                     self::pdf_link( $pdf )
                 );
 
+            case 'scheduled':
+                return sprintf(
+                    '<span class="njilga-dim njilga-inline-status">%s Email scheduled</span> %s %s %s %s',
+                    self::icon( 'calendar' ),
+                    self::view_link( $link ),
+                    self::pdf_link( $pdf ),
+                    self::void_button( $row ),
+                    self::sync_button( $rowId )
+                );
+
             case 'sent':
                 return sprintf(
                     '%s %s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d" title="Read the email, then send it again">Email again</button> %s %s',
@@ -838,6 +850,12 @@ class MyNJILGA_Page_Invoicing {
                 if ( MyNJILGA_Invoice_Creator::is_actively_queued( (string) ( $row->queued_at ?? '' ), current_time( 'mysql' ) ) ) {
                     return self::verdict( $status === $T::STATUS_SENT ? 'sent' : 'created', 'emailing', [ 'Emailing…', 'info' ], [ 'In the email queue', true ], false );
                 }
+                // Waiting in an open scheduled send (MyNJILGA_Launch_Schedule):
+                // no box either — the schedule emails it at its turn.
+                $scheduled = $status === $T::STATUS_CREATED ? self::scheduled_ids( (int) $row->dues_year, ! empty( $row->livemode ) ) : [];
+                if ( isset( $scheduled[ (int) $row->id ] ) ) {
+                    return self::verdict( 'created', 'scheduled', [ 'Email scheduled', 'info' ], $hasError ? [ (string) $row->last_error, false ] : [ 'In a scheduled send', true ], false );
+                }
                 if ( $status === $T::STATUS_SENT ) {
                     $sentOn = substr( (string) ( $row->sent_at ?? '' ), 0, 10 );
                     $val    = $hasError ? [ (string) $row->last_error, false ] : [ 'Complete', true ];
@@ -879,16 +897,16 @@ class MyNJILGA_Page_Invoicing {
         }
     }
 
-    /**
-     * @param array{0:string,1:string} $badge
-     * @param array{0:string,1:bool}   $validation
-     * @return array<string,mixed>
-     */
     /** Whether an invoice can go into "Generate emails": it has a payment link to send. */
     private static function emailable( object $row ): bool {
         return (string) ( $row->hosted_invoice_url ?? '' ) !== '';
     }
 
+    /**
+     * @param array{0:string,1:string} $badge
+     * @param array{0:string,1:bool}   $validation
+     * @return array<string,mixed>
+     */
     private static function verdict( string $bucket, string $status, array $badge, array $validation, bool $createable ): array {
         return [
             'join'       => false,
@@ -1212,21 +1230,22 @@ class MyNJILGA_Page_Invoicing {
         echo '</tbody></table></div></div>';
         self::render_email_refused( $refused );
 
-        // 4. Send.
-        MyNJILGA_Admin_UI::section( '4. Send' );
+        // 4. Send now — or 5, on a schedule.
         $blocked = '';
         if ( ! $live ) {
             $blocked = '<strong>Sending to firms is switched off in Test mode</strong> — they would be emailed a test payment link. The preview and test above still work. Switch Stripe to Live (Settings → Payments) to send for real.';
         } else {
             $schedule = MyNJILGA_Launch_Schedule::get( $duesYear );
             if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) ( $schedule['status'] ?? '' ) ) ) {
-                $blocked = sprintf( '<strong>A scheduled send for %d is still %s in the Launch Wizard.</strong> Let it finish, or cancel it there, so no firm is emailed by both.', $duesYear, esc_html( (string) $schedule['status'] ) );
+                $blocked = sprintf( '<strong>A scheduled send for %d is still %s.</strong> Let it finish, or cancel it (its status is at the top of the <a href="%s">Invoicing page</a>), so no firm is emailed by both.', $duesYear, esc_html( (string) $schedule['status'] ), esc_url( self::page_url( $duesYear ) ) );
             }
         }
         if ( $blocked !== '' ) {
+            MyNJILGA_Admin_UI::section( '4. Send' );
             MyNJILGA_Admin_UI::callout( $blocked, 'warning' );
             return;
         }
+        MyNJILGA_Admin_UI::section( '4. Send now' );
 
         $defaultResend = ! $unsent && $resent;
         // Send emails exactly what this screen listed: the not-yet-emailed
@@ -1249,7 +1268,7 @@ class MyNJILGA_Page_Invoicing {
                 %s
                 <label class="njilga-ack"><input type="checkbox" name="confirm" value="1" required> I have read the email (and sent myself a test). Email these firms now.</label>
                 <div class="njilga-confirm-actions"><button type="submit" class="njilga-btn njilga-btn-primary" id="njilga-email-go" data-unsent="%d" data-resent="%d">%s <span>Email %d firm%s</span></button> <a class="njilga-btn njilga-btn-outline" href="%s">Cancel</a></div>
-                <p class="njilga-help">They go out in the background, %d at a time, and this page shows their progress — you can leave it while they send. An invoice paid or changed before its turn is skipped, and none is emailed twice.</p>
+                <p class="njilga-help">They go out in the background, %d at a time, one after another, and this page shows their progress — you can leave it while they send. An invoice paid or changed before its turn is skipped, and none is emailed twice. To spread them out over hours or days instead, schedule them below.</p>
              </form></div>',
             esc_url( admin_url( 'admin-post.php' ) ),
             esc_attr( self::ACTION_EMAIL_SEND ),
@@ -1282,6 +1301,189 @@ class MyNJILGA_Page_Invoicing {
 })();
 </script>
 JS;
+
+        self::render_email_schedule( $duesYear, $token, $show, $unsent, $resent );
+    }
+
+    /**
+     * 5. Or schedule them: the review screen's not-yet-emailed invoices,
+     * sent by MyNJILGA_Launch_Schedule — from a start time, in batches of
+     * a chosen size a chosen number of minutes apart, optionally only on
+     * weekdays and within set hours. The timing is previewed (a GET, so
+     * nothing is scheduled by it) before the confirm form appears, and the
+     * confirm form carries exactly the invoices this screen listed.
+     *
+     * @param array<int,object> $unsent
+     * @param array<int,object> $resent
+     */
+    private static function render_email_schedule( int $duesYear, string $token, int $show, array $unsent, array $resent ): void {
+        echo '<div id="njilga-schedule">';
+        MyNJILGA_Admin_UI::section( '5. Or schedule them for later', 'Start at a time you choose and send in paced batches, so firms (and your inbox) aren\'t hit all at once. You can pause, resume or cancel it at any time, and nothing is emailed twice.' );
+
+        if ( ! $unsent ) {
+            MyNJILGA_Admin_UI::callout( 'Every invoice here has been emailed already. A schedule only sends invoices not emailed yet — use Send now above to email them again.', 'info' );
+            echo '</div>';
+            return;
+        }
+        $blocker = self::schedule_blocker();
+        if ( $blocker !== '' ) {
+            MyNJILGA_Admin_UI::callout( $blocker, 'info' );
+            echo '</div>';
+            return;
+        }
+
+        $tz     = self::tz();
+        $timing = isset( $_GET['timing'] ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $g      = static function ( string $k, string $d ): string { return isset( $_GET[ $k ] ) ? sanitize_text_field( wp_unslash( (string) $_GET[ $k ] ) ) : $d; }; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $in     = [
+            'start'         => $g( 'start', MyNJILGA_Page_Launch::default_start( time(), $tz ) ),
+            'batch_size'    => $g( 'batch_size', '25' ),
+            'interval_min'  => $g( 'interval_min', '15' ),
+            'weekdays_only' => $timing ? ( isset( $_GET['weekdays_only'] ) ? '1' : '' ) : '1', // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+            'window'        => $timing ? ( isset( $_GET['window'] ) ? '1' : '' ) : '1', // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+            'window_start'  => $g( 'window_start', '9' ),
+            'window_end'    => $g( 'window_end', '17' ),
+        ];
+
+        // The timing — a GET back to this screen, so previewing it schedules nothing.
+        echo '<div class="njilga-card njilga-card-pad">';
+        printf(
+            '<form method="get" action="%s"><input type="hidden" name="page" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="view" value="email"><input type="hidden" name="batch" value="%s"><input type="hidden" name="firm" value="%d"><input type="hidden" name="timing" value="1">',
+            esc_url( admin_url( 'admin.php' ) . '#njilga-schedule' ),
+            esc_attr( MyNJILGA_Admin_Menu::SLUG_INVOICING ),
+            $duesYear,
+            esc_attr( $token ),
+            $show
+        );
+        echo '<div class="njilga-inline-fields">';
+        printf( '<div class="njilga-field"><label for="njilga-sched-start"><strong>Start</strong> (site time, %s)</label><input type="datetime-local" id="njilga-sched-start" name="start" value="%s" required></div>', esc_html( $tz->getName() ), esc_attr( $in['start'] ) );
+        printf( '<div class="njilga-field"><label for="njilga-sched-batch"><strong>Emails per batch</strong></label><input type="number" id="njilga-sched-batch" name="batch_size" min="%d" max="%d" value="%s" class="njilga-input-sm"></div>', MyNJILGA_Launch_Schedule::MIN_BATCH, MyNJILGA_Launch_Schedule::MAX_BATCH, esc_attr( $in['batch_size'] ) );
+        printf( '<div class="njilga-field"><label for="njilga-sched-int"><strong>Minutes between batches</strong></label><input type="number" id="njilga-sched-int" name="interval_min" min="%d" max="%d" value="%s" class="njilga-input-sm"></div>', MyNJILGA_Launch_Schedule::MIN_INTERVAL, MyNJILGA_Launch_Schedule::MAX_INTERVAL, esc_attr( $in['interval_min'] ) );
+        echo '</div>';
+        printf( '<p><label class="njilga-check-label"><input type="checkbox" name="weekdays_only" value="1"%s> Weekdays only (Monday–Friday)</label></p>', $in['weekdays_only'] !== '' ? ' checked' : '' );
+        printf(
+            '<p><label class="njilga-check-label"><input type="checkbox" name="window" value="1"%s> Only send between <input type="number" name="window_start" min="0" max="23" value="%s" class="njilga-input-sm" aria-label="From hour"> and <input type="number" name="window_end" min="1" max="24" value="%s" class="njilga-input-sm" aria-label="To hour"> o\'clock (24-hour, site time)</label></p>',
+            $in['window'] !== '' ? ' checked' : '',
+            esc_attr( $in['window_start'] ),
+            esc_attr( $in['window_end'] )
+        );
+        echo '<div class="njilga-actions"><button type="submit" class="njilga-btn njilga-btn-outline">Preview the timing</button></div></form></div>';
+
+        if ( $resent ) {
+            MyNJILGA_Admin_UI::callout( sprintf( 'The %d invoice%s already emailed %s not part of a schedule — a schedule only sends invoices not emailed yet. To email %s again, use Send now above.', count( $resent ), count( $resent ) === 1 ? '' : 's', count( $resent ) === 1 ? 'is' : 'are', count( $resent ) === 1 ? 'it' : 'them' ), 'info' );
+        }
+        if ( ! $timing ) {
+            MyNJILGA_Admin_UI::callout( 'Choose the timing and click <strong>Preview the timing</strong>. You\'ll see when the first and last batch go out before anything is scheduled.', 'info' );
+            echo '</div>';
+            return;
+        }
+        $norm = MyNJILGA_Launch_Schedule::normalize_options( $in, time(), $tz );
+        if ( ! $norm['ok'] ) {
+            MyNJILGA_Admin_UI::callout( '<strong>That timing can\'t be used:</strong> ' . esc_html( $norm['error'] ), 'error' );
+            echo '</div>';
+            return;
+        }
+        $n   = count( $unsent );
+        $est = MyNJILGA_Launch_Schedule::estimate( $n, $norm['options'], $tz );
+        MyNJILGA_Admin_UI::callout(
+            sprintf(
+                '<strong>%d email%s in %d batch%s.</strong> First batch: <strong>%s</strong>. Last batch: about <strong>%s</strong>.',
+                $n, $n === 1 ? '' : 's',
+                (int) $est['batches'], (int) $est['batches'] === 1 ? '' : 'es',
+                esc_html( MyNJILGA_Page_Launch::fmt_time( (int) $est['first_ts'], $tz ) ),
+                esc_html( MyNJILGA_Page_Launch::fmt_time( (int) $est['last_ts'], $tz ) )
+            ),
+            'success'
+        );
+
+        $fields = '';
+        foreach ( $in as $k => $v ) {
+            $fields .= sprintf( '<input type="hidden" name="%s" value="%s">', esc_attr( $k ), esc_attr( $v ) );
+        }
+        foreach ( $unsent as $r ) {
+            $fields .= sprintf( '<input type="hidden" name="send_ids[]" value="%d">', (int) $r->id );
+        }
+        printf(
+            '<div class="njilga-card njilga-card-pad"><form method="post" action="%s" class="njilga-confirm-form">
+                <input type="hidden" name="action" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="batch" value="%s">%s%s
+                <label class="njilga-ack"><input type="checkbox" name="confirm" value="1" required> I have read the email (and sent myself a test). Email these %d firm%s on this schedule.</label>
+                <div class="njilga-confirm-actions"><button type="submit" class="njilga-btn njilga-btn-primary">%s Schedule %d email%s</button> <a class="njilga-btn njilga-btn-outline" href="%s">Cancel</a></div>
+                <p class="njilga-help">Each batch sends one email at a time, re-checking every invoice first: one emailed, paid or voided before its turn is skipped. The schedule\'s progress shows at the top of the Invoicing page, where you can pause or cancel it; you\'ll be emailed when it finishes or if it stops.</p>
+             </form></div>',
+            esc_url( admin_url( 'admin-post.php' ) ),
+            esc_attr( self::ACTION_EMAIL_SCHEDULE ),
+            $duesYear,
+            esc_attr( $token ),
+            wp_nonce_field( self::ACTION_EMAIL_SCHEDULE, '_wpnonce', true, false ),
+            $fields,
+            $n, $n === 1 ? '' : 's',
+            self::icon( 'calendar' ),
+            $n, $n === 1 ? '' : 's',
+            esc_url( self::page_url( $duesYear ) )
+        );
+        echo '</div>';
+    }
+
+    /**
+     * Why a scheduled send can't be set up right now ('' when it can) —
+     * HTML, for a callout. (A schedule for this year that is still open
+     * blocks the whole Send step before this is asked.)
+     */
+    private static function schedule_blocker(): string {
+        if ( ! function_exists( 'as_schedule_single_action' ) ) {
+            return '<strong>Scheduling needs Action Scheduler</strong> (it comes with FluentCRM) and it isn\'t available. Use Send now instead.';
+        }
+        $gateway = MyNJILGA_Invoicing::gateway();
+        $errors  = $gateway->is_available() ? (array) $gateway->readiness_errors() : [ $gateway->name() . ' is not active.' ];
+        if ( $errors ) {
+            return '<strong>Stripe isn\'t ready</strong>, so nothing can be scheduled: ' . esc_html( (string) reset( $errors ) );
+        }
+        if ( MyNJILGA_Invoice_Creator::has_pending_jobs() ) {
+            return '<strong>Invoices are still being created in the background.</strong> Scheduling opens once they finish — reload this page in a moment.';
+        }
+        $open = MyNJILGA_Launch_Schedule::open_record();
+        if ( $open ) {
+            return sprintf( '<strong>A scheduled send for %d is still %s.</strong> Only one can be open at a time — let it finish, or cancel it, before scheduling another.', (int) $open['year'], esc_html( (string) $open['status'] ) );
+        }
+        return '';
+    }
+
+    private static function tz(): \DateTimeZone {
+        return function_exists( 'wp_timezone' ) ? wp_timezone() : new \DateTimeZone( 'UTC' );
+    }
+
+    /**
+     * The year's scheduled send, at the top of the page: its progress and
+     * its Pause / Resume / Cancel / Send-the-next-batch buttons — while it
+     * is open, and for a few days after it finishes.
+     */
+    private static function render_scheduled_send( int $duesYear ): void {
+        $rec = MyNJILGA_Launch_Schedule::get( $duesYear );
+        if ( ! $rec ) {
+            return;
+        }
+        $status   = (string) ( $rec['status'] ?? '' );
+        $finished = (int) ( $rec['finished_ts'] ?? ( $rec['last_run_ts'] ?? 0 ) );
+        $recent   = $status === MyNJILGA_Launch_Schedule::ST_COMPLETE && $finished > 0 && time() - $finished < 3 * DAY_IN_SECONDS;
+        if ( ! MyNJILGA_Launch_Schedule::is_open( $status ) && ! $recent ) {
+            return;
+        }
+        MyNJILGA_Page_Launch::render_schedule_status( $duesYear, $rec, self::tz(), 'invoicing' );
+    }
+
+    /**
+     * The invoices of $year (in this mode) an open scheduled send will
+     * still email — id => true, read once per request.
+     *
+     * @return array<int,true>
+     */
+    private static function scheduled_ids( int $year, bool $live ): array {
+        static $cache = [];
+        $key = $year . ( $live ? 'L' : 'T' );
+        if ( ! isset( $cache[ $key ] ) ) {
+            $cache[ $key ] = MyNJILGA_Launch_Schedule::waiting_ids( MyNJILGA_Launch_Schedule::get( $year ), $live );
+        }
+        return $cache[ $key ];
     }
 
     /** @param array<int,array{row:object,reason:string}> $refused */
@@ -1708,6 +1910,8 @@ JS;
             'wiped'           => 'success',
             'join_moved'      => 'success',
             'emails_queued'   => 'success',
+            'emails_scheduled' => 'success',
+            'schedule_control' => 'success',
             'reissued'        => 'success',
             'email_test_sent' => 'success',
             'invoice_moved'   => 'success',
@@ -1756,20 +1960,18 @@ JS;
                 return sprintf( '%d invoice%s created.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'created_partial':
                 return sprintf( '%d invoice%s created, %d failed — see "Needs Attention".', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
-            case 'emailing':
-                return sprintf(
-                    '<span class="njilga-dim njilga-inline-status">%s Emailing…</span> %s %s',
-                    self::icon( 'refresh' ),
-                    self::view_link( $link ),
-                    self::pdf_link( $pdf )
-                );
-
             case 'sent':
                 return sprintf( '%d invoice%s sent.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'sent_partial':
                 return sprintf( '%d invoice%s sent, %d failed — see details below.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
             case 'reissued':
                 return 'The firm is back under No Invoice, ready to issue again. Click Refresh Firms to re-price it from today\'s roster, then Create. The voided invoice stays voided in Stripe.';
+            case 'emails_scheduled':
+                $rec   = MyNJILGA_Launch_Schedule::get( (int) ( $_GET['dues_year'] ?? 0 ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+                $first = $rec && ! empty( $rec['start_ts'] ) ? MyNJILGA_Page_Launch::fmt_time( (int) $rec['start_ts'], self::tz() ) : '';
+                return sprintf( '%d invoice email%s scheduled%s. Its progress is shown below, where you can pause or cancel it.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $first !== '' ? ' — the first batch goes out ' . $first : '' );
+            case 'schedule_control':
+                return isset( $_GET['detail'] ) ? sanitize_text_field( wp_unslash( $_GET['detail'] ) ) : 'Done.'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
             case 'emails_queued':
                 return sprintf( '%d invoice email%s queued. They go out in the background — progress is shown below, and you can leave this page while they send.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's' );
             case 'email_test_sent':
@@ -2254,7 +2456,7 @@ JS;
         }
         $schedule = MyNJILGA_Launch_Schedule::get( $duesYear );
         if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) ( $schedule['status'] ?? '' ) ) ) {
-            $fail( 'A scheduled send for ' . $duesYear . ' is still open in the Launch Wizard — let it finish, or cancel it there, first.' );
+            $fail( 'A scheduled send for ' . $duesYear . ' is still open — let it finish, or cancel it (its status is at the top of the Invoicing page), first.' );
         }
 
         // What the review screen listed — never "whatever is in the batch" or
@@ -2287,6 +2489,61 @@ JS;
         }
         delete_transient( self::email_batch_key( $token ) );
         self::redirect( $duesYear, [ 'msg' => 'emails_queued', 'count' => $result['queued'] ] );
+    }
+
+    /**
+     * The review screen's Schedule: hand the not-yet-emailed invoices it
+     * listed to a scheduled send (MyNJILGA_Launch_Schedule) — exactly
+     * those, and only if none has changed since the screen was read.
+     */
+    public static function handle_email_schedule(): void {
+        self::guard( self::ACTION_EMAIL_SCHEDULE );
+        $duesYear = self::post_year();
+        $token    = isset( $_POST['batch'] ) ? sanitize_key( wp_unslash( (string) $_POST['batch'] ) ) : '';
+        $batch    = self::email_batch( $token );
+        $live     = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
+
+        $fail = static function ( string $why ) use ( $duesYear, $token ): void {
+            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => rawurlencode( $why ) ] ) );
+            exit;
+        };
+        if ( empty( $_POST['confirm'] ) ) {
+            $fail( 'Tick the box to confirm, then schedule.' );
+        }
+        if ( ! $batch || (int) $batch['year'] !== $duesYear || (bool) $batch['live'] !== $live ) {
+            $fail( 'This selection has expired, or was made in the other Stripe mode — go back and generate the emails again.' );
+        }
+        if ( ! $live ) {
+            $fail( 'Stripe is in Test mode, so nothing is sent to firms. Switch to Live first.' );
+        }
+        $blocker = self::schedule_blocker();
+        if ( $blocker !== '' ) {
+            $fail( wp_strip_all_tags( $blocker ) );
+        }
+        $norm = MyNJILGA_Launch_Schedule::normalize_options( (array) wp_unslash( $_POST ), time(), self::tz() ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+        if ( ! $norm['ok'] ) {
+            $fail( $norm['error'] );
+        }
+
+        // Exactly what the screen listed as not emailed yet — and every one
+        // of them still schedulable, or the person looks again first.
+        $posted = ( isset( $_POST['send_ids'] ) && is_array( $_POST['send_ids'] ) ) ? array_map( 'intval', wp_unslash( $_POST['send_ids'] ) ) : [];
+        $posted = array_values( array_intersect( array_unique( $posted ), array_map( 'intval', $batch['ids'] ) ) );
+        if ( ! $posted ) {
+            $fail( 'Nothing to schedule — every invoice here was left out or has been emailed already.' );
+        }
+        $pick = MyNJILGA_Email_Run::schedulable( array_values( MyNJILGA_Dues_Invoice_Table::get_many( $posted ) ), $duesYear, $live, current_time( 'mysql' ) );
+        if ( $pick['dropped'] > 0 || count( $pick['ids'] ) !== count( $posted ) ) {
+            $fail( sprintf( '%d of these invoices %s emailed, paid or changed since this screen was shown. Nothing was scheduled — look over the list again, then schedule.', max( 1, count( $posted ) - count( $pick['ids'] ) ), count( $posted ) - count( $pick['ids'] ) === 1 ? 'was' : 'were' ) );
+        }
+
+        $user = wp_get_current_user();
+        $r    = MyNJILGA_Launch_Schedule::create( $duesYear, $norm['options'], true, (int) $user->ID, (string) $user->user_email, $pick['ids'] );
+        if ( ! $r['ok'] ) {
+            $fail( $r['error'] );
+        }
+        delete_transient( self::email_batch_key( $token ) );
+        self::redirect( $duesYear, [ 'msg' => 'emails_scheduled', 'count' => count( $pick['ids'] ) ] );
     }
 
     public static function handle_downgrade(): void {

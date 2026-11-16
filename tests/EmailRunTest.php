@@ -170,4 +170,29 @@ class EmailRunTest extends NJILGA_TestCase {
         $this->assertTrue( $done['finished'] );
         $this->assertSame( 'Finished emailing invoices: 1 of 1 sent.', MyNJILGA_Email_Run::summary( $done ) );
     }
+
+    /** A schedule takes only invoices not emailed yet, of this year and mode, not already in a background run. */
+    public function testWhatAScheduleMayTake(): void {
+        $now  = '2026-11-16 10:00:00';
+        $row  = static function ( int $id, array $over = [] ): object {
+            return (object) ( $over + [ 'id' => $id, 'dues_year' => 2027, 'livemode' => 1, 'status' => 'created', 'invoice_kind' => 'combined', 'hosted_invoice_url' => 'https://invoice.stripe.com/i/x', 'queued_at' => null ] );
+        };
+        $rows = [
+            $row( 1 ),
+            $row( 2, [ 'status' => 'sent' ] ),                       // emailed already: never re-sent by a schedule
+            $row( 3, [ 'status' => 'paid' ] ),
+            $row( 4, [ 'invoice_kind' => 'join' ] ),
+            $row( 5, [ 'dues_year' => 2026 ] ),
+            $row( 6, [ 'livemode' => 0 ] ),
+            $row( 7, [ 'hosted_invoice_url' => '' ] ),
+            $row( 8, [ 'queued_at' => '2026-11-16 09:59:00' ] ),     // in a background email run right now
+            $row( 9, [ 'queued_at' => '2026-11-10 09:00:00' ] ),     // a long-dead run's leftover stamp
+        ];
+        $pick = MyNJILGA_Email_Run::schedulable( $rows, 2027, true, $now );
+        $this->assertSame( [ 1, 9 ], $pick['ids'] );
+        $this->assertSame( 7, $pick['dropped'] );
+
+        $this->assertSame( [ 'ids' => [ 1 ], 'dropped' => 0 ], MyNJILGA_Email_Run::schedulable( [ $row( 1 ) ], 2027, true, $now ) );
+        $this->assertSame( [ 'ids' => [], 'dropped' => 0 ], MyNJILGA_Email_Run::schedulable( [], 2027, true, $now ) );
+    }
 }
