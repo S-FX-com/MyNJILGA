@@ -112,6 +112,30 @@ class MyNJILGA_Email_Run {
         return false;
     }
 
+    /**
+     * PURE: of the invoices a review screen listed, the ones a scheduled
+     * send (MyNJILGA_Launch_Schedule) may take — passes refusal(), still
+     * not emailed (a schedule never re-sends), and not already waiting in
+     * a background email run. The rest are 'dropped': something changed
+     * since the screen was read, so the person should look again.
+     *
+     * @param array<int,object> $rows
+     * @return array{ids:array<int,int>,dropped:int}
+     */
+    public static function schedulable( array $rows, int $year, bool $live, string $nowMysql ): array {
+        $ids = [];
+        foreach ( $rows as $row ) {
+            if ( self::refusal( $row, $year, $live ) !== ''
+                || (string) $row->status !== MyNJILGA_Dues_Invoice_Table::STATUS_CREATED
+                || MyNJILGA_Invoice_Creator::is_actively_queued( (string) ( $row->queued_at ?? '' ), $nowMysql ) ) {
+                continue;
+            }
+            $ids[] = (int) $row->id;
+        }
+        $ids = array_values( array_unique( $ids ) );
+        return [ 'ids' => $ids, 'dropped' => count( $rows ) - count( $ids ) ];
+    }
+
     // -------------------------------------------------------------------------
     // Queue and run
     // -------------------------------------------------------------------------

@@ -176,4 +176,23 @@ class LaunchPageTest extends NJILGA_TestCase {
     public function testStepsAreOneToFive(): void {
         $this->assertSame( [ 1, 2, 3, 4, 5 ], array_keys( MyNJILGA_Page_Launch::STEPS ) );
     }
+
+    /** Invoicing shows the scheduled send's status with this same card, its buttons coming back to Invoicing. */
+    public function testTheStatusCardCanBeShownOnInvoicing(): void {
+        $ref = new \ReflectionMethod( 'MyNJILGA_Page_Launch', 'render_schedule_status' );
+        $this->assertTrue( $ref->isPublic() && $ref->isStatic() );
+        $params = $ref->getParameters();
+        $this->assertSame( 'returnTo', $params[3]->getName() );
+        $this->assertTrue( $params[3]->isOptional() );
+    }
+
+    /** Generate Emails' Schedule button posts to a handler that is registered and safe for admin-post. */
+    public function testTheInvoicingScheduleHandlerIsRegistered(): void {
+        require_once dirname( __DIR__ ) . '/includes/class-page-invoicing.php';
+        $ref = new \ReflectionMethod( 'MyNJILGA_Page_Invoicing', 'handle_email_schedule' );
+        $this->assertTrue( $ref->isPublic() && $ref->isStatic() );
+        $this->assertSame( 0, $ref->getNumberOfParameters() );
+        $main = (string) file_get_contents( dirname( __DIR__ ) . '/njilga-membership-report.php' );
+        $this->assertTrue( strpos( $main, "MyNJILGA_Page_Invoicing::ACTION_EMAIL_SCHEDULE, [ 'MyNJILGA_Page_Invoicing', 'handle_email_schedule' ]" ) !== false );
+    }
 }

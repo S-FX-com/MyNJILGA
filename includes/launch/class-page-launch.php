@@ -751,9 +751,16 @@ class MyNJILGA_Page_Launch {
     }
 
     /**
+     * The scheduled send's status, progress and controls. Also shown at the
+     * top of the Invoicing page ($returnTo 'invoicing': its buttons come
+     * back there rather than to the wizard).
+     *
      * @param array<string,mixed> $rec
      */
-    private static function render_schedule_status( int $year, array $rec, \DateTimeZone $tz ): void {
+    public static function render_schedule_status( int $year, array $rec, \DateTimeZone $tz, string $returnTo = '' ): void {
+        $ctl = static function ( string $op ) use ( $year, $returnTo ): array {
+            return $returnTo !== '' ? [ 'dues_year' => $year, 'op' => $op, 'return_to' => $returnTo ] : [ 'dues_year' => $year, 'op' => $op ];
+        };
         [ $label, $variant ] = self::status_pill( (string) $rec['status'] );
         $sent   = (int) ( $rec['sent'] ?? 0 );
         $failed = (int) ( $rec['failed'] ?? 0 );
@@ -775,14 +782,14 @@ class MyNJILGA_Page_Launch {
         }
         echo '<div class="njilga-actions">';
         if ( $active ) {
-            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Send the next batch now', [ 'dues_year' => $year, 'op' => 'run_now' ], 'outline', '', 'Send the next batch of emails right now?' );
-            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Pause', [ 'dues_year' => $year, 'op' => 'pause' ], 'outline' );
+            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Send the next batch now', $ctl( 'run_now' ), 'outline', '', 'Send the next batch of emails right now?' );
+            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Pause', $ctl( 'pause' ), 'outline' );
         }
         if ( in_array( (string) $rec['status'], [ MyNJILGA_Launch_Schedule::ST_PAUSED, MyNJILGA_Launch_Schedule::ST_HALTED ], true ) ) {
-            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Resume', [ 'dues_year' => $year, 'op' => 'resume' ], 'primary' );
+            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Resume', $ctl( 'resume' ), 'primary' );
         }
         if ( MyNJILGA_Launch_Schedule::is_open( (string) $rec['status'] ) ) {
-            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Cancel the schedule', [ 'dues_year' => $year, 'op' => 'cancel' ], 'outline', '', 'Cancel the scheduled send? Emails already sent stay sent; the rest will not go out.' );
+            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Cancel the schedule', $ctl( 'cancel' ), 'outline', '', 'Cancel the scheduled send? Emails already sent stay sent; the rest will not go out.' );
         }
         echo '</div>';
 
@@ -1096,6 +1103,25 @@ class MyNJILGA_Page_Launch {
         $year = self::post_year();
         $op   = isset( $_POST['op'] ) ? sanitize_key( wp_unslash( (string) $_POST['op'] ) ) : '';
 
+        // Back where the button was: the wizard's Send step, or Invoicing.
+        $toInvoicing = isset( $_POST['return_to'] ) && sanitize_key( wp_unslash( (string) $_POST['return_to'] ) ) === 'invoicing';
+        $back = static function ( array $args ) use ( $year, $toInvoicing ): void {
+            if ( ! $toInvoicing ) {
+                self::back( $year, 5, $args );
+                return;
+            }
+            if ( ( $args['msg'] ?? '' ) === 'control_ok' ) {
+                $args['msg'] = 'schedule_control';
+            }
+            foreach ( $args as $k => $val ) {
+                if ( is_string( $val ) ) {
+                    $args[ $k ] = rawurlencode( $val );
+                }
+            }
+            wp_safe_redirect( MyNJILGA_Page_Invoicing::page_url( $year, $args ) );
+            exit;
+        };
+
         switch ( $op ) {
             case 'pause':
                 $r = MyNJILGA_Launch_Schedule::pause( $year );
@@ -1112,18 +1138,20 @@ class MyNJILGA_Page_Launch {
             case 'run_now':
                 $b = MyNJILGA_Launch_Schedule::run_batch( $year, null, true );
                 if ( $b['outcome'] === 'skipped' ) {
-                    self::back( $year, 5, [ 'msg' => 'error', 'detail' => 'There is no active send to run (it may be paused, halted or finished).' ] );
+                    $back( [ 'msg' => 'error', 'detail' => 'There is no active send to run (it may be paused, halted or finished).' ] );
+                    return;
                 }
-                self::back( $year, 5, [ 'msg' => 'control_ok', 'detail' => sprintf( 'Batch run: %d sent, %d failed, %d remaining (%s).', (int) $b['sent'], (int) $b['failed'], (int) $b['remaining'], (string) $b['outcome'] ) ] );
+                $back( [ 'msg' => 'control_ok', 'detail' => sprintf( 'Batch run: %d sent, %d failed, %d remaining (%s).', (int) $b['sent'], (int) $b['failed'], (int) $b['remaining'], (string) $b['outcome'] ) ] );
                 return;
             default:
-                self::back( $year, 5, [ 'msg' => 'error', 'detail' => 'Unknown action.' ] );
+                $back( [ 'msg' => 'error', 'detail' => 'Unknown action.' ] );
                 return;
         }
         if ( empty( $r['ok'] ) ) {
-            self::back( $year, 5, [ 'msg' => 'error', 'detail' => (string) $r['error'] ] );
+            $back( [ 'msg' => 'error', 'detail' => (string) $r['error'] ] );
+            return;
         }
-        self::back( $year, 5, [ 'msg' => 'control_ok', 'detail' => $done ] );
+        $back( [ 'msg' => 'control_ok', 'detail' => $done ] );
     }
 
     // =========================================================================

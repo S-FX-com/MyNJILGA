@@ -839,4 +839,25 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         $this->assertSame( 0, $m->getNumberOfRequiredParameters() );
         $this->assertSame( null, $m->getParameters()[0]->getType(), 'untyped' );
     }
+
+    /** What Invoicing shows as "Email scheduled": an open schedule's list in this mode, less invoices it gave up on. */
+    public function testTheInvoicesAnOpenScheduleWillStillEmail(): void {
+        $rec = [ 'status' => 'running', 'livemode' => true, 'row_ids' => [ 10, 20, 30 ], 'attempts' => [ 20 => 1, 30 => MyNJILGA_Launch_Schedule::MAX_ATTEMPTS_PER_ROW ] ];
+        $this->assertSame( [ 10 => true, 20 => true ], MyNJILGA_Launch_Schedule::waiting_ids( $rec, true ), 'tried once: still waiting; tried too often: set aside' );
+        $this->assertSame( [], MyNJILGA_Launch_Schedule::waiting_ids( $rec, false ), 'the other Stripe mode' );
+        $this->assertSame( [], MyNJILGA_Launch_Schedule::waiting_ids( null, true ) );
+        foreach ( [ 'complete', 'cancelled' ] as $closed ) {
+            $this->assertSame( [], MyNJILGA_Launch_Schedule::waiting_ids( [ 'status' => $closed ] + $rec, true ), $closed );
+        }
+        foreach ( [ 'scheduled', 'paused', 'halted' ] as $open ) {
+            $this->assertSame( [ 10 => true, 20 => true ], MyNJILGA_Launch_Schedule::waiting_ids( [ 'status' => $open ] + $rec, true ), $open );
+        }
+    }
+
+    /** The finished / halted email points to Invoicing, where the status now shows. */
+    public function testTheSummaryEmailPointsToInvoicing(): void {
+        $m = MyNJILGA_Launch_Schedule::summary_message( [ 'year' => 2027, 'sent' => 5, 'failed' => 1 ], 'complete' );
+        $this->assertTrue( strpos( $m['body'], 'Invoicing (2027)' ) !== false, $m['body'] );
+        $this->assertTrue( strpos( $m['body'], 'Launch Wizard' ) === false, $m['body'] );
+    }
 }
