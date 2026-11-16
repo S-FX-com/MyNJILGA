@@ -195,4 +195,22 @@ class EmailRunTest extends NJILGA_TestCase {
         $this->assertSame( [ 'ids' => [ 1 ], 'dropped' => 0 ], MyNJILGA_Email_Run::schedulable( [ $row( 1 ) ], 2027, true, $now ) );
         $this->assertSame( [ 'ids' => [], 'dropped' => 0 ], MyNJILGA_Email_Run::schedulable( [], 2027, true, $now ) );
     }
+
+    /** An open schedule holds back only the invoices it is waiting to email; the rest can still be sent now. */
+    public function testAScheduleHoldsBackOnlyItsOwnInvoices(): void {
+        $r   = static function ( int $id, string $status = 'created' ): object { return (object) [ 'id' => $id, 'status' => $status ]; };
+        $sel = [ 'unsent' => [ $r( 1 ), $r( 2 ), $r( 3 ) ], 'sent' => [ $r( 4, 'sent' ) ], 'refused' => [] ];
+
+        $out = MyNJILGA_Email_Run::hold_back_scheduled( $sel, [ 2 => true, 4 => true ] );
+        $this->assertSame( [ 1, 3 ], array_map( static function ( $x ) { return (int) $x->id; }, $out['unsent'] ) );
+        $this->assertSame( [ 4 ], array_map( static function ( $x ) { return (int) $x->id; }, $out['sent'] ), 'one already emailed can still be sent again by hand' );
+        $this->assertCount( 1, $out['refused'] );
+        $this->assertSame( 2, (int) $out['refused'][0]['row']->id );
+        $this->assertTrue( strpos( $out['refused'][0]['reason'], 'scheduled send' ) !== false );
+
+        $this->assertSame( $sel, MyNJILGA_Email_Run::hold_back_scheduled( $sel, [] ), 'no open schedule: nothing held back' );
+
+        $this->assertSame( [ 1, 3 ], MyNJILGA_Email_Run::not_scheduled( [ 1, 2, 3 ], [ 2 => true ] ) );
+        $this->assertSame( [ 1, 2 ], MyNJILGA_Email_Run::not_scheduled( [ '1', '2' ], [] ) );
+    }
 }
