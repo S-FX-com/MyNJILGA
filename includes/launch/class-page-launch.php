@@ -475,12 +475,12 @@ class MyNJILGA_Page_Launch {
 
         if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) $schedule['status'] ) || ( $schedule && (string) $schedule['status'] === MyNJILGA_Launch_Schedule::ST_COMPLETE ) ) {
             self::render_schedule_status( $year, (array) $schedule, $tz );
-            // Invoices created after the confirmation are not part of it — say so rather than let it look like a miss.
+            // Unsent invoices it doesn't hold — created since, or (scheduled from Invoicing → Generate Emails) not picked — say so rather than let it look like a miss.
             if ( $live && MyNJILGA_Launch_Schedule::is_open( (string) $schedule['status'] ) && isset( $schedule['row_ids'] ) ) {
                 $covered = array_flip( array_map( 'intval', (array) $schedule['row_ids'] ) );
                 $outside = count( array_filter( $unsent, static function ( $r ) use ( $covered ) { return ! isset( $covered[ (int) $r->id ] ); } ) );
                 if ( $outside > 0 ) {
-                    MyNJILGA_Admin_UI::callout( sprintf( '<strong>%d invoice%s created since this was scheduled %s not part of it.</strong> The schedule sends only what you confirmed. Schedule %s once it finishes, or cancel it and schedule everything together.', $outside, $outside === 1 ? '' : 's', $outside === 1 ? 'is' : 'are', $outside === 1 ? 'it' : 'them' ), 'info' );
+                    MyNJILGA_Admin_UI::callout( sprintf( '<strong>%d unsent invoice%s %s not part of this schedule</strong> — created since it was set up, or not picked when it was. The schedule sends only what was confirmed. Email %s from Invoicing → Generate Emails (Send now works while this runs), or schedule %s once it finishes.', $outside, $outside === 1 ? '' : 's', $outside === 1 ? 'is' : 'are', $outside === 1 ? 'it' : 'them', $outside === 1 ? 'it' : 'them' ), 'info' );
                 }
             }
         }

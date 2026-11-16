@@ -113,6 +113,44 @@ class MyNJILGA_Email_Run {
     }
 
     /**
+     * PURE: take the invoices an open scheduled send is waiting to email
+     * ($waiting, MyNJILGA_Launch_Schedule::waiting_ids()) out of a
+     * review selection's not-yet-emailed list — the schedule emails them
+     * at its turn — and list them as left out, with why. Everything else
+     * can still be sent now.
+     *
+     * @param array{unsent:array<int,object>,sent:array<int,object>,refused:array<int,array{row:object,reason:string}>} $sel
+     * @param array<int,true> $waiting
+     * @return array{unsent:array<int,object>,sent:array<int,object>,refused:array<int,array{row:object,reason:string}>}
+     */
+    public static function hold_back_scheduled( array $sel, array $waiting ): array {
+        if ( ! $waiting ) {
+            return $sel;
+        }
+        $keep = [];
+        foreach ( $sel['unsent'] as $row ) {
+            if ( isset( $waiting[ (int) $row->id ] ) ) {
+                $sel['refused'][] = [ 'row' => $row, 'reason' => 'Waiting in the scheduled send — it is emailed at its turn.' ];
+            } else {
+                $keep[] = $row;
+            }
+        }
+        $sel['unsent'] = $keep;
+        return $sel;
+    }
+
+    /**
+     * PURE: $ids without those an open scheduled send is waiting to email.
+     *
+     * @param array<int,int>  $ids
+     * @param array<int,true> $waiting
+     * @return array<int,int>
+     */
+    public static function not_scheduled( array $ids, array $waiting ): array {
+        return array_values( array_filter( array_map( 'intval', $ids ), static function ( $id ) use ( $waiting ) { return ! isset( $waiting[ $id ] ); } ) );
+    }
+
+    /**
      * PURE: of the invoices a review screen listed, the ones a scheduled
      * send (MyNJILGA_Launch_Schedule) may take — passes refusal(), still
      * not emailed (a schedule never re-sends), and not already waiting in

@@ -1123,6 +1123,10 @@ class MyNJILGA_Page_Invoicing {
         $rows = array_values( MyNJILGA_Dues_Invoice_Table::get_many( $batch['ids'] ) );
         usort( $rows, static function ( $a, $b ) { return strcasecmp( MyNJILGA_Dues_Snapshot::company_name( $a ), MyNJILGA_Dues_Snapshot::company_name( $b ) ); } );
         $sel = MyNJILGA_Email_Run::sort_selection( $rows, $duesYear, $live );
+        // Invoices waiting in an open scheduled send are its to email:
+        // left out here, so they can't go twice — every other one can
+        // still be sent now.
+        $sel = MyNJILGA_Email_Run::hold_back_scheduled( $sel, $live ? MyNJILGA_Launch_Schedule::waiting_ids( MyNJILGA_Launch_Schedule::get( $duesYear ), true ) : [] );
 
         // Emails that can't be built (no address for the bill-to) are found
         // now, not halfway through the send.
@@ -1230,19 +1234,11 @@ class MyNJILGA_Page_Invoicing {
         echo '</tbody></table></div></div>';
         self::render_email_refused( $refused );
 
-        // 4. Send now — or 5, on a schedule.
-        $blocked = '';
+        // 4. Send now — or 5, on a schedule. (An open scheduled send no
+        // longer blocks this: what it holds was taken out above.)
         if ( ! $live ) {
-            $blocked = '<strong>Sending to firms is switched off in Test mode</strong> — they would be emailed a test payment link. The preview and test above still work. Switch Stripe to Live (Settings → Payments) to send for real.';
-        } else {
-            $schedule = MyNJILGA_Launch_Schedule::get( $duesYear );
-            if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) ( $schedule['status'] ?? '' ) ) ) {
-                $blocked = sprintf( '<strong>A scheduled send for %d is still %s.</strong> Let it finish, or cancel it (its status is at the top of the <a href="%s">Invoicing page</a>), so no firm is emailed by both.', $duesYear, esc_html( (string) $schedule['status'] ), esc_url( self::page_url( $duesYear ) ) );
-            }
-        }
-        if ( $blocked !== '' ) {
             MyNJILGA_Admin_UI::section( '4. Send' );
-            MyNJILGA_Admin_UI::callout( $blocked, 'warning' );
+            MyNJILGA_Admin_UI::callout( '<strong>Sending to firms is switched off in Test mode</strong> — they would be emailed a test payment link. The preview and test above still work. Switch Stripe to Live (Settings → Payments) to send for real.', 'warning' );
             return;
         }
         MyNJILGA_Admin_UI::section( '4. Send now' );
@@ -1407,7 +1403,7 @@ JS;
             '<div class="njilga-card njilga-card-pad"><form method="post" action="%s" class="njilga-confirm-form">
                 <input type="hidden" name="action" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="batch" value="%s">%s%s
                 <label class="njilga-ack"><input type="checkbox" name="confirm" value="1" required> I have read the email (and sent myself a test). Email these %d firm%s on this schedule.</label>
-                <div class="njilga-confirm-actions"><button type="submit" class="njilga-btn njilga-btn-primary">%s Schedule %d email%s</button> <a class="njilga-btn njilga-btn-outline" href="%s">Cancel</a></div>
+                <div class="njilga-confirm-actions"><button type="submit" class="njilga-btn njilga-btn-primary" id="njilga-schedule-go">%s <span>Schedule %d email%s</span></button> <a class="njilga-btn njilga-btn-outline" href="%s">Cancel</a></div>
                 <p class="njilga-help">Each batch sends one email at a time, re-checking every invoice first: one emailed, paid or voided before its turn is skipped. The schedule\'s progress shows at the top of the Invoicing page, where you can pause or cancel it; you\'ll be emailed when it finishes or if it stops.</p>
              </form></div>',
             esc_url( admin_url( 'admin-post.php' ) ),
@@ -1421,13 +1417,22 @@ JS;
             $n, $n === 1 ? '' : 's',
             esc_url( self::page_url( $duesYear ) )
         );
+        // Scheduling once only: a second click while the first posts does nothing.
+        echo <<<'JS'
+<script>
+(function(){
+  var go=document.getElementById('njilga-schedule-go'); if(!go) return;
+  var busy=false, label=go.querySelector('span');
+  go.form.addEventListener('submit',function(e){ if(busy){ e.preventDefault(); return; } busy=true; go.classList.add('njilga-busy'); label.textContent='Scheduling…'; });
+})();
+</script>
+JS;
         echo '</div>';
     }
 
     /**
      * Why a scheduled send can't be set up right now ('' when it can) —
-     * HTML, for a callout. (A schedule for this year that is still open
-     * blocks the whole Send step before this is asked.)
+     * HTML, for a callout. Only one scheduled send can be open at a time.
      */
     private static function schedule_blocker(): string {
         if ( ! function_exists( 'as_schedule_single_action' ) ) {
@@ -1443,7 +1448,7 @@ JS;
         }
         $open = MyNJILGA_Launch_Schedule::open_record();
         if ( $open ) {
-            return sprintf( '<strong>A scheduled send for %d is still %s.</strong> Only one can be open at a time — let it finish, or cancel it, before scheduling another.', (int) $open['year'], esc_html( (string) $open['status'] ) );
+            return sprintf( '<strong>A scheduled send for %d is still %s.</strong> Only one can be open at a time — let it finish, or cancel it, before scheduling another. Send now above still works for these firms.', (int) $open['year'], esc_html( (string) $open['status'] ) );
         }
         return '';
     }
@@ -2454,10 +2459,6 @@ JS;
         if ( ! $live ) {
             $fail( 'Stripe is in Test mode, so nothing is sent to firms. Switch to Live first.' );
         }
-        $schedule = MyNJILGA_Launch_Schedule::get( $duesYear );
-        if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) ( $schedule['status'] ?? '' ) ) ) {
-            $fail( 'A scheduled send for ' . $duesYear . ' is still open — let it finish, or cancel it (its status is at the top of the Invoicing page), first.' );
-        }
 
         // What the review screen listed — never "whatever is in the batch" or
         // "whatever is emailed by now": a firm the screen left out, or showed
@@ -2466,7 +2467,9 @@ JS;
             $ids = ( isset( $_POST[ $key ] ) && is_array( $_POST[ $key ] ) ) ? array_map( 'intval', wp_unslash( $_POST[ $key ] ) ) : [];
             return array_values( array_intersect( array_unique( $ids ), array_map( 'intval', $batch['ids'] ) ) );
         };
-        $sendIds = $posted( 'send_ids' );
+        // Not any an open scheduled send is waiting to email (it may have
+        // been set up since this screen was read): those go at its turn.
+        $sendIds = MyNJILGA_Email_Run::not_scheduled( $posted( 'send_ids' ), MyNJILGA_Launch_Schedule::waiting_ids( MyNJILGA_Launch_Schedule::get( $duesYear ), $live ) );
         $resend  = [];
         if ( ! empty( $_POST['resend'] ) && isset( $_POST['resend_at'] ) && is_array( $_POST['resend_at'] ) ) {
             $shownAt = [];
