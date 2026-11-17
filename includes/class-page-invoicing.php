@@ -1557,7 +1557,7 @@ JS;
      */
     private static function render_scheduled_send( int $duesYear ): void {
         $rec = MyNJILGA_Launch_Schedule::get( $duesYear );
-        if ( ! $rec ) {
+        if ( ! $rec || MyNJILGA_Launch_Schedule::is_dismissed( $rec ) ) {
             return;
         }
         $status   = (string) ( $rec['status'] ?? '' );

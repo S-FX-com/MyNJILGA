@@ -473,7 +473,7 @@ class MyNJILGA_Page_Launch {
 
         MyNJILGA_Admin_UI::section( 'Send the ' . $year . ' invoice emails', 'Test the email first, send a few firms now if you want a pilot, then schedule the rest. Nothing is emailed to a firm unless you click "Send now" or confirm a schedule below.' );
 
-        if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) $schedule['status'] ) || ( $schedule && (string) $schedule['status'] === MyNJILGA_Launch_Schedule::ST_COMPLETE ) ) {
+        if ( $schedule && MyNJILGA_Launch_Schedule::is_open( (string) $schedule['status'] ) || ( $schedule && (string) $schedule['status'] === MyNJILGA_Launch_Schedule::ST_COMPLETE && ! MyNJILGA_Launch_Schedule::is_dismissed( (array) $schedule ) ) ) {
             self::render_schedule_status( $year, (array) $schedule, $tz );
             // Unsent invoices it doesn't hold — created since, or (scheduled from Invoicing → Generate Emails) not picked — say so rather than let it look like a miss.
             if ( $live && MyNJILGA_Launch_Schedule::is_open( (string) $schedule['status'] ) && isset( $schedule['row_ids'] ) ) {
@@ -794,6 +794,10 @@ class MyNJILGA_Page_Launch {
         }
         if ( MyNJILGA_Launch_Schedule::is_open( (string) $rec['status'] ) ) {
             echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Cancel the schedule', $ctl( 'cancel' ), 'outline', '', 'Cancel the scheduled send? Emails already sent stay sent; the rest will not go out.' );
+        } elseif ( $failed === 0 ) {
+            // Finished, and nothing left that needs a person: it can come off the page. (With failures still listed,
+            // deal with those first — fix them or dismiss that list — so a warning is never hidden by accident.)
+            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Dismiss this send', $ctl( 'dismiss_send' ), 'outline', '', 'Dismiss this finished send? It is taken off the Invoicing page. Every invoice and its status stays exactly as it is.' );
         }
         echo '</div>';
 
@@ -818,13 +822,15 @@ class MyNJILGA_Page_Launch {
         } elseif ( $rc['resolved'] > 0 ) {
             printf( '<p class="njilga-help">%d invoice%s could not be sent at first and %s since been settled (emailed, or replaced), so nothing is left to send.</p>', $rc['resolved'], $rc['resolved'] === 1 ? '' : 's', $rc['resolved'] === 1 ? 'has' : 'have' );
         }
-        $notes = array_reverse( array_slice( (array) ( $rec['notes'] ?? [] ), -10 ) );
+        $notes = MyNJILGA_Launch_Schedule::visible_notes( $rec );
         if ( $notes ) {
             echo '<h3 class="njilga-section-title">Log</h3><ul class="njilga-timeline">';
             foreach ( $notes as $n ) {
-                printf( '<li><span class="njilga-dim">%s</span> — %s</li>', esc_html( self::fmt_time( (int) ( $n['ts'] ?? 0 ), $tz ) ), esc_html( (string) ( $n['msg'] ?? '' ) ) );
+                printf( '<li><span class="njilga-dim">%s</span> — %s</li>', esc_html( self::fmt_time( (int) $n['ts'], $tz ) ), esc_html( $n['msg'] ) );
             }
-            echo '</ul>';
+            echo '</ul><div class="njilga-actions">';
+            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Dismiss log', $ctl( 'dismiss_log' ), 'outline', '', 'Hide these log entries? Nothing else changes, and new entries will still appear here.' );
+            echo '</div>';
         }
         echo '</div>';
     }
@@ -1155,6 +1161,14 @@ class MyNJILGA_Page_Launch {
                 $actor = wp_get_current_user();
                 $r     = MyNJILGA_Launch_Schedule::dismiss_failures( $year, ( $actor && ! empty( $actor->display_name ) ) ? (string) $actor->display_name : '' );
                 $done  = 'Dismissed. The invoices themselves are unchanged — email them from the Invoicing page when you are ready.';
+                break;
+            case 'dismiss_log':
+                $r    = MyNJILGA_Launch_Schedule::dismiss_log( $year );
+                $done = 'Log dismissed. Nothing else changed, and new entries will still appear.';
+                break;
+            case 'dismiss_send':
+                $r    = MyNJILGA_Launch_Schedule::dismiss_send( $year );
+                $done = 'Dismissed. Every invoice and its status is exactly as it was.';
                 break;
             case 'run_now':
                 $b = MyNJILGA_Launch_Schedule::run_batch( $year, null, true );

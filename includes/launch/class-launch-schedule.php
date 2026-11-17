@@ -470,28 +470,126 @@ class MyNJILGA_Launch_Schedule {
     }
 
     /**
-     * Dismiss a year's failure list. Under the send lock a batch also holds, and a batch re-reads its
-     * record under that lock, so this can never overwrite a batch that is writing its result.
+     * PURE: the log entries to show — newest first, at most $max — those since the log was last dismissed.
+     * Dismissing hides, it does not delete: the entries stay in the record, and later ones still appear.
      *
+     * @param array<string,mixed> $rec
+     * @return array<int,array{ts:int,msg:string}>
+     */
+    public static function visible_notes( array $rec, int $max = 10 ): array {
+        $cut   = (int) ( $rec['log_cleared_seq'] ?? 0 );
+        $notes = [];
+        foreach ( self::numbered_notes( $rec ) as $seq => $n ) {
+            if ( $seq > $cut && (int) ( $n['ts'] ?? 0 ) > 0 ) { // an entry with no time is not a log entry
+                $notes[] = [ 'ts' => (int) ( $n['ts'] ?? 0 ), 'msg' => (string) ( $n['msg'] ?? '' ) ];
+            }
+        }
+        return array_reverse( array_slice( $notes, -max( 1, $max ) ) );
+    }
+
+    /**
+     * PURE: a record's log entries by their number. An entry written before entries were numbered is given
+     * the number of its place in the log, which is how they were counted.
+     *
+     * @param array<string,mixed> $rec
+     * @return array<int,array<string,mixed>>
+     */
+    private static function numbered_notes( array $rec ): array {
+        $out = [];
+        foreach ( array_values( (array) ( $rec['notes'] ?? [] ) ) as $i => $n ) {
+            $out[ isset( $n['n'] ) ? (int) $n['n'] : $i + 1 ] = (array) $n;
+        }
+        return $out;
+    }
+
+    /**
+     * PURE: the record with its log dismissed: everything written so far is hidden. Null when there is nothing showing.
+     *
+     * @param array<string,mixed> $rec
+     * @return array<string,mixed>|null
+     */
+    public static function with_log_cleared( array $rec ): ?array {
+        if ( ! self::visible_notes( $rec, PHP_INT_MAX ) ) {
+            return null;
+        }
+        $rec['log_cleared_seq'] = max( array_keys( self::numbered_notes( $rec ) ) );
+        return $rec;
+    }
+
+    /**
+     * PURE: whether a FINISHED send has been dismissed — taken off the Invoicing page. An open send
+     * (running, paused, halted) is never dismissed: it is still doing something.
+     *
+     * @param array<string,mixed> $rec
+     */
+    public static function is_dismissed( array $rec ): bool {
+        return (int) ( $rec['dismissed_ts'] ?? 0 ) > 0 && ! self::is_open( (string) ( $rec['status'] ?? '' ) );
+    }
+
+    /**
+     * PURE: the record with a finished send dismissed as of $now. Null while the send is still open, or
+     * when it is already dismissed.
+     *
+     * @param array<string,mixed> $rec
+     * @return array<string,mixed>|null
+     */
+    public static function with_send_dismissed( array $rec, int $now ): ?array {
+        if ( self::is_open( (string) ( $rec['status'] ?? '' ) ) || (int) ( $rec['dismissed_ts'] ?? 0 ) > 0 ) {
+            return null;
+        }
+        $rec['dismissed_ts'] = $now;
+        return $rec;
+    }
+
+    /**
+     * Read a year's record, change it, save it — all under the send lock a batch also holds, and a batch
+     * re-reads its record under that lock, so this can never overwrite a batch that is writing its result.
+     *
+     * @param callable(array<string,mixed>):?array<string,mixed> $apply returns the new record, or null for "nothing to do"
      * @return array{ok:bool,error:string}
      */
-    public static function dismiss_failures( int $year, string $who = '' ): array {
+    private static function update_locked( int $year, callable $apply, string $nothing ): array {
         $lock = self::acquire_lock();
         if ( $lock === '' ) {
             return [ 'ok' => false, 'error' => 'An email batch is running right now. Try again in a minute.' ];
         }
         try {
-            $rec    = self::get( $year );
-            $listed = $rec ? count( self::reconcile( $rec, MyNJILGA_Dues_Invoice_Table::get_many( array_keys( (array) ( $rec['failures'] ?? [] ) ) ) )['unresolved'] ) : 0;
-            $next   = $rec ? self::without_failures( $rec, time(), $who, $listed ) : null;
+            $rec  = self::get( $year );
+            $next = $rec ? $apply( $rec ) : null;
             if ( $next === null ) {
-                return [ 'ok' => false, 'error' => 'There is no failure list to dismiss.' ];
+                return [ 'ok' => false, 'error' => $nothing ];
             }
             self::put( $year, $next );
             return [ 'ok' => true, 'error' => '' ];
         } finally {
             self::release_lock( $lock );
         }
+    }
+
+    /**
+     * Dismiss a year's failure list.
+     *
+     * @return array{ok:bool,error:string}
+     */
+    public static function dismiss_failures( int $year, string $who = '' ): array {
+        return self::update_locked( $year, static function ( array $rec ) use ( $who ) {
+            $listed = count( self::reconcile( $rec, MyNJILGA_Dues_Invoice_Table::get_many( array_keys( (array) ( $rec['failures'] ?? [] ) ) ) )['unresolved'] );
+            return self::without_failures( $rec, time(), $who, $listed );
+        }, 'There is no failure list to dismiss.' );
+    }
+
+    /** Dismiss a year's log: hide its entries so far. @return array{ok:bool,error:string} */
+    public static function dismiss_log( int $year ): array {
+        return self::update_locked( $year, static function ( array $rec ) {
+            return self::with_log_cleared( $rec );
+        }, 'There is no log to dismiss.' );
+    }
+
+    /** Dismiss a finished send: take it off the Invoicing page. @return array{ok:bool,error:string} */
+    public static function dismiss_send( int $year ): array {
+        return self::update_locked( $year, static function ( array $rec ) {
+            return self::with_send_dismissed( $rec, time() );
+        }, 'There is no finished send to dismiss.' );
     }
 
     /** @param array<string,mixed> $record */
@@ -516,9 +614,12 @@ class MyNJILGA_Launch_Schedule {
      * @return array<string,mixed>
      */
     private static function note( array $rec, int $now, string $message ): array {
-        $notes   = (array) ( $rec['notes'] ?? [] );
-        $notes[] = [ 'ts' => $now, 'msg' => $message ];
-        $rec['notes'] = array_slice( $notes, -self::NOTES_KEPT );
+        $notes = (array) ( $rec['notes'] ?? [] );
+        // Each entry has a number that only goes up, so "since the log was dismissed" never depends on the clock.
+        $seq              = max( (int) ( $rec['note_seq'] ?? 0 ), count( $notes ) ) + 1;
+        $rec['note_seq']  = $seq;
+        $notes[]          = [ 'ts' => $now, 'msg' => $message, 'n' => $seq ];
+        $rec['notes']     = array_slice( $notes, -self::NOTES_KEPT );
         return $rec;
     }
 
