@@ -71,6 +71,11 @@ class MyNJILGA_Invoice_Sender {
         $kind     = (string) ( $snapshot['invoice_kind'] ?? MyNJILGA_Dues_Snapshot::KIND_COMBINED );
         $members  = $snapshot['members'];
         $firm     = (string) ( $snapshot['company']['name'] ?? '' );
+        // A member's own invoice has no firm (its "company" name is the person's, for the screens):
+        // the email says "Your 2027 … invoice", not "Jane Doe's … invoice" addressed to Jane Doe.
+        if ( MyNJILGA_Individual_Invoicing::is_self_billed( $invoiceRow ) ) {
+            $firm = '';
+        }
         $total    = MyNJILGA_Invoicing::money( (int) $invoiceRow->total_amount_cents );
         $isAssess = $kind === MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT;
 

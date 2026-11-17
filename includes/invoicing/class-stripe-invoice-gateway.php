@@ -129,10 +129,10 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway, MyNJI
             $companyName = (string) ( $billTo['company_name'] ?? '' );
 
             if ( $companyId <= 0 ) {
-                // Should not happen in the normal dues-invoicing flow — a
-                // firm invoice always carries a company_id — but degrade
-                // gracefully rather than crash: a one-off customer lookup
-                // by email, no customer-map bookkeeping.
+                // No firm: a member's own invoice (MyNJILGA_Individual_Invoicing),
+                // which is billed to the person, not to a firm. A customer
+                // lookup by email, no customer-map bookkeeping (that maps
+                // firms).
                 return $this->find_or_create_customer_by_email( $client, $email, $billTo );
             }
 
@@ -224,7 +224,7 @@ class MyNJILGA_Stripe_Invoice_Gateway implements MyNJILGA_Invoice_Gateway, MyNJI
         $createResp = $client->request( 'POST', '/customers', [
             'name'        => $name,
             'email'       => $email,
-            'description' => 'NJILGA member firm',
+            'description' => 'NJILGA member',
             'metadata'    => [
                 'njilga_owner_contact_id' => (int) ( $billTo['contact_id'] ?? 0 ),
                 'source'                  => 'my-njilga',

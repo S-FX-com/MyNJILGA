@@ -115,6 +115,18 @@ class MyNJILGA_Dues_Preview {
             }
         }
 
+        // A member who is on a firm's roster is billed by the firm. If they were billed on their own
+        // before they joined it, that draft is dropped now, so the same dues are not created twice.
+        $billedByFirms = [];
+        foreach ( $candidates as $c ) {
+            if ( $c['status'] === 'draft' ) {
+                foreach ( $c['members'] as $m ) {
+                    $billedByFirms[] = (int) ( $m['contact_id'] ?? 0 );
+                }
+            }
+        }
+        $stats['stale_removed'] += MyNJILGA_Individual_Invoicing::retire_drafts_of( array_filter( $billedByFirms ), $duesYear, $livemode );
+
         foreach ( $keep as $companyId => $ids ) {
             // A null id means an approved+ row blocked the refresh; that row
             // must survive, and so must any other non-draft row — deletion is
@@ -184,7 +196,7 @@ class MyNJILGA_Dues_Preview {
      *
      * @return array<string,mixed>
      */
-    private static function config_for_year( int $duesYear ): array {
+    public static function config_for_year( int $duesYear ): array {
         $config   = MyNJILGA_Dues_Settings::engine_config();
         $coverage = self::join_coverage( $duesYear, MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
         $config['dues_covered'] = $coverage['covered'];
@@ -472,7 +484,7 @@ class MyNJILGA_Dues_Preview {
      * @param array<int,array<string,mixed>> $members
      * @return array<string,mixed>
      */
-    private static function make_candidate( $company, int $duesYear, string $mode, string $kind, array $owner, array $billTo, array $members, string $status ): array {
+    public static function make_candidate( $company, int $duesYear, string $mode, string $kind, array $owner, array $billTo, array $members, string $status ): array {
         $noCategory = 0;
         $notes      = [];
         foreach ( $members as $m ) {
@@ -550,6 +562,10 @@ class MyNJILGA_Dues_Preview {
         if ( ! MyNJILGA_Members_Data::companies_module_active() ) {
             return $fail( 'The FluentCRM Companies module is not active.' );
         }
+        // A member's own invoice, filed under no firm: priced as that person alone.
+        if ( (int) $row->fluentcrm_company_id <= 0 ) {
+            return MyNJILGA_Individual_Invoicing::candidate_for_row( $row );
+        }
         $year    = (int) $row->dues_year;
         $company = \FluentCrm\App\Models\Company::with( [ 'subscribers.tags', 'owner' ] )->find( (int) $row->fluentcrm_company_id );
         if ( ! $company ) {
@@ -622,7 +638,7 @@ class MyNJILGA_Dues_Preview {
      * @param array<string,mixed>      $c
      * @param array<string,mixed>|null $replaces
      */
-    private static function persist_candidate( array $c, bool $livemode, ?array $replaces = null ): ?int {
+    public static function persist_candidate( array $c, bool $livemode, ?array $replaces = null ): ?int {
         $isDraft  = $c['status'] === 'draft';
         $snapshot = self::snapshot_for_candidate( $c, $replaces );
 
@@ -729,7 +745,7 @@ class MyNJILGA_Dues_Preview {
      * @param \FluentCrm\App\Models\Subscriber|null $contact
      * @return array{contact_id:int,name:string,first_name:string,last_name:string,email:string}
      */
-    private static function person_from_contact( $contact, int $fallbackId ): array {
+    public static function person_from_contact( $contact, int $fallbackId ): array {
         if ( ! $contact ) {
             return MyNJILGA_Dues_Snapshot::person( [ 'contact_id' => $fallbackId ] );
         }

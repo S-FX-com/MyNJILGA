@@ -188,6 +188,25 @@ class MyNJILGA_Admin_UI {
         );
     }
 
+    /**
+     * A small external-link icon to a contact's FluentCRM record, for where the person's name
+     * already does something else (a member's own invoice row on Invoicing: the name expands it).
+     * '' with no contact id.
+     */
+    public static function contact_icon_link( int $contactId, string $name ): string {
+        if ( $contactId <= 0 ) {
+            return '';
+        }
+        $label = sprintf( 'Open %s in FluentCRM', $name );
+        return sprintf(
+            '<a class="njilga-crmlink" href="%s" target="_blank" rel="noopener" title="%s" aria-label="%s">%s</a>',
+            esc_url( self::crm_contact_url( $contactId ) ),
+            esc_attr( $label ),
+            esc_attr( $label ),
+            self::icon( 'external' )
+        );
+    }
+
     private static function record_link( string $url, string $label, string $title ): string {
         if ( $url === '' || $label === '' ) {
             return esc_html( $label );

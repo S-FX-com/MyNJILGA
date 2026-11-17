@@ -38,6 +38,7 @@ class MyNJILGA_Page_Invoicing {
     const ACTION_EMAIL_SCHEDULE = 'my_njilga_dues_email_schedule';
     const ACTION_REISSUE    = 'my_njilga_dues_reissue';
     const ACTION_UPDATE     = 'my_njilga_dues_update';
+    const ACTION_INDIVIDUAL = 'my_njilga_dues_individual';
 
     /** How long a "Generate emails" selection waits for staff on the review screen. */
     const EMAIL_BATCH_TTL = 6 * HOUR_IN_SECONDS;
@@ -116,6 +117,11 @@ class MyNJILGA_Page_Invoicing {
             echo '</div>';
             return;
         }
+        if ( $view === 'nofirm' ) {
+            self::render_nofirm_view( $duesYear, $liveMode );
+            echo '</div>';
+            return;
+        }
 
         self::render_notice();
         self::render_gateway_notices();
@@ -150,6 +156,7 @@ class MyNJILGA_Page_Invoicing {
                 return;
             }
             self::render_empty_state( $duesYear, $tally['joins'] );
+            self::render_nofirm_entry( $duesYear );
             echo '</div>';
             return;
         }
@@ -161,6 +168,7 @@ class MyNJILGA_Page_Invoicing {
         self::render_scheduled_send( $duesYear );
 
         self::render_workspace( $duesYear, $views, $canCreate, $liveMode );
+        self::render_nofirm_entry( $duesYear );
         self::render_email_pick_form( $duesYear );
         self::render_downgrade_entry( $duesYear );
         self::render_wipe_entry( $duesYear, $liveMode );
@@ -480,9 +488,13 @@ class MyNJILGA_Page_Invoicing {
         }
 
         // Firm name cell — name + badges + bill-to line.
-        $badges = self::row_badges( $row, $snapshot );
+        $badges     = self::row_badges( $row, $snapshot );
+        $selfBilled = MyNJILGA_Individual_Invoicing::is_self_billed( $row );
         if ( $c['status'] === 'blocked' ) {
             $subline = '<span class="njilga-subline njilga-subline-warn">' . self::icon( 'alert' ) . ' No firm owner</span>';
+        } elseif ( $selfBilled ) {
+            // The row's name IS the person; the pill says there is no firm, and the line where it goes.
+            $subline = '<span class="njilga-subline">Bills ' . esc_html( MyNJILGA_Dues_Snapshot::bill_to( $row )['email'] ) . '</span>';
         } elseif ( $billTo !== '—' ) {
             $subline = '<span class="njilga-subline">Bill to ' . self::bill_to_link( $row ) . '</span>';
         } else {
@@ -498,7 +510,9 @@ class MyNJILGA_Page_Invoicing {
             $rowId,
             esc_html( $name ),
             $badges,
-            MyNJILGA_Admin_UI::company_icon_link( (int) $row->fluentcrm_company_id, $name ),
+            $selfBilled
+                ? MyNJILGA_Admin_UI::contact_icon_link( (int) $row->bill_to_contact_id, $name )
+                : MyNJILGA_Admin_UI::company_icon_link( (int) $row->fluentcrm_company_id, $name ),
             $subline
         );
         echo '<td class="njilga-col-num">' . ( $memberCnt > 0 ? (int) $memberCnt : '<span class="njilga-dim">0</span>' ) . '</td>';
@@ -1673,6 +1687,149 @@ JS;
         echo '</div>';
     }
 
+    /** The way in to the members-without-a-firm list. Static: the list itself is read only when opened. */
+    private static function render_nofirm_entry( int $duesYear ): void {
+        printf(
+            '<div class="njilga-banner"><div><div class="njilga-banner-title">Members without a firm</div><div class="njilga-banner-desc">Firm invoices are built from each firm\'s roster, so a member who is on no firm is on no invoice. Find them here and bill them individually.</div></div><a class="njilga-btn njilga-btn-outline" href="%s">Review members without a firm</a></div>',
+            esc_url( self::page_url( $duesYear, [ 'view' => 'nofirm' ] ) )
+        );
+    }
+
+    /**
+     * Members on no firm's roster, and what each would be billed for the year. Adding them makes
+     * individual DRAFT invoices under No Invoice — nothing reaches Stripe from here.
+     */
+    private static function render_nofirm_view( int $duesYear, bool $live ): void {
+        printf( '<p class="njilga-back"><a href="%s">&larr; Back to %d invoicing</a></p>', esc_url( self::page_url( $duesYear ) ), $duesYear );
+        echo '<h1 class="njilga-title">Members without a firm</h1>';
+        self::render_notice();
+
+        $ev = MyNJILGA_Individual_Invoicing::evaluate( $duesYear, $live );
+        foreach ( $ev['warnings'] as $w ) {
+            MyNJILGA_Admin_UI::callout( esc_html( (string) $w ), 'warning' );
+        }
+        if ( ! $ev['available'] ) {
+            return;
+        }
+        if ( $ev['conflicts'] ) {
+            $lines = [];
+            foreach ( $ev['conflicts'] as $x ) {
+                $lines[] = sprintf( '<li><strong>%s</strong> has an invoice here (%s) and is also on %s\'s roster, so the firm\'s invoice bills them too.</li>', esc_html( $x['name'] ), esc_html( $x['status'] ), esc_html( $x['firm'] ) );
+            }
+            MyNJILGA_Admin_UI::callout( '<strong>Billed twice?</strong> Void one of each pair below, so nobody pays twice.<ul class="njilga-list">' . implode( '', $lines ) . '</ul>', 'warning' );
+        }
+
+        printf(
+            '<p class="njilga-subtitle">Members who are on no firm\'s roster, so no firm invoice bills them. Each is priced for %d as a first member of their category and billed to their own email. <strong>Adding</strong> a member only makes a draft under <a href="%s">No Invoice</a>; nothing is created in Stripe or emailed until you do that there.</p>',
+            $duesYear,
+            esc_url( self::page_url( $duesYear ) )
+        );
+
+        $buckets = [ 'bill' => [], 'added' => [], 'nothing' => [] ];
+        foreach ( $ev['people'] as $id => $p ) {
+            switch ( $p['verdict']['code'] ) {
+                case MyNJILGA_Individual_Invoicing::BILL:
+                    $buckets['bill'][ $id ] = $p;
+                    break;
+                case MyNJILGA_Individual_Invoicing::DRAFTED:
+                case MyNJILGA_Individual_Invoicing::INVOICED:
+                    $buckets['added'][ $id ] = $p;
+                    break;
+                default:
+                    $buckets['nothing'][ $id ] = $p;
+            }
+        }
+        $show = isset( $_GET['show'] ) ? sanitize_key( $_GET['show'] ) : 'bill'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        if ( ! in_array( $show, [ 'bill', 'added', 'nothing', 'all' ], true ) ) {
+            $show = 'bill';
+        }
+        $tab = static function ( string $key, string $label, int $count ) use ( $duesYear, $show ): array {
+            return [ 'label' => $label, 'count' => $count, 'active' => $show === $key, 'url' => self::page_url( $duesYear, [ 'view' => 'nofirm', 'show' => $key ] ) ];
+        };
+        MyNJILGA_Admin_UI::nav_tabs( [
+            $tab( 'bill',    'To invoice',      count( $buckets['bill'] ) ),
+            $tab( 'added',   'In Invoicing',    count( $buckets['added'] ) ),
+            $tab( 'nothing', 'Nothing to bill', count( $buckets['nothing'] ) ),
+            $tab( 'all',     'All',             count( $ev['people'] ) ),
+        ] );
+
+        $list = $show === 'all' ? $ev['people'] : $buckets[ $show ];
+        if ( ! $list ) {
+            echo '<div class="njilga-card njilga-empty"><div class="njilga-empty-icon">' . self::icon( 'users' ) . '</div>';
+            echo '<h2 class="njilga-empty-title">' . esc_html( $ev['people'] ? 'Nobody in this list' : 'Everyone is on a firm' ) . '</h2>';
+            echo '<p class="njilga-empty-text">' . esc_html( $ev['people'] ? 'Try another tab.' : 'No member is missing from a firm\'s roster, so every member is on a firm invoice.' ) . '</p></div>';
+            return;
+        }
+
+        $formId = 'njilga-nofirm-form';
+        printf(
+            '<form id="%s" method="post" action="%s"><input type="hidden" name="action" value="%s"><input type="hidden" name="dues_year" value="%d">%s',
+            esc_attr( $formId ),
+            esc_url( admin_url( 'admin-post.php' ) ),
+            esc_attr( self::ACTION_INDIVIDUAL ),
+            $duesYear,
+            wp_nonce_field( self::ACTION_INDIVIDUAL, '_wpnonce', true, false )
+        );
+        echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table njilga-nofirm" id="njilga-nofirm"><thead><tr>';
+        echo '<th class="njilga-col-check"><input type="checkbox" id="njilga-nofirm-all" aria-label="Select everyone who can be invoiced"></th>';
+        printf( '<th>Member</th><th>Standing</th><th>Category</th><th class="njilga-col-num">%d invoice</th><th>Invoice</th>', $duesYear );
+        echo '</tr></thead><tbody>';
+        $stateVariant = [ 'paid' => 'success', 'unpaid' => 'warning', 'none' => 'muted' ];
+        foreach ( $list as $id => $p ) {
+            $can      = (bool) $p['verdict']['can'];
+            $standing = [ 'state' => $p['state'], 'through' => $p['through'] ];
+            [ $stateLabel, $stateMod ] = MyNJILGA_My_Membership::standing_pill( $standing );
+            $expires  = MyNJILGA_My_Membership::expiry_text( $standing );
+
+            if ( $p['row'] ) {
+                $c    = self::classify( $p['row'] );
+                $last = self::pill( $c['badge'][0], $c['badge'][1] );
+            } elseif ( $can ) {
+                $last = '<span class="njilga-dim">Not invoiced</span>';
+            } elseif ( $p['verdict']['code'] === MyNJILGA_Individual_Invoicing::NO_EMAIL ) {
+                // Something staff can fix; the other reasons (paid, inactive, $0) need no action.
+                $last = MyNJILGA_Admin_UI::validation( (string) $p['verdict']['why'], false );
+            } else {
+                $last = '<span class="njilga-dim">' . esc_html( (string) $p['verdict']['why'] ) . '</span>';
+            }
+
+            echo '<tr>';
+            echo '<td class="njilga-col-check">' . ( $can ? sprintf( '<input type="checkbox" class="njilga-nofirm-check" name="contact_ids[]" value="%d" aria-label="Select %s">', (int) $id, esc_attr( $p['name'] ) ) : '' ) . '</td>';
+            printf(
+                '<td>%s%s</td>',
+                MyNJILGA_Admin_UI::contact_link( (int) $id, $p['name'] ),
+                '<span class="njilga-subline">' . ( $p['email'] !== '' ? esc_html( $p['email'] ) : 'No email on file' ) . '</span>'
+            );
+            printf( '<td>%s%s</td>', self::pill( $stateLabel, $stateVariant[ $stateMod ] ?? 'muted' ), $expires !== '' ? ' <span class="njilga-dim">' . esc_html( $expires ) . '</span>' : '' );
+            echo '<td>' . ( $p['category'] !== '' ? esc_html( $p['category'] ) : '<span class="njilga-dim">&mdash;</span>' ) . '</td>';
+            echo '<td class="njilga-col-num">' . ( $p['cents'] > 0 ? esc_html( MyNJILGA_Invoicing::money( (int) $p['cents'] ) ) : '<span class="njilga-dim">&mdash;</span>' ) . '</td>';
+            echo '<td>' . $last . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table></div></div>';
+
+        // Only where there is something to add: a tab of people with nothing to bill has no use for the buttons.
+        $selectable = 0;
+        foreach ( $list as $p ) {
+            $selectable += $p['verdict']['can'] ? 1 : 0;
+        }
+        $toAdd = count( $buckets['bill'] );
+        if ( $selectable > 0 ) {
+            echo '<div class="njilga-actions">';
+            printf( '<button type="submit" class="njilga-btn njilga-btn-primary">%s Add selected to Invoicing</button>', self::icon( 'file' ) );
+            if ( $toAdd > 0 && in_array( $show, [ 'bill', 'all' ], true ) ) {
+                printf(
+                    '<button type="submit" name="all" value="1" class="njilga-btn njilga-btn-outline" onclick="return confirm(%s);">Add all %d to Invoicing</button>',
+                    esc_attr( wp_json_encode( sprintf( 'Add %d individual invoice%s for %d? They are drafts — nothing is sent to Stripe or emailed yet.', $toAdd, $toAdd === 1 ? '' : 's', $duesYear ) ) ),
+                    $toAdd
+                );
+            }
+            echo '</div>';
+        }
+        echo '</form>';
+        echo '<script>(function(){var a=document.getElementById("njilga-nofirm-all");if(!a)return;a.addEventListener("change",function(){var b=document.querySelectorAll(".njilga-nofirm-check");for(var i=0;i<b.length;i++){b[i].checked=a.checked;}});})();</script>';
+    }
+
     /**
      * The Launch Wizard's pre-flight checks, on this page: is the site
      * ready to bill this year. Behind a link rather than on every load —
@@ -1969,7 +2126,9 @@ JS;
     private static function row_badges( object $row, array $snapshot ): string {
         $out  = self::kind_pill( $row );
         $mode = (string) ( $row->billing_mode ?? 'firm' );
-        if ( $mode !== MyNJILGA_Dues_Settings::MODE_FIRM && (string) ( $row->invoice_kind ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
+        if ( MyNJILGA_Individual_Invoicing::is_self_billed( $row ) ) {
+            $out .= ' ' . self::pill( 'no firm', 'outline' );
+        } elseif ( $mode !== MyNJILGA_Dues_Settings::MODE_FIRM && (string) ( $row->invoice_kind ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN ) {
             $out .= ' ' . self::pill( str_replace( '_', ' ', $mode ), 'outline' );
         }
         $noCat = 0;
@@ -2089,6 +2248,8 @@ JS;
             'updated'         => 'success',
             'updated_warn'    => 'warning',
             'updated_quiet'   => 'success',
+            'individual_added' => 'success',
+            'individual_none'  => 'warning',
             'email_test_sent' => 'success',
             'invoice_moved'   => 'success',
             'wiped_partial'   => 'warning',
@@ -2209,6 +2370,13 @@ JS;
                 return $syncMsg;
             case 'voided_invoice':
                 return 'Invoice voided.';
+            case 'individual_added':
+            case 'individual_none':
+                return MyNJILGA_Individual_Invoicing::summary( [
+                    'added'     => $g( 'added' ),
+                    'refreshed' => $g( 'refreshed' ),
+                    'skipped'   => array_fill( 0, $g( 'skipped' ), '' ),
+                ] ) . ( $g( 'added' ) + $g( 'refreshed' ) > 0 ? ' Create them from the table on the Invoicing page when you are ready — nothing has been sent to Stripe yet.' : '' );
             case 'nothing':
                 return 'Nothing selected.';
             case 'error':
@@ -2790,6 +2958,41 @@ JS;
             self::redirect( $year, [ 'msg' => 'updated_quiet', 'why' => $r['mail'], 'number' => rawurlencode( $r['number'] ) ] );
         }
         self::redirect( $year, [ 'msg' => 'updated', 'number' => rawurlencode( $r['number'] ) ] );
+    }
+
+    /**
+     * Members without a firm → individual invoices (drafts, under No Invoice). The checked people,
+     * or with "all" everyone who can have one and has none yet.
+     */
+    public static function handle_individual(): void {
+        self::guard( self::ACTION_INDIVIDUAL );
+        $year = self::post_year();
+        $live = ( MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE );
+        $ids  = [];
+        if ( ! empty( $_POST['all'] ) ) {
+            $ev = MyNJILGA_Individual_Invoicing::evaluate( $year, $live );
+            foreach ( $ev['people'] as $id => $p ) {
+                if ( $p['verdict']['code'] === MyNJILGA_Individual_Invoicing::BILL ) {
+                    $ids[] = (int) $id;
+                }
+            }
+            $ids = array_slice( $ids, 0, MyNJILGA_Individual_Invoicing::MAX_PER_ADD );
+        } else {
+            $posted = ( isset( $_POST['contact_ids'] ) && is_array( $_POST['contact_ids'] ) ) ? $_POST['contact_ids'] : [];
+            $ids    = array_values( array_unique( array_filter( array_map( 'intval', $posted ) ) ) );
+        }
+        if ( ! $ids ) {
+            self::redirect( $year, [ 'view' => 'nofirm', 'msg' => 'nothing' ] );
+        }
+        $r = MyNJILGA_Individual_Invoicing::add( $ids, $year, $live );
+        self::store_errors( $r['skipped'] );
+        self::redirect( $year, [
+            'view'      => 'nofirm',
+            'msg'       => $r['added'] + $r['refreshed'] > 0 ? 'individual_added' : 'individual_none',
+            'added'     => $r['added'],
+            'refreshed' => $r['refreshed'],
+            'skipped'   => count( $r['skipped'] ),
+        ] );
     }
 
     public static function handle_move_join(): void {

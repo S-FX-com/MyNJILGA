@@ -157,6 +157,15 @@ CI runs them on PHP 7.4 and 8.3 on every push (`.github/workflows/tests.yml`).
 
 A member with no email can't be billed individually; their invoice is addressed to the Owner and the card says so.
 
+### Members without a firm
+
+A firm's invoice is built from the firm's roster, so a member who is on **no firm's roster** is on no invoice at all. **Invoicing → Members without a firm** lists them — the same people the Dashboard counts as "no firm" (a contact with a dues signal who is on no Company's roster; a contact with no membership tag at all isn't a member on record and isn't listed) — and bills each one **individually**:
+
+- Each person is priced as a first member of their category (their dues, plus any assessment their tags carry) and billed to **their own email**. The list says, for everyone, what they would be billed and why not when they wouldn't: *already paid for this year*, *inactive*, *no category tag*, *no email address*, or the plain $0 of a free category.
+- **Adding** a member (tick them → *Add selected to Invoicing*, or *Add all*) only makes a **draft** under **No Invoice**, in the same table as the firms, marked **no firm**. Nothing reaches Stripe or an inbox until you click **Create Invoice** there and then email it, exactly as for a firm. Adding someone again refreshes their draft to today's tags and price; a draft that now comes to $0 becomes "nothing to bill".
+- It is an ordinary invoice row filed under no firm (`fluentcrm_company_id` 0, `individual` billing, `combined` kind), so create, email, reminders, **Update & resend**, void, issue again, the Payments ledger, the downgrade sweep and the year wipe all work on it unchanged. The Stripe customer is found or created by email; there is no firm, so no Company note is written. The email reads *"Your 2027 NJILGA membership dues invoice totals …"* with no firm in the subject.
+- **One invoice per person**: someone who is on a firm's roster is never offered one (the firm's invoice bills them), and someone who already has an invoice past draft isn't offered another. If a member **joins a firm after** they were invoiced, the list warns that the firm's invoice bills them too, so you can void one; **Refresh Firms** drops their individual *draft* (never a created invoice) once a firm invoice bills them, and **Update & resend** on their own invoice refuses and says so.
+
 ### Exceptions (never silently skipped)
 
 The preview flags, separately from normal rows: firms with **no members**, firms with **no Owner** (roster shown so you can see what would be billed), firms where **nothing is billable**, and members with **no category tag** (badge on the card). Rows that hit an error on create/send show under **Needs attention** with the error text and stay selectable for a retry.
@@ -614,6 +623,7 @@ my-njilga/
 │   │   ├── class-invoice-email.php       ← PURE: the editable email wording — merge tags, cleaning, build() (unit-tested)
 │   │   ├── class-invoice-sender.php      ← Email + CC policy + Company Note
 │   │   ├── class-invoice-update.php      ← Resend Updated Invoice: pure refusal/diff/fingerprint (unit-tested) + the guarded void → re-price → create → email run
+│   │   ├── class-individual-invoicing.php ← Members without a firm: who is offered an individual invoice (pure, unit-tested), the draft candidate, add/refresh, the "joined a firm since" guards
 │   │   ├── class-payment-listener.php    ← Paid → tags + role (via role sync)
 │   │   ├── class-role-sync.php           ← Paid member's WP role follows their category
 │   │   ├── class-invoice-stats.php       ← Dashboard invoice figures: one GROUP BY, mode-scoped, parity-tested against the Payments ledger
