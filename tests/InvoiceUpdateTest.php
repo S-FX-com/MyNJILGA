@@ -159,6 +159,71 @@ class InvoiceUpdateTest extends NJILGA_TestCase {
         $this->assertSame( 12500, $d['new_total'] );
     }
 
+    // ---- everything the invoice prints about a person counts --------------------
+
+    public function testARenameIsAChange(): void {
+        $old = $this->snap( [ $this->member( 1, 'Ann Able', 12500 ) ] );
+        $new = $this->snap( [ array_merge( $this->member( 1, 'Ann Able', 12500 ), [ 'name' => 'Anne Able' ] ) ] );
+        $d   = MyNJILGA_Invoice_Update::diff( $old, $new );
+        $this->assertTrue( $d['any'], 'a name fixed in CRM changes the invoice\'s lines' );
+        $this->assertSame( 'changed', $d['changes'][0]['kind'] );
+        $this->assertSame( 'Anne Able', $d['changes'][0]['name'] );
+        $this->assertSame( 'Ann Able', $d['changes'][0]['old_name'] );
+    }
+
+    public function testAChangeInWhyAZeroIsZeroIsAChange(): void {
+        $inactive = array_merge( $this->member( 1, 'Ann Able', 0 ), [ 'dues_note' => 'inactive' ] );
+        $paid     = array_merge( $this->member( 1, 'Ann Able', 0 ), [ 'dues_note' => 'paid via online join' ] );
+        $d        = MyNJILGA_Invoice_Update::diff( $this->snap( [ $inactive ] ), $this->snap( [ $paid ] ) );
+        $this->assertTrue( $d['any'] );
+        $this->assertSame( 'Professional Membership · 1st Member — inactive', $d['changes'][0]['old_label'] );
+        $this->assertSame( 'Professional Membership · 1st Member — paid via online join', $d['changes'][0]['new_label'] );
+        $unbilled = array_merge( $this->member( 1, 'Ann Able', 0 ), [ 'unbilled_reason' => 'no category tag' ] );
+        $this->assertTrue( MyNJILGA_Invoice_Update::diff( $this->snap( [ $this->member( 1, 'Ann Able', 0 ) ] ), $this->snap( [ $unbilled ] ) )['any'], 'the unbilled reason counts too' );
+    }
+
+    public function testTheAssessmentsWordingIsPartOfTheInvoiceToo(): void {
+        $officer = array_merge( $this->member( 1, 'Ann Able', 12500, 20000 ), [ 'assessment_label' => 'Trustee Dinner Assessment', 'assessment_qualifier' => 'Officer' ] );
+        $trustee = array_merge( $this->member( 1, 'Ann Able', 12500, 20000 ), [ 'assessment_label' => 'Trustee Dinner Assessment', 'assessment_qualifier' => 'Trustee' ] );
+        $d       = MyNJILGA_Invoice_Update::diff( $this->snap( [ $officer ] ), $this->snap( [ $trustee ] ) );
+        $this->assertTrue( $d['any'], 'same price, different qualifier' );
+        $this->assertSame( 'Professional Membership · 1st Member + Trustee Dinner Assessment (Officer)', $d['changes'][0]['old_label'] );
+        // An assessment label on a member who owes no assessment is not printed, so it is not a change.
+        $none = array_merge( $this->member( 1, 'Ann Able', 12500, 0 ), [ 'assessment_label' => 'Trustee Dinner Assessment' ] );
+        $this->assertFalse( MyNJILGA_Invoice_Update::diff( $this->snap( [ $this->member( 1, 'Ann Able', 12500, 0 ) ] ), $this->snap( [ $none ] ) )['any'] );
+    }
+
+    // ---- whether the new invoice is emailed ---------------------------------------
+
+    public function testOnlyAnInvoiceTheFirmReceivedIsEmailedAgain(): void {
+        $this->assertTrue( MyNJILGA_Invoice_Update::was_emailed( $this->row( [ 'status' => 'sent' ] ) ) );
+        $this->assertTrue( MyNJILGA_Invoice_Update::was_emailed( $this->row( [ 'status' => 'created', 'sent_at' => '2026-11-10 09:00:00' ] ) ), 'sent_at alone is proof it went' );
+        $this->assertFalse( MyNJILGA_Invoice_Update::was_emailed( $this->row( [ 'status' => 'created', 'sent_at' => null ] ) ) );
+        $this->assertFalse( MyNJILGA_Invoice_Update::was_emailed( $this->row( [ 'status' => 'created', 'sent_at' => '' ] ) ) );
+    }
+
+    public function testNothingIsEmailedInTestModeOrForAnInvoiceNeverSent(): void {
+        $sent   = $this->row( [ 'status' => 'sent' ] );
+        $unsent = $this->row( [ 'status' => 'created', 'sent_at' => null ] );
+        $this->assertSame( [ 'was_emailed' => true, 'will_email' => true, 'why_not' => '' ], MyNJILGA_Invoice_Update::email_plan( $sent, true ), 'Live + emailed: send' );
+        $this->assertSame( [ 'was_emailed' => false, 'will_email' => false, 'why_not' => 'unsent' ], MyNJILGA_Invoice_Update::email_plan( $unsent, true ), 'Live + never emailed: replace quietly' );
+        $this->assertSame( [ 'was_emailed' => true, 'will_email' => false, 'why_not' => 'test' ], MyNJILGA_Invoice_Update::email_plan( $sent, false ), 'Test mode never emails firms' );
+        $this->assertSame( [ 'was_emailed' => false, 'will_email' => false, 'why_not' => 'test' ], MyNJILGA_Invoice_Update::email_plan( $unsent, false ), 'Test mode wins over "never sent"' );
+    }
+
+    public function testTheNoticeNamesTheInvoiceTheFirmActuallyHolds(): void {
+        $sent = $this->row( [ 'status' => 'sent' ] );
+        $this->assertSame( [ 'number' => 'NJILGA-2290', 'id' => 'in_OLD', 'total_cents' => 20000 ], MyNJILGA_Invoice_Update::carry_replaces( $sent ), 'an emailed invoice is the one replaced' );
+
+        $plain = $this->row( [ 'status' => 'created', 'sent_at' => null, 'roster_snapshot' => json_encode( $this->snap( [], [ 'version' => 2 ] ) ) ] );
+        $this->assertSame( [], MyNJILGA_Invoice_Update::carry_replaces( $plain ), 'a never-emailed invoice has nothing to name' );
+
+        // A replacement whose email failed, replaced again before it was ever sent: the firm still holds the ORIGINAL.
+        $prior   = [ 'number' => 'NJILGA-2201', 'id' => 'in_FIRST', 'total_cents' => 11100 ];
+        $chained = $this->row( [ 'status' => 'created', 'sent_at' => null, 'roster_snapshot' => json_encode( $this->snap( [], [ 'version' => 2, 'replaces' => $prior ] ) ) ] ); // a real snapshot is always version 2
+        $this->assertSame( $prior, MyNJILGA_Invoice_Update::carry_replaces( $chained ), 'the notice keeps naming the first invoice' );
+    }
+
     // ---- the fingerprint -------------------------------------------------------
 
     public function testTheFingerprintFollowsWhatWasReviewed(): void {
@@ -172,6 +237,8 @@ class InvoiceUpdateTest extends NJILGA_TestCase {
             'a price'          => [ $row, $this->snap( [ $this->member( 1, 'Ann Able', 12600 ) ] ) ],
             'a member'         => [ $row, $this->snap( [ $this->member( 1, 'Ann Able', 12500 ), $this->member( 2, 'Bob Baker', 100 ) ] ) ],
             'a category'       => [ $row, $this->snap( [ $this->member( 1, 'Ann Able', 12500, 0, 'Associate Membership' ) ] ) ],
+            'a name'           => [ $row, $this->snap( [ array_merge( $this->member( 1, 'Ann Able', 12500 ), [ 'name' => 'Anne Able' ] ) ] ) ],
+            'why a $0 is $0'   => [ $row, $this->snap( [ array_merge( $this->member( 1, 'Ann Able', 12500 ), [ 'dues_note' => 'already paid' ] ) ] ) ],
             'the bill-to'      => [ $row, $this->snap( [ $this->member( 1, 'Ann Able', 12500 ) ], [ 'bill_to' => [ 'contact_id' => 9, 'email' => 'x@firm.test' ] ] ) ],
             'the old invoice'  => [ $this->row( [ 'gateway_invoice_id' => 'in_OTHER' ] ), $snap ],
             'the old status'   => [ $this->row( [ 'status' => 'created' ] ), $snap ],

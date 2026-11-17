@@ -69,11 +69,12 @@ class MyNJILGA_Invoice_Update {
      *
      * Members are matched by contact (falling back to name + email); each
      * line's amount is dues + assessment. A change is a member added, removed,
-     * or whose amount or category/tier wording differs.
+     * or whose name, amount, category/tier, reason for a $0, or assessment
+     * wording differs — everything the invoice prints about them.
      *
      * @param array<string,mixed> $old snapshot of the invoice as sent
      * @param array<string,mixed> $new snapshot of the re-priced invoice
-     * @return array{changes:array<int,array{kind:string,name:string,old_cents:int,new_cents:int,old_label:string,new_label:string}>,old_total:int,new_total:int,bill_to:array{changed:bool,old:string,new:string},firm:array{changed:bool,old:string,new:string},any:bool}
+     * @return array{changes:array<int,array{kind:string,name:string,old_name:string,old_cents:int,new_cents:int,old_label:string,new_label:string}>,old_total:int,new_total:int,bill_to:array{changed:bool,old:string,new:string},firm:array{changed:bool,old:string,new:string},any:bool}
      */
     public static function diff( array $old, array $new ): array {
         $oldM = self::index_members( (array) ( $old['members'] ?? [] ) );
@@ -82,17 +83,19 @@ class MyNJILGA_Invoice_Update {
         $changes = [];
         foreach ( $newM as $key => $m ) {
             if ( ! isset( $oldM[ $key ] ) ) {
-                $changes[] = [ 'kind' => 'added', 'name' => self::member_name( $m ), 'old_cents' => 0, 'new_cents' => self::member_cents( $m ), 'old_label' => '', 'new_label' => self::member_label( $m ) ];
+                $changes[] = [ 'kind' => 'added', 'name' => self::member_name( $m ), 'old_name' => '', 'old_cents' => 0, 'new_cents' => self::member_cents( $m ), 'old_label' => '', 'new_label' => self::member_label( $m ) ];
                 continue;
             }
             $o = $oldM[ $key ];
-            if ( self::member_cents( $o ) !== self::member_cents( $m ) || self::member_label( $o ) !== self::member_label( $m ) ) {
-                $changes[] = [ 'kind' => 'changed', 'name' => self::member_name( $m ), 'old_cents' => self::member_cents( $o ), 'new_cents' => self::member_cents( $m ), 'old_label' => self::member_label( $o ), 'new_label' => self::member_label( $m ) ];
+            // Everything the invoice prints about this person counts: their name, what they are
+            // charged, the category and tier, why a $0 is $0, and the assessment's wording.
+            if ( self::member_cents( $o ) !== self::member_cents( $m ) || self::member_label( $o ) !== self::member_label( $m ) || self::member_name( $o ) !== self::member_name( $m ) ) {
+                $changes[] = [ 'kind' => 'changed', 'name' => self::member_name( $m ), 'old_name' => self::member_name( $o ), 'old_cents' => self::member_cents( $o ), 'new_cents' => self::member_cents( $m ), 'old_label' => self::member_label( $o ), 'new_label' => self::member_label( $m ) ];
             }
         }
         foreach ( $oldM as $key => $o ) {
             if ( ! isset( $newM[ $key ] ) ) {
-                $changes[] = [ 'kind' => 'removed', 'name' => self::member_name( $o ), 'old_cents' => self::member_cents( $o ), 'new_cents' => 0, 'old_label' => self::member_label( $o ), 'new_label' => '' ];
+                $changes[] = [ 'kind' => 'removed', 'name' => self::member_name( $o ), 'old_name' => self::member_name( $o ), 'old_cents' => self::member_cents( $o ), 'new_cents' => 0, 'old_label' => self::member_label( $o ), 'new_label' => '' ];
             }
         }
 
@@ -138,8 +141,8 @@ class MyNJILGA_Invoice_Update {
                 (int) ( $m['contact_id'] ?? 0 ),
                 (int) ( $m['dues_cents'] ?? 0 ),
                 (int) ( $m['assessment_cents'] ?? 0 ),
-                (string) ( $m['category_label'] ?? '' ),
-                (string) ( $m['tier_label'] ?? '' ),
+                self::member_label( (array) $m ),
+                self::member_name( (array) $m ),
             ];
         }
         $to = (array) ( $newSnapshot['bill_to'] ?? [] );
@@ -153,6 +156,45 @@ class MyNJILGA_Invoice_Update {
             (string) ( $newSnapshot['company']['name'] ?? '' ),
             $members,
         ] ) );
+    }
+
+    /** PURE: whether this invoice was ever emailed to the firm. */
+    public static function was_emailed( object $row ): bool {
+        return (string) ( $row->status ?? '' ) === 'sent' || (string) ( $row->sent_at ?? '' ) !== '';
+    }
+
+    /**
+     * PURE: whether replacing this invoice emails the new one, and if not, why.
+     *
+     *  - Test mode: nothing is ever emailed to firms (a Test invoice's payment link can never
+     *    collect money, and the bill-to is a real contact) — like every other sending path.
+     *  - An invoice that was never emailed: the firm has never seen it, so there is nothing
+     *    to "resend" and no earlier invoice for the notice to name. It is replaced quietly and
+     *    goes out the way it would have — when it is emailed, or with its scheduled send.
+     *
+     * @return array{was_emailed:bool,will_email:bool,why_not:string} why_not: '' | 'test' | 'unsent'
+     */
+    public static function email_plan( object $row, bool $live ): array {
+        $was = self::was_emailed( $row );
+        if ( ! $live ) {
+            return [ 'was_emailed' => $was, 'will_email' => false, 'why_not' => 'test' ];
+        }
+        return [ 'was_emailed' => $was, 'will_email' => $was, 'why_not' => $was ? '' : 'unsent' ];
+    }
+
+    /**
+     * PURE: what the new invoice's notice should name. The invoice the firm actually received:
+     * this one if it was emailed; otherwise the one this one itself replaced (a replacement whose
+     * email failed, replaced again), or nothing.
+     *
+     * @return array<string,mixed> '' = no notice
+     */
+    public static function carry_replaces( object $row ): array {
+        if ( self::was_emailed( $row ) ) {
+            return self::replaces_from( $row );
+        }
+        $prior = MyNJILGA_Dues_Snapshot::decode( $row )['replaces'] ?? [];
+        return is_array( $prior ) ? $prior : [];
     }
 
     /**
@@ -178,7 +220,7 @@ class MyNJILGA_Invoice_Update {
      */
     public static function stripe_verdict( ?array $live ): array {
         if ( $live === null ) {
-            return [ 'go' => false, 'already_void' => false, 'error' => 'Stripe didn\'t answer — nothing was changed. Try again in a moment.' ];
+            return [ 'go' => false, 'already_void' => false, 'error' => 'Stripe didn\'t return this invoice (no answer, or it isn\'t there) — nothing was changed. Try again in a moment; if it keeps happening, use Sync with Stripe.' ];
         }
         $status = (string) ( $live['status'] ?? '' );
         if ( (int) ( $live['amount_paid_cents'] ?? 0 ) > 0 || $status === 'paid' ) {
@@ -228,10 +270,25 @@ class MyNJILGA_Invoice_Update {
         return $name !== '' ? $name : 'Contact #' . (int) ( $m['contact_id'] ?? 0 );
     }
 
-    /** @param array<string,mixed> $m */
+    /**
+     * How the invoice describes this person's charge: category · tier, the reason a $0 is $0,
+     * and the assessment's name and qualifier. Drives both the comparison and what the review shows.
+     *
+     * @param array<string,mixed> $m
+     */
     private static function member_label( array $m ): string {
         $parts = array_filter( [ trim( (string) ( $m['category_label'] ?? '' ) ), trim( (string) ( $m['tier_label'] ?? '' ) ) ], static function ( $p ) { return $p !== ''; } );
-        return implode( ' · ', $parts );
+        $label = implode( ' · ', $parts );
+        $note  = trim( (string) ( ( $m['dues_note'] ?? '' ) !== '' ? $m['dues_note'] : ( $m['unbilled_reason'] ?? '' ) ) );
+        if ( $note !== '' ) {
+            $label .= ( $label !== '' ? ' — ' : '' ) . $note;
+        }
+        $assess = trim( (string) ( $m['assessment_label'] ?? '' ) );
+        if ( (int) ( $m['assessment_cents'] ?? 0 ) > 0 && $assess !== '' ) {
+            $qual   = trim( (string) ( $m['assessment_qualifier'] ?? '' ) );
+            $label .= ( $label !== '' ? ' + ' : '' ) . $assess . ( $qual !== '' ? ' (' . $qual . ')' : '' );
+        }
+        return $label;
     }
 
     /** @param array<string,mixed> $p */
@@ -269,10 +326,12 @@ class MyNJILGA_Invoice_Update {
      * (no address for the bill-to), that is a refusal here, before anything
      * is voided.
      *
-     * @return array{ok:bool,error:string,row:?object,candidate:?array<string,mixed>,snapshot:?array<string,mixed>,preview_row:?object,email:?array<string,mixed>,diff:?array<string,mixed>,fingerprint:string}
+     * 'plan' says whether the new invoice will be emailed, and if not, why (email_plan()).
+     *
+     * @return array{ok:bool,error:string,row:?object,candidate:?array<string,mixed>,snapshot:?array<string,mixed>,preview_row:?object,email:?array<string,mixed>,plan:?array<string,mixed>,diff:?array<string,mixed>,fingerprint:string}
      */
     public static function review( int $rowId ): array {
-        $none = [ 'ok' => false, 'error' => '', 'row' => null, 'candidate' => null, 'snapshot' => null, 'preview_row' => null, 'email' => null, 'diff' => null, 'fingerprint' => '' ];
+        $none = [ 'ok' => false, 'error' => '', 'row' => null, 'candidate' => null, 'snapshot' => null, 'preview_row' => null, 'email' => null, 'plan' => null, 'diff' => null, 'fingerprint' => '' ];
         $row  = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
         if ( ! $row ) {
             return [ 'error' => 'That invoice wasn\'t found.' ] + $none;
@@ -305,10 +364,11 @@ class MyNJILGA_Invoice_Update {
             return [ 'error' => $priced['error'], 'row' => $row ] + $none;
         }
         $candidate = $priced['candidate'];
-        $snapshot  = MyNJILGA_Dues_Preview::snapshot_for_candidate( $candidate, self::replaces_from( $row ) );
+        $plan      = self::email_plan( $row, $live );
+        $snapshot  = MyNJILGA_Dues_Preview::snapshot_for_candidate( $candidate, self::carry_replaces( $row ) ?: null );
         $diff      = self::diff( MyNJILGA_Dues_Snapshot::decode( $row ), $snapshot );
         if ( ! $diff['any'] ) {
-            return [ 'error' => 'Nothing about this firm\'s invoice has changed since it was created — priced from today\'s roster it comes to the same lines and total. To send the same invoice again, use Email again.', 'row' => $row ] + $none;
+            return [ 'error' => sprintf( 'Nothing about this firm\'s invoice has changed since it was created — priced from today\'s roster it comes to the same lines and total. To send the same invoice again, use %s.', $plan['was_emailed'] ? 'Email again' : 'Email' ), 'row' => $row ] + $none;
         }
 
         // The row as the new invoice will be: used to build the email preview
@@ -333,6 +393,7 @@ class MyNJILGA_Invoice_Update {
             'snapshot'    => $snapshot,
             'preview_row' => $preview,
             'email'       => $email,
+            'plan'        => $plan,
             'diff'        => $diff,
             'fingerprint' => self::fingerprint( $row, $snapshot ),
         ];
@@ -346,14 +407,25 @@ class MyNJILGA_Invoice_Update {
      * Replace the firm's invoice with an updated one and email it.
      *
      * @param string $fingerprint what the review screen showed (review()['fingerprint'])
-     * @return array{ok:bool,error:string,warning:string,year:int,number:string,voided:bool}
+     * @return array{ok:bool,error:string,warning:string,year:int,number:string,voided:bool,mail:string} mail: ''
+     *   (nothing was created) | 'sent' | 'failed' | 'test' | 'unsent' (created, deliberately not emailed — see email_plan())
      */
     public static function run( int $rowId, string $fingerprint ): array {
         $first = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
         $year  = $first ? (int) $first->dues_year : 0;
-        $out   = static function ( bool $ok, string $error, string $warning = '', string $number = '', bool $voided = false ) use ( $year ): array {
-            return [ 'ok' => $ok, 'error' => $error, 'warning' => $warning, 'year' => $year, 'number' => $number, 'voided' => $voided ];
+        $out   = static function ( bool $ok, string $error, string $warning = '', string $number = '', bool $voided = false, string $mail = '' ) use ( $year ): array {
+            return [ 'ok' => $ok, 'error' => $error, 'warning' => $warning, 'year' => $year, 'number' => $number, 'voided' => $voided, 'mail' => $mail ];
         };
+
+        // Once the old invoice is void there is no going back, and the steps after it make several
+        // Stripe calls (each may wait 20 s) and send an email: don't let a closed browser tab or a
+        // short web-server time limit stop it half way.
+        if ( function_exists( 'ignore_user_abort' ) ) {
+            ignore_user_abort( true );
+        }
+        if ( function_exists( 'set_time_limit' ) ) {
+            @set_time_limit( 300 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+        }
 
         // The lock FIRST, the look at the invoice second. It is the lock a scheduled send holds
         // while it emails, so this firm's invoice is neither mid-send nor about to be sent while
@@ -366,6 +438,9 @@ class MyNJILGA_Invoice_Update {
         if ( $lock === '' ) {
             return $out( false, 'An invoice send or another update is running right now, so nothing was changed. Try again when it has finished.' );
         }
+        // A fatal error (a time limit) skips `finally`; shutdown functions still run. Releasing is
+        // idempotent and only ever deletes our own token.
+        register_shutdown_function( static function () use ( $lock ) { MyNJILGA_Launch_Schedule::release_lock( $lock ); } );
         try {
             $rev = self::review( $rowId );
             if ( ! $rev['ok'] ) {
@@ -386,7 +461,7 @@ class MyNJILGA_Invoice_Update {
      * The steps, after every check has passed.
      *
      * @param array<string,mixed> $rev review()'s ok result
-     * @return array{ok:bool,error:string,warning:string,year:int,number:string,voided:bool}
+     * @return array{ok:bool,error:string,warning:string,year:int,number:string,voided:bool,mail:string}
      */
     private static function replace( array $rev, callable $out ): array {
         $row       = $rev['row'];
@@ -425,23 +500,34 @@ class MyNJILGA_Invoice_Update {
         $stuck = sprintf( 'The old invoice %s IS voided in Stripe. ', $oldLabel );
 
         // ---- Back to a draft (the "Issue again" mechanics), then the new price on it ----
+        // The old id is retired BEFORE the row is reopened: the reopen clears the row's invoice id,
+        // and until the old id is retired the old invoice's own `invoice.voided` notice from Stripe
+        // would match the (now id-less) row and write "voided" onto the draft. Retiring first is
+        // safe: if the reopen then fails the row is voided already, and the old invoice is void.
+        MyNJILGA_Dues_Invoice_Table::retire_invoice_id( $oldId, $oldNumber, $row );
         if ( ! MyNJILGA_Dues_Invoice_Table::reopen_voided( $rowId ) ) {
             return $out( false, $stuck . 'This site then could not put the firm back to ready, because the invoice changed while this ran. Reload the Invoicing page: if the firm shows as voided, click Issue again.', '', '', true );
         }
-        MyNJILGA_Dues_Invoice_Table::retire_invoice_id( $oldId, $oldNumber, $row );
         if ( class_exists( 'MyNJILGA_Stripe_Invoice_Gateway' ) ) {
             MyNJILGA_Stripe_Invoice_Gateway::fresh_attempt( $rowId );
         }
+        // If anything has put the firm back to "voided" since, Refresh Firms and Create can't
+        // help: only Issue again can.
+        $voidedAdvice = 'The firm shows as voided again, so click Issue again on its row, then Refresh Firms and Create.';
+        $isVoided     = static function () use ( $rowId ): bool {
+            $r = MyNJILGA_Dues_Invoice_Table::get( $rowId );
+            return $r && (string) $r->status === MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED;
+        };
 
         $livemode = ! empty( $row->livemode );
-        $savedId  = MyNJILGA_Dues_Preview::persist_replacement( $rev['candidate'], $livemode, self::replaces_from( $row ) );
+        $savedId  = MyNJILGA_Dues_Preview::persist_replacement( $rev['candidate'], $livemode, self::carry_replaces( $row ) );
         if ( $savedId !== $rowId ) {
-            return $out( false, $stuck . 'The firm is back under No Invoice, but its new price could not be saved. Click Refresh Firms to re-price it, then Create.', '', '', true );
+            return $out( false, $stuck . ( $isVoided() ? $voidedAdvice : 'The firm is back under No Invoice, but its new price could not be saved. Click Refresh Firms to re-price it, then Create.' ), '', '', true );
         }
 
         // ---- Approve and create the new invoice ----
         if ( MyNJILGA_Dues_Invoice_Table::mark_approved( [ $rowId ] ) < 1 ) {
-            return $out( false, $stuck . 'The firm was re-priced but could not be approved for creation. Click Create on its row under No Invoice.', '', '', true );
+            return $out( false, $stuck . ( $isVoided() ? $voidedAdvice : 'The firm was re-priced but could not be approved for creation. Click Create on its row under No Invoice.' ), '', '', true );
         }
         $fresh = MyNJILGA_Dues_Invoice_Table::get( $rowId );
         try {
@@ -452,7 +538,11 @@ class MyNJILGA_Invoice_Update {
         if ( empty( $created['ok'] ) ) {
             $why = (string) ( $created['error'] ?? 'Unknown error' );
             MyNJILGA_Dues_Invoice_Table::set_error( $rowId, $why );
-            return $out( false, $stuck . 'The firm was re-priced, but the new invoice could not be created: ' . $why . ' Click Retry on its row to create it.', '', '', true );
+            $now  = MyNJILGA_Dues_Invoice_Table::get( $rowId );
+            $next = ( $now && (string) $now->status === MyNJILGA_Dues_Invoice_Table::STATUS_APPROVED )
+                ? 'Click Retry on its row to create it.'
+                : 'The firm is back under No Invoice — do what that says, then Create.';
+            return $out( false, $stuck . 'The firm was re-priced, but the new invoice could not be created: ' . $why . ' ' . $next, '', '', true );
         }
 
         $fresh  = MyNJILGA_Dues_Invoice_Table::get( $rowId );
@@ -471,7 +561,11 @@ class MyNJILGA_Invoice_Update {
             )
         );
 
-        // ---- Email it ----
+        // ---- Email it — unless it should not be (Test mode; an invoice the firm never received) ----
+        $plan = (array) $rev['plan'];
+        if ( empty( $plan['will_email'] ) ) {
+            return $out( true, '', '', $number, true, (string) ( $plan['why_not'] ?: 'unsent' ) );
+        }
         try {
             $sent = $fresh ? MyNJILGA_Invoice_Sender::send_for_row( $fresh ) : [ 'ok' => false, 'error' => 'The invoice row disappeared.' ];
         } catch ( \Throwable $e ) {
@@ -481,12 +575,12 @@ class MyNJILGA_Invoice_Update {
             $why = (string) ( $sent['error'] ?? 'Unknown error' );
             if ( isset( $sent['claimed'] ) && $sent['claimed'] === false ) {
                 // Another sender emailed this very invoice in the same moment: it did go.
-                return $out( true, '', 'The updated invoice was created, and another email send picked it up at the same moment — check the firm\'s row shows it as emailed.', $number, true );
+                return $out( true, '', 'The updated invoice was created, and another email send picked it up at the same moment — check the firm\'s row shows it as emailed.', $number, true, 'sent' );
             }
             MyNJILGA_Dues_Invoice_Table::set_error( $rowId, $why );
-            return $out( true, '', 'The updated invoice was created, but its email did not go: ' . $why . ' Click Email again on the firm\'s row to send it.', $number, true );
+            return $out( true, '', 'The updated invoice was created, but its email did not go: ' . $why . ' Click Email on the firm\'s row to send it.', $number, true, 'failed' );
         }
         $warning = (string) ( $sent['warning'] ?? '' );
-        return $out( true, '', $warning, $number, true );
+        return $out( true, '', $warning, $number, true, 'sent' );
     }
 }
