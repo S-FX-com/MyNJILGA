@@ -37,6 +37,7 @@ class MyNJILGA_Page_Invoicing {
     const ACTION_EMAIL_SEND = 'my_njilga_dues_email_send';
     const ACTION_EMAIL_SCHEDULE = 'my_njilga_dues_email_schedule';
     const ACTION_REISSUE    = 'my_njilga_dues_reissue';
+    const ACTION_UPDATE     = 'my_njilga_dues_update';
 
     /** How long a "Generate emails" selection waits for staff on the review screen. */
     const EMAIL_BATCH_TTL = 6 * HOUR_IN_SECONDS;
@@ -107,6 +108,11 @@ class MyNJILGA_Page_Invoicing {
         }
         if ( $view === 'checks' ) {
             self::render_checks_view( $duesYear );
+            echo '</div>';
+            return;
+        }
+        if ( $view === 'update' ) {
+            self::render_update_review( $duesYear );
             echo '</div>';
             return;
         }
@@ -534,10 +540,11 @@ class MyNJILGA_Page_Invoicing {
 
             case 'created':
                 return sprintf(
-                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d" title="Read the email, then send it">Email</button> %s %s %s %s',
+                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d" title="Read the email, then send it">Email</button> %s %s %s %s %s',
                     $rowId,
                     self::view_link( $link ),
                     self::pdf_link( $pdf ),
+                    self::update_button( $row ),
                     self::void_button( $row ),
                     self::sync_button( $rowId )
                 );
@@ -552,20 +559,22 @@ class MyNJILGA_Page_Invoicing {
 
             case 'scheduled':
                 return sprintf(
-                    '<span class="njilga-dim njilga-inline-status">%s Email scheduled</span> %s %s %s %s',
+                    '<span class="njilga-dim njilga-inline-status">%s Email scheduled</span> %s %s %s %s %s',
                     self::icon( 'calendar' ),
                     self::view_link( $link ),
                     self::pdf_link( $pdf ),
+                    self::update_button( $row ),
                     self::void_button( $row ),
                     self::sync_button( $rowId )
                 );
 
             case 'sent':
                 return sprintf(
-                    '%s %s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d" title="Read the email, then send it again">Email again</button> %s %s',
+                    '%s %s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d" title="Read the email, then send it again">Email again</button> %s %s %s',
                     self::view_link( $link ),
                     self::pdf_link( $pdf ),
                     $rowId,
+                    self::update_button( $row ),
                     self::void_button( $row ),
                     self::sync_button( $rowId )
                 );
@@ -659,6 +668,21 @@ class MyNJILGA_Page_Invoicing {
             '',
             'Void this invoice? This cannot be undone — the firm will need a new invoice if they still owe dues.',
             'sm'
+        );
+    }
+
+    /**
+     * "Update & resend" — only where the invoice can be replaced (created or
+     * emailed, unpaid, nothing clearing). Opens the review screen: nothing
+     * changes until its confirm button is pressed.
+     */
+    private static function update_button( object $row ): string {
+        if ( MyNJILGA_Invoice_Update::refusal( $row ) !== '' ) {
+            return '';
+        }
+        return sprintf(
+            '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" title="Re-price this firm from today\'s roster and resend an updated invoice that replaces this one — you review the change first">Update &amp; resend</a>',
+            esc_url( self::page_url( (int) $row->dues_year, [ 'view' => 'update', 'row' => (int) $row->id ] ) )
         );
     }
 
@@ -1509,6 +1533,104 @@ JS;
     }
 
     /**
+     * Resend Updated Invoice — the review. Shows what changed in the firm's
+     * roster since the invoice went out, the email the firm will get, and
+     * exactly what confirming does. Nothing is changed by looking; the
+     * confirm button posts a fingerprint of what is shown, and the action
+     * refuses if the firm's data moved after this page was drawn.
+     */
+    private static function render_update_review( int $duesYear ): void {
+        $rowId = isset( $_GET['row'] ) ? (int) $_GET['row'] : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        printf( '<p class="njilga-back"><a href="%s">&larr; Back to %d invoicing</a></p>', esc_url( self::page_url( $duesYear ) ), $duesYear );
+        echo '<h1 class="njilga-title">Resend Updated Invoice</h1>';
+
+        $rev = MyNJILGA_Invoice_Update::review( $rowId );
+        if ( ! $rev['ok'] ) {
+            MyNJILGA_Admin_UI::callout( esc_html( $rev['error'] ), 'warning' );
+            return;
+        }
+
+        $row   = $rev['row'];
+        $diff  = $rev['diff'];
+        $email = $rev['email'];
+        $firm  = MyNJILGA_Dues_Snapshot::company_name( $row );
+        $old   = (string) ( $row->gateway_invoice_number ?? '' );
+        $money = static function ( int $c ): string { return MyNJILGA_Invoicing::money( $c ); };
+
+        printf(
+            '<p class="njilga-subtitle"><strong>%s</strong> &mdash; the %d invoice%s as it went out, against today\'s roster and prices.</p>',
+            esc_html( $firm ),
+            (int) $row->dues_year,
+            $old !== '' ? ' ' . esc_html( $old ) : ''
+        );
+
+        MyNJILGA_Admin_UI::stat_cards( [
+            [ 'label' => 'Invoice as sent',   'value' => $money( $diff['old_total'] ), 'variant' => 'default', 'icon' => 'file' ],
+            [ 'label' => 'Updated invoice',   'value' => $money( $diff['new_total'] ), 'variant' => 'info',    'icon' => 'refresh' ],
+            [ 'label' => 'Difference',        'value' => ( $diff['new_total'] >= $diff['old_total'] ? '+' : '-' ) . $money( abs( $diff['new_total'] - $diff['old_total'] ) ), 'variant' => 'default', 'icon' => 'inbox' ],
+        ], 3 );
+
+        // 1. What changed.
+        MyNJILGA_Admin_UI::section( '1. What changed', 'Only the differences are listed. Everything else on the invoice stays as it was.' );
+        if ( $diff['firm']['changed'] ) {
+            MyNJILGA_Admin_UI::callout( sprintf( 'The firm\'s name changed: <strong>%s</strong> &rarr; <strong>%s</strong>.', esc_html( $diff['firm']['old'] ), esc_html( $diff['firm']['new'] ) ), 'info' );
+        }
+        if ( $diff['bill_to']['changed'] ) {
+            MyNJILGA_Admin_UI::callout( sprintf( 'The invoice will go to a different person: <strong>%s</strong> &rarr; <strong>%s</strong>.', esc_html( $diff['bill_to']['old'] ), esc_html( $diff['bill_to']['new'] ) ), 'info' );
+        }
+        if ( $diff['changes'] ) {
+            echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table">';
+            echo '<thead><tr><th>Member</th><th></th><th>Was</th><th>Now</th><th class="njilga-col-num">Amount</th></tr></thead><tbody>';
+            $kinds = [ 'added' => [ 'Added', 'success' ], 'removed' => [ 'Removed', 'destructive' ], 'changed' => [ 'Changed', 'info' ] ];
+            foreach ( $diff['changes'] as $c ) {
+                [ $kindLabel, $kindVariant ] = $kinds[ $c['kind'] ] ?? [ ucfirst( $c['kind'] ), 'muted' ];
+                printf(
+                    '<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class="njilga-col-num">%s</td></tr>',
+                    esc_html( $c['name'] ),
+                    self::pill( $kindLabel, $kindVariant ),
+                    $c['old_label'] !== '' ? esc_html( $c['old_label'] ) : '<span class="njilga-dim">&mdash;</span>',
+                    $c['new_label'] !== '' ? esc_html( $c['new_label'] ) : '<span class="njilga-dim">&mdash;</span>',
+                    $c['kind'] === 'changed' && $c['old_cents'] !== $c['new_cents']
+                        ? esc_html( $money( $c['old_cents'] ) . ' → ' . $money( $c['new_cents'] ) )
+                        : esc_html( $money( $c['kind'] === 'removed' ? $c['old_cents'] : $c['new_cents'] ) )
+                );
+            }
+            printf( '<tr><td><strong>Invoice total</strong></td><td></td><td></td><td></td><td class="njilga-col-num"><strong>%s</strong></td></tr>', esc_html( $money( $diff['old_total'] ) . ' → ' . $money( $diff['new_total'] ) ) );
+            echo '</tbody></table></div></div>';
+        } elseif ( ! $diff['firm']['changed'] && ! $diff['bill_to']['changed'] ) {
+            MyNJILGA_Admin_UI::callout( sprintf( 'The members and their lines are the same; the invoice total moves from %s to %s.', esc_html( $money( $diff['old_total'] ) ), esc_html( $money( $diff['new_total'] ) ) ), 'info' );
+        }
+
+        // 2. The email.
+        MyNJILGA_Admin_UI::section( '2. The email the firm will get', 'Built by the code that sends it, with a placeholder where the payment link will be. It says the invoice is an update and which invoice it replaces.' );
+        echo '<div class="njilga-card njilga-card-pad">';
+        MyNJILGA_Page_Launch::render_message( $email );
+        echo '</div>';
+
+        // 3. What confirming does.
+        MyNJILGA_Admin_UI::section( '3. When you confirm' );
+        $to = (string) ( $email['to'] ?? '' );
+        echo '<div class="njilga-card njilga-card-pad"><ol class="njilga-list">';
+        printf( '<li>Stripe is asked about invoice %s first. If it has been paid or a payment is clearing, <strong>nothing happens</strong>.</li>', esc_html( $old !== '' ? $old : 'on file' ) );
+        printf( '<li>The old invoice is <strong>voided</strong> in Stripe. Its payment link stops working, and it can\'t be brought back.</li>' );
+        printf( '<li>A new invoice for <strong>%s</strong> is created and emailed to <strong>%s</strong>.</li>', esc_html( $money( $diff['new_total'] ) ), esc_html( $to ) );
+        echo '<li>A note is added to the firm\'s Company record at each step.</li>';
+        echo '</ol></div>';
+
+        echo '<div class="njilga-actions">';
+        echo MyNJILGA_Admin_UI::action_form(
+            self::ACTION_UPDATE,
+            'Void the old invoice and send the updated one',
+            [ 'row_id' => (int) $row->id, 'dues_year' => (int) $row->dues_year, 'fingerprint' => $rev['fingerprint'] ],
+            'primary',
+            'refresh',
+            sprintf( 'Void invoice %s and email %s an updated invoice for %s? The old payment link stops working.', $old !== '' ? $old : '', $to, $money( $diff['new_total'] ) )
+        );
+        printf( '<a class="njilga-btn njilga-btn-outline" href="%s">Cancel</a>', esc_url( self::page_url( $duesYear ) ) );
+        echo '</div>';
+    }
+
+    /**
      * The Launch Wizard's pre-flight checks, on this page: is the site
      * ready to bill this year. Behind a link rather than on every load —
      * several checks ask Stripe.
@@ -1816,6 +1938,9 @@ JS;
         if ( $noCat > 0 ) {
             $out .= ' ' . self::pill( $noCat . ' uncategorised', 'warning' );
         }
+        if ( ! empty( $snapshot['replaces'] ) ) {
+            $out .= ' ' . self::pill( 'updated', 'info' );
+        }
         return $out !== '' ? ' ' . $out : '';
     }
 
@@ -1918,6 +2043,8 @@ JS;
             'emails_scheduled' => 'success',
             'schedule_control' => 'success',
             'reissued'        => 'success',
+            'updated'         => 'success',
+            'updated_warn'    => 'warning',
             'email_test_sent' => 'success',
             'invoice_moved'   => 'success',
             'wiped_partial'   => 'warning',
@@ -1971,6 +2098,11 @@ JS;
                 return sprintf( '%d invoice%s sent, %d failed — see details below.', $g( 'count' ), $g( 'count' ) === 1 ? '' : 's', $g( 'fail' ) );
             case 'reissued':
                 return 'The firm is back under No Invoice, ready to issue again. Click Refresh Firms to re-price it from today\'s roster, then Create. The voided invoice stays voided in Stripe.';
+            case 'updated':
+                $num = isset( $_GET['number'] ) ? sanitize_text_field( wp_unslash( (string) $_GET['number'] ) ) : '';
+                return sprintf( 'Updated invoice%s created and emailed to the firm. The old invoice is voided in Stripe.', $num !== '' ? ' ' . $num : '' );
+            case 'updated_warn':
+                return isset( $_GET['detail'] ) ? sanitize_text_field( wp_unslash( $_GET['detail'] ) ) : 'The updated invoice was created.'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
             case 'emails_scheduled':
                 $rec   = MyNJILGA_Launch_Schedule::get( (int) ( $_GET['dues_year'] ?? 0 ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
                 $first = $rec && ! empty( $rec['start_ts'] ) ? MyNJILGA_Page_Launch::fmt_time( (int) $rec['start_ts'], self::tz() ) : '';
@@ -2579,6 +2711,23 @@ JS;
             self::redirect( $year, [ 'msg' => 'error', 'detail' => $result['error'] ] );
         }
         self::redirect( $year, [ 'msg' => 'reissued' ] );
+    }
+
+    /** Resend Updated Invoice: void the firm's invoice, create the updated one, email it. */
+    public static function handle_update(): void {
+        self::guard( self::ACTION_UPDATE );
+        $rowId = isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0;
+        $print = isset( $_POST['fingerprint'] ) ? sanitize_key( wp_unslash( (string) $_POST['fingerprint'] ) ) : '';
+        $r     = MyNJILGA_Invoice_Update::run( $rowId, $print );
+        $year  = $r['year'] > 0 ? $r['year'] : self::post_year();
+        // Values are rawurlencoded: add_query_arg() does not encode them.
+        if ( ! $r['ok'] ) {
+            self::redirect( $year, [ 'msg' => 'error', 'detail' => rawurlencode( $r['error'] ) ] );
+        }
+        if ( $r['warning'] !== '' ) {
+            self::redirect( $year, [ 'msg' => 'updated_warn', 'detail' => rawurlencode( $r['warning'] ), 'number' => rawurlencode( $r['number'] ) ] );
+        }
+        self::redirect( $year, [ 'msg' => 'updated', 'number' => rawurlencode( $r['number'] ) ] );
     }
 
     public static function handle_move_join(): void {

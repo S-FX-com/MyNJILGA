@@ -83,6 +83,15 @@ class MyNJILGA_Invoice_Sender {
             'intro_tpl'        => $tpl['intro'],
             'closing_tpl'      => $tpl['closing'],
         ];
+        // An invoice that replaces an earlier one (MyNJILGA_Invoice_Update) says so —
+        // read from the frozen snapshot, so every path that emails it carries the notice.
+        $replaces = is_array( $snapshot['replaces'] ?? null ) ? $snapshot['replaces'] : [];
+        if ( $replaces ) {
+            $in['replaces'] = [
+                'number' => (string) ( $replaces['number'] ?? '' ),
+                'total'  => isset( $replaces['total_cents'] ) ? MyNJILGA_Invoicing::money( (int) $replaces['total_cents'] ) : '',
+            ];
+        }
         $msg = MyNJILGA_Invoice_Email::build( $in );
 
         // The HTML version: the same content, plus the invoice's lines as a
