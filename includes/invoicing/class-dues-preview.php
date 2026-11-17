@@ -556,10 +556,14 @@ class MyNJILGA_Dues_Preview {
 
         $kind       = (string) $row->invoice_kind;
         $billTo     = (int) $row->bill_to_contact_id;
+        $mode       = (string) ( $row->billing_mode ?? '' );
         $candidates = self::candidates_for_company( $company, $year, self::config_for_year( $year ), self::resolve_configured_tags() );
         $match      = null;
         foreach ( $candidates as $c ) {
-            if ( (string) $c['invoice_kind'] === $kind && (int) $c['bill_to']['contact_id'] === $billTo ) {
+            // The billing mode must still be the one the invoice was made under: an owner's own
+            // individual invoice and a whole-firm invoice share a kind and a bill-to, but replacing
+            // one with the other would leave the rest of the firm billed twice (or not at all).
+            if ( (string) $c['invoice_kind'] === $kind && (int) $c['bill_to']['contact_id'] === $billTo && ( $mode === '' || (string) $c['billing_mode'] === $mode ) ) {
                 $match = $c;
                 break;
             }

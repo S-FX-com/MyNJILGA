@@ -349,25 +349,31 @@ class MyNJILGA_Invoice_Update {
      * @return array{ok:bool,error:string,warning:string,year:int,number:string,voided:bool}
      */
     public static function run( int $rowId, string $fingerprint ): array {
-        $rev  = self::review( $rowId );
-        $year = $rev['row'] ? (int) $rev['row']->dues_year : 0;
-        $out  = static function ( bool $ok, string $error, string $warning = '', string $number = '', bool $voided = false ) use ( $year ): array {
+        $first = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
+        $year  = $first ? (int) $first->dues_year : 0;
+        $out   = static function ( bool $ok, string $error, string $warning = '', string $number = '', bool $voided = false ) use ( $year ): array {
             return [ 'ok' => $ok, 'error' => $error, 'warning' => $warning, 'year' => $year, 'number' => $number, 'voided' => $voided ];
         };
-        if ( ! $rev['ok'] ) {
-            return $out( false, $rev['error'] );
-        }
-        if ( $fingerprint === '' || ! hash_equals( $rev['fingerprint'], $fingerprint ) ) {
-            return $out( false, 'The firm\'s roster, prices or invoice changed after you opened the review, so nothing was done. Open the review again to see the current change, then confirm it.' );
-        }
 
-        // The same lock a scheduled send holds while it emails: this firm's
-        // invoice is neither mid-send nor about to be sent while it is replaced.
+        // The lock FIRST, the look at the invoice second. It is the lock a scheduled send holds
+        // while it emails, so this firm's invoice is neither mid-send nor about to be sent while
+        // it is replaced — and it serialises two confirmations of the same page: the second one
+        // gets the lock only after the first has finished, and then reads the invoice as it now is
+        // (the first's replacement), so its fingerprint no longer matches and it does nothing.
+        // Read before the lock, it would act on the old invoice, find it already void in Stripe,
+        // and issue a second live invoice beside the first's.
         $lock = MyNJILGA_Launch_Schedule::acquire_lock();
         if ( $lock === '' ) {
-            return $out( false, 'Invoice emails are being sent right now (a scheduled send), so nothing was changed. Try again when it has finished.' );
+            return $out( false, 'An invoice send or another update is running right now, so nothing was changed. Try again when it has finished.' );
         }
         try {
+            $rev = self::review( $rowId );
+            if ( ! $rev['ok'] ) {
+                return $out( false, $rev['error'] );
+            }
+            if ( $fingerprint === '' || ! hash_equals( $rev['fingerprint'], $fingerprint ) ) {
+                return $out( false, 'The firm\'s roster, prices or invoice changed after you opened the review, so nothing was done. Open the review again to see the current change, then confirm it.' );
+            }
             return self::replace( $rev, $out );
         } catch ( \Throwable $e ) {
             return $out( false, 'The update stopped unexpectedly (' . $e->getMessage() . '). Check the firm\'s row on the Invoicing page before doing anything else — it may have been voided already.' );
