@@ -506,10 +506,15 @@ class MyNJILGA_Dues_Preview {
     }
 
     /**
-     * @param array<string,mixed> $c
+     * The frozen snapshot a candidate is stored as. $replaces marks an invoice
+     * that replaces an earlier one (MyNJILGA_Invoice_Update): number and total
+     * of the invoice it replaces, so the email can say so.
+     *
+     * @param array<string,mixed>      $c
+     * @param array<string,mixed>|null $replaces
+     * @return array<string,mixed>
      */
-    private static function persist_candidate( array $c, bool $livemode ): ?int {
-        $isDraft  = $c['status'] === 'draft';
+    public static function snapshot_for_candidate( array $c, ?array $replaces = null ): array {
         $snapshot = MyNJILGA_Dues_Snapshot::build(
             (int) $c['dues_year'],
             $c['billing_mode'],
@@ -519,12 +524,91 @@ class MyNJILGA_Dues_Preview {
             $c['bill_to'],
             $c['members']
         );
-        if ( ! $isDraft ) {
+        if ( $c['status'] !== 'draft' ) {
             $snapshot['exclusion_reason'] = $c['status'];
         }
         if ( ! empty( $c['notes'] ) ) {
             $snapshot['notes'] = $c['notes'];
         }
+        if ( $replaces ) {
+            $snapshot['replaces'] = $replaces;
+        }
+        return $snapshot;
+    }
+
+    /**
+     * ONE existing invoice's firm, priced from today's data: the firm's
+     * candidates (what compute() would make for it), narrowed to the one
+     * for this row's invoice kind and bill-to contact. No writes.
+     *
+     * @return array{ok:bool,error:string,candidate:?array<string,mixed>}
+     */
+    public static function candidate_for_row( object $row ): array {
+        $fail = static function ( string $why ): array { return [ 'ok' => false, 'error' => $why, 'candidate' => null ]; };
+        if ( ! MyNJILGA_Members_Data::companies_module_active() ) {
+            return $fail( 'The FluentCRM Companies module is not active.' );
+        }
+        $year    = (int) $row->dues_year;
+        $company = \FluentCrm\App\Models\Company::with( [ 'subscribers.tags', 'owner' ] )->find( (int) $row->fluentcrm_company_id );
+        if ( ! $company ) {
+            return $fail( 'This firm is no longer in FluentCRM, so it can\'t be priced again.' );
+        }
+
+        $kind       = (string) $row->invoice_kind;
+        $billTo     = (int) $row->bill_to_contact_id;
+        $mode       = (string) ( $row->billing_mode ?? '' );
+        $candidates = self::candidates_for_company( $company, $year, self::config_for_year( $year ), self::resolve_configured_tags() );
+        $match      = null;
+        foreach ( $candidates as $c ) {
+            // The billing mode must still be the one the invoice was made under: an owner's own
+            // individual invoice and a whole-firm invoice share a kind and a bill-to, but replacing
+            // one with the other would leave the rest of the firm billed twice (or not at all).
+            if ( (string) $c['invoice_kind'] === $kind && (int) $c['bill_to']['contact_id'] === $billTo && ( $mode === '' || (string) $c['billing_mode'] === $mode ) ) {
+                $match = $c;
+                break;
+            }
+        }
+
+        // A firm that would not be invoiced at all (no members, no owner,
+        // nothing owed) is told so — whether or not a candidate matched.
+        $unbilled = null;
+        if ( $match !== null && $match['status'] !== 'draft' ) {
+            $unbilled = $match;
+        } elseif ( $match === null && $candidates && ! array_filter( $candidates, static function ( $c ) { return $c['status'] === 'draft'; } ) ) {
+            $unbilled = $candidates[0];
+        }
+        if ( $unbilled !== null ) {
+            $why = [
+                self::EXCLUDED_NO_MEMBERS => 'the firm has no members',
+                self::EXCLUDED_NO_OWNER   => 'the firm has no owner with an email address',
+                self::EXCLUDED_ZERO_TOTAL => 'every member now comes to $0',
+            ][ $unbilled['status'] ] ?? 'it no longer qualifies';
+            return $fail( sprintf( 'Priced from today\'s data, this firm would not be invoiced: %s. If nothing is owed any more, Void the invoice instead.', $why ) );
+        }
+        if ( $match === null ) {
+            return $fail( 'Priced from today\'s data, there is no longer an invoice like this one for this firm — it would go to a different person, or not exist (the owner, the billing mode or who owes an assessment changed). That can\'t replace this invoice in a single step: Void it, click Refresh Firms, then Create whatever new invoice is due.' );
+        }
+        return [ 'ok' => true, 'error' => '', 'candidate' => $match ];
+    }
+
+    /**
+     * Store a candidate over the firm's own (draft) row, marked as replacing
+     * an earlier invoice. Null when the row isn't a draft any more.
+     *
+     * @param array<string,mixed> $c
+     * @param array<string,mixed> $replaces
+     */
+    public static function persist_replacement( array $c, bool $livemode, array $replaces ): ?int {
+        return self::persist_candidate( $c, $livemode, $replaces );
+    }
+
+    /**
+     * @param array<string,mixed>      $c
+     * @param array<string,mixed>|null $replaces
+     */
+    private static function persist_candidate( array $c, bool $livemode, ?array $replaces = null ): ?int {
+        $isDraft  = $c['status'] === 'draft';
+        $snapshot = self::snapshot_for_candidate( $c, $replaces );
 
         return MyNJILGA_Dues_Invoice_Table::upsert_draft( [
             'dues_year'                  => (int) $c['dues_year'],

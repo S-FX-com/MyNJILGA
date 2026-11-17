@@ -192,6 +192,27 @@ What stays system-generated and **cannot be edited away**: the list of who the i
 
 **Preview and Send test.** The tab's one form has three buttons: **Save changes**, **Preview** and **Send test email**. Preview and the test both use what is in the boxes *right now* — saved or not — and are built by `MyNJILGA_Invoice_Sender::compose()` (with the unsaved settings passed as an override), i.e. through the same code a real send uses, so what you test is what firms get. Pick an **example firm** (made-up roster and a placeholder payment link) or any of the year's real invoices — even one not created yet — and type any address to send the test to (blank = yours). The address is used **exactly as typed** — one that isn't a single valid address is refused, never quietly "repaired" into a different one. A test goes **only** to that address: it is marked `[TEST]`, opens with a banner saying nobody else received it, has no Cc, and changes nothing on any invoice. Your unsaved edits survive the redirect after a preview, a test or a refused save in a short-lived per-user draft (30 minutes), so testing never costs you your typing; **Save** refuses a typo'd merge tag and sends nothing to anyone. Only the **Save changes** button saves: pressing Enter in a field (or any form post without a button) just previews, so wording can't go live by accident. The Launch Wizard's step 5 still previews each firm's email and sends a `[SAMPLE]` copy.
 
+### Resend Updated Invoice
+
+When what a firm owes changes after its invoice went out — a member added or removed, a category or a price changed — **Update & resend** on the firm's row (shown on invoices that are created, emailed or waiting in a scheduled send) replaces it in one guarded step, for **one firm at a time**. It used to take five steps in the right order (Void, Issue again, Refresh Firms, Create, Generate emails).
+
+Clicking it opens a **review** that changes nothing: the invoice as sent against today's roster and prices — who was added, removed or re-categorised, and the old and new totals — and the exact email the firm will receive. Confirming then:
+
+1. prices the firm from today's data (before touching anything, so a firm that can't be priced is never voided);
+2. asks **Stripe** whether the old invoice is still open and unpaid — never this site's own copy, since a firm may have paid a minute ago. Paid, partly paid or clearing (ACH) → nothing happens;
+3. **voids** the old invoice in Stripe (Stripe itself also refuses a paid one);
+4. puts the same row back to a draft with the "Issue again" machinery (the old invoice id is retired, so a late Stripe event about it can't touch the new one) and stores the new price on it;
+5. approves and **creates** the new Stripe invoice;
+6. **emails** it. The subject starts `Updated:` and the email says *"This is an updated invoice. It replaces invoice NJILGA-2290 ($275.00), which has been voided. Please disregard the earlier invoice and its payment link, and pay this one."* — in the plain-text and HTML versions, and, like the list of who the invoice covers, it can't be edited away. The notice lives in the invoice's frozen snapshot, so **Email again** and the Launch Wizard's scheduled sends carry it too.
+
+What keeps it safe:
+
+- **Confirm what you reviewed.** The confirm button carries a fingerprint of the invoice and the re-priced result the review showed. If the roster, a price or the invoice moved after the page was drawn, nothing is done and you are asked to review again; a double click or a second admin pressing the same button changes nothing the second time.
+- **Nothing changes unless it all can.** Every refusal comes before the void: nothing changed since the invoice was created ("use Email again"), the invoice is paid or clearing, the firm would no longer be invoiced (no owner or members, everything $0), the bill-to would be someone else or the invoice would no longer exist (a new owner, a billing-mode change, an assessment no longer owed — Void, Refresh Firms and Create instead), Stripe not ready, the email can't be built (the bill-to has no address), or an email run is still holding the invoice.
+- **It takes the same lock a scheduled send holds, and only then looks at the invoice**, so the firm's invoice is never mid-send while it is replaced, and two confirmations of the same page can't both go through: the second waits for the first, then finds the invoice already replaced and does nothing. If a send or another update is running it says so and changes nothing.
+- **After the void, nothing is hidden.** If a later step fails, it stops there and says exactly where the firm stands and which button finishes the job: the firm is left under *No Invoice* (re-priced, ready to **Retry**), or created but unemailed (**Email again**). The old invoice cannot be brought back; the message says it *is* voided.
+- A note is added to the firm's Company record at each step, and the row carries an **updated** badge.
+
 ### Frozen snapshot (spec §5)
 
 Generating freezes each invoice's roster and pricing into `{$wpdb->prefix}njilga_dues_invoices` (`includes/invoicing/class-dues-invoice-table.php`; snapshot shape documented in `class-dues-snapshot.php`). Every later step — Stripe invoice creation, the payment webhook, the downgrade sweep, the Company Note — reads that snapshot, never a fresh Company query. Re-running "Generate Preview" only touches rows still `draft`/`excluded`; stale drafts a billing-mode change left behind are removed; anything approved or later is untouched. Version-1 snapshots (pre-2.9) are upgraded on read.
@@ -574,6 +595,7 @@ my-njilga/
 │   │   ├── class-invoice-creator.php     ← Action Scheduler batches, per-row isolation
 │   │   ├── class-invoice-email.php       ← PURE: the editable email wording — merge tags, cleaning, build() (unit-tested)
 │   │   ├── class-invoice-sender.php      ← Email + CC policy + Company Note
+│   │   ├── class-invoice-update.php      ← Resend Updated Invoice: pure refusal/diff/fingerprint (unit-tested) + the guarded void → re-price → create → email run
 │   │   ├── class-payment-listener.php    ← Paid → tags + role (via role sync)
 │   │   ├── class-role-sync.php           ← Paid member's WP role follows their category
 │   │   ├── class-invoice-stats.php       ← Dashboard invoice figures: one GROUP BY, mode-scoped, parity-tested against the Payments ledger

@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, a member-facing dues status and membership overview, a public firm renewal lookup, a Dues History tab on FluentCRM contacts and companies, and tools to bring earlier years' dues in from PMPro or a spreadsheet — driven entirely from FluentCRM tags on the local install.
- * Version:     3.26.1
+ * Version:     3.27.1
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -79,6 +79,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-creator.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-create-progress.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-email-run.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-reissue.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-update.php';
 require_once NJILGA_REPORT_DIR . 'includes/ai/class-abilities.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-email.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-sender.php';
@@ -294,6 +295,7 @@ add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_EMAIL_TEST, [ 'MyNJI
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_EMAIL_SEND, [ 'MyNJILGA_Page_Invoicing', 'handle_email_send' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_EMAIL_SCHEDULE, [ 'MyNJILGA_Page_Invoicing', 'handle_email_schedule' ] );
 add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_REISSUE, [ 'MyNJILGA_Page_Invoicing', 'handle_reissue' ] );
+add_action( 'admin_post_' . MyNJILGA_Page_Invoicing::ACTION_UPDATE, [ 'MyNJILGA_Page_Invoicing', 'handle_update' ] );
 
 // Launch Wizard — open the year, create, test, send and schedule. Handlers
 // take no parameters (WordPress passes '' to an argument-less action).
