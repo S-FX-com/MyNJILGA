@@ -326,9 +326,15 @@ class MyNJILGA_Page_Invoicing {
             '<div class="njilga-search">%s<input type="text" id="njilga-search" placeholder="Search law firms…" autocomplete="off"></div>',
             self::icon( 'search' )
         );
-        echo '<select id="njilga-status" class="njilga-select">
-                <option value="all">All statuses</option>
-                <option value="ready">Ready</option>
+        $unemailed = 0;
+        $mailFail  = 0;
+        foreach ( $views as $v ) {
+            $unemailed += MyNJILGA_Dues_Invoice_Table::is_unemailed( $v['row'] ) ? 1 : 0;
+            $mailFail  += MyNJILGA_Dues_Invoice_Table::email_failed( $v['row'] ) ? 1 : 0;
+        }
+        echo '<select id="njilga-status" class="njilga-select"><option value="all">All statuses</option>';
+        printf( '<option value="unemailed">Not emailed yet (%d)</option><option value="emailfailed">Email failed (%d)</option>', $unemailed, $mailFail );
+        echo '<option value="ready">Ready</option>
                 <option value="created">Invoice Created</option>
                 <option value="sent">Sent</option>
                 <option value="processing">Processing (ACH)</option>
@@ -503,7 +509,7 @@ class MyNJILGA_Page_Invoicing {
 
         $duesCell = $cents > 0 ? esc_html( MyNJILGA_Invoicing::money( $cents ) ) : '<span class="njilga-dim">—</span>';
 
-        echo '<tr class="njilga-row" data-id="' . $rowId . '" data-name="' . esc_attr( strtolower( $name ) ) . '" data-bucket="' . esc_attr( $c['bucket'] ) . '" data-status="' . esc_attr( $c['status'] ) . '" data-createable="' . ( $createable ? '1' : '0' ) . '">';
+        echo '<tr class="njilga-row" data-id="' . $rowId . '" data-name="' . esc_attr( strtolower( $name ) ) . '" data-bucket="' . esc_attr( $c['bucket'] ) . '" data-status="' . esc_attr( $c['status'] ) . '" data-createable="' . ( $createable ? '1' : '0' ) . '" data-unemailed="' . ( MyNJILGA_Dues_Invoice_Table::is_unemailed( $row ) ? '1' : '0' ) . '" data-emailfailed="' . ( MyNJILGA_Dues_Invoice_Table::email_failed( $row ) ? '1' : '0' ) . '">';
         echo '<td class="njilga-col-check">' . $checkCell . '</td>';
         printf(
             '<td class="njilga-firmcell"><button type="button" class="njilga-firmname njilga-expand" data-id="%d"><span class="njilga-firm-label">%s</span>%s</button>%s%s</td>',
@@ -998,7 +1004,8 @@ class MyNJILGA_Page_Invoicing {
                 $t['joins']++;
                 continue;
             }
-            $companyId = (int) $v['row']->fluentcrm_company_id;
+            // An invoice filed under no firm is a member's own: each person counts once, not all as one "firm" 0.
+            $companyId = (int) $v['row']->fluentcrm_company_id > 0 ? (int) $v['row']->fluentcrm_company_id : 'p' . (int) $v['row']->bill_to_contact_id;
             $firms[ $companyId ] = true;
             $t[ $bucket ] = (int) ( $t[ $bucket ] ?? 0 ) + 1;
 
@@ -2432,7 +2439,9 @@ JS;
   }
   function matches(r){
     if(state.tab!=='all'&&r.dataset.bucket!==state.tab) return false;
-    if(state.status!=='all'&&r.dataset.status!==state.status) return false;
+    if(state.status==='unemailed'){ if(r.dataset.unemailed!=='1') return false; }
+    else if(state.status==='emailfailed'){ if(r.dataset.emailfailed!=='1') return false; }
+    else if(state.status!=='all'&&r.dataset.status!==state.status) return false;
     if(state.q&&r.dataset.name.indexOf(state.q)===-1) return false;
     return true;
   }
@@ -2600,6 +2609,14 @@ JS;
     var b=e.target.closest('[data-send]'); if(!b) return;
     pick([b.dataset.send]);
   });
+
+  // A link can open the table already filtered (?filter=emailfailed — the scheduled send's failure list does).
+  var want=(new URLSearchParams(window.location.search)).get('filter');
+  if(want&&statusSel){
+    for(var oi=0;oi<statusSel.options.length;oi++){
+      if(statusSel.options[oi].value===want){ statusSel.value=want; state.status=want; break; }
+    }
+  }
 
   showStage();
   apply();

@@ -762,9 +762,13 @@ class MyNJILGA_Page_Launch {
             return $returnTo !== '' ? [ 'dues_year' => $year, 'op' => $op, 'return_to' => $returnTo ] : [ 'dues_year' => $year, 'op' => $op ];
         };
         [ $label, $variant ] = self::status_pill( (string) $rec['status'] );
-        $sent   = (int) ( $rec['sent'] ?? 0 );
-        $failed = (int) ( $rec['failed'] ?? 0 );
-        $total  = max( 1, (int) ( $rec['unsent_at_schedule'] ?? 0 ) );
+        // What the invoices say NOW, not what the record wrote down at send time: an invoice that failed
+        // and was then emailed by hand is sent, and no longer a failure.
+        $rows   = MyNJILGA_Dues_Invoice_Table::get_many( array_merge( array_map( 'intval', (array) ( $rec['row_ids'] ?? [] ) ), array_map( 'intval', array_keys( (array) ( $rec['failures'] ?? [] ) ) ) ) );
+        $rc     = MyNJILGA_Launch_Schedule::reconcile( $rec, $rows );
+        $sent   = $rc['sent'];
+        $failed = count( $rc['unresolved'] );
+        $total  = max( 1, $rc['total'] );
         $pct    = (int) min( 100, floor( ( $sent / $total ) * 100 ) );
         $active = MyNJILGA_Launch_Schedule::is_active( (string) $rec['status'] );
 
@@ -772,7 +776,7 @@ class MyNJILGA_Page_Launch {
         echo '<div class="njilga-card njilga-card-pad">';
         printf( '<p>%s</p>', MyNJILGA_Admin_UI::pill( $label, $variant ) );
         echo '<div class="njilga-progress-wrap">';
-        printf( '<div class="njilga-progress-top"><span class="njilga-progress-label">%d of %d sent%s</span></div>', $sent, (int) ( $rec['unsent_at_schedule'] ?? 0 ), $failed > 0 ? sprintf( ' · %d could not be sent', $failed ) : '' );
+        printf( '<div class="njilga-progress-top"><span class="njilga-progress-label">%d of %d sent%s</span></div>', $sent, $rc['total'], $failed > 0 ? sprintf( ' · %d still not sent', $failed ) : '' );
         printf( '<div class="njilga-progress"><div class="njilga-progress-bar" style="width:%d%%"></div></div></div>', $pct );
         if ( $active && ! empty( $rec['next_run_ts'] ) ) {
             printf( '<p>Next batch: <strong>%s</strong></p>', esc_html( self::fmt_time( (int) $rec['next_run_ts'], $tz ) ) );
@@ -793,14 +797,26 @@ class MyNJILGA_Page_Launch {
         }
         echo '</div>';
 
-        $failures = (array) ( $rec['failures'] ?? [] );
-        if ( $failures ) {
-            $rows = MyNJILGA_Dues_Invoice_Table::get_many( array_map( 'intval', array_keys( $failures ) ) );
+        if ( $rc['unresolved'] ) {
             echo '<h3 class="njilga-section-title">Invoices that couldn\'t be sent</h3><ul class="njilga-timeline">';
-            foreach ( array_slice( $rows, 0, 30 ) as $r ) {
-                printf( '<li><strong>%s</strong> — %s</li>', esc_html( MyNJILGA_Dues_Snapshot::company_name( $r ) ), esc_html( (string) ( $failures[ (int) $r->id ] ?? '' ) ) );
+            foreach ( array_slice( $rc['unresolved'], 0, 30, true ) as $id => $message ) {
+                $r = $rows[ $id ] ?? null;
+                printf( '<li><strong>%s</strong> — %s</li>', esc_html( $r ? MyNJILGA_Dues_Snapshot::company_name( $r ) : 'Invoice #' . $id ), esc_html( $message ) );
             }
-            echo '</ul><p class="njilga-help">Fix the cause (usually a missing email on the Owner), then send these from the Invoicing page.</p>';
+            if ( count( $rc['unresolved'] ) > 30 ) {
+                printf( '<li class="njilga-dim">…and %d more</li>', count( $rc['unresolved'] ) - 30 );
+            }
+            echo '</ul><p class="njilga-help">These invoices are created but not emailed. Fix the cause (usually a missing email on the Owner, or the site\'s mail settings), then send them from the Invoicing page — each leaves this list as soon as it is emailed. Leaving some for another way (a phone call, say)? Dismiss the list; the invoices stay as they are.</p>';
+            echo '<div class="njilga-actions">';
+            printf(
+                '<a class="njilga-btn njilga-btn-outline" href="%s">%s</a>',
+                esc_url( MyNJILGA_Page_Invoicing::page_url( $year, [ 'filter' => 'emailfailed' ] ) ),
+                $returnTo === 'invoicing' ? 'Show these in the table' : 'Show these in Invoicing'
+            );
+            echo MyNJILGA_Admin_UI::action_form( self::ACTION_CONTROL, 'Dismiss this list', $ctl( 'dismiss' ), 'outline', '', sprintf( 'Remove these %d invoices from this list? They stay created and not emailed — you can still send them from the Invoicing page.', count( $rc['unresolved'] ) ) );
+            echo '</div>';
+        } elseif ( $rc['resolved'] > 0 ) {
+            printf( '<p class="njilga-help">%d invoice%s could not be sent at first and %s since been settled (emailed, or replaced), so nothing is left to send.</p>', $rc['resolved'], $rc['resolved'] === 1 ? '' : 's', $rc['resolved'] === 1 ? 'has' : 'have' );
         }
         $notes = array_reverse( array_slice( (array) ( $rec['notes'] ?? [] ), -10 ) );
         if ( $notes ) {
@@ -1134,6 +1150,11 @@ class MyNJILGA_Page_Launch {
             case 'cancel':
                 $r = MyNJILGA_Launch_Schedule::cancel( $year );
                 $done = 'Cancelled. Emails already sent stay sent; the rest will not go out.';
+                break;
+            case 'dismiss':
+                $actor = wp_get_current_user();
+                $r     = MyNJILGA_Launch_Schedule::dismiss_failures( $year, ( $actor && ! empty( $actor->display_name ) ) ? (string) $actor->display_name : '' );
+                $done  = 'Dismissed. The invoices themselves are unchanged — email them from the Invoicing page when you are ready.';
                 break;
             case 'run_now':
                 $b = MyNJILGA_Launch_Schedule::run_batch( $year, null, true );
