@@ -302,7 +302,7 @@ class InvoiceUpdateTest extends NJILGA_TestCase {
 
     public function testAnUpdatedInvoiceSaysSoAndNamesTheOneItReplaces(): void {
         $m = MyNJILGA_Invoice_Email::build( $this->input( [ 'replaces' => [ 'number' => 'NJILGA-2290', 'total' => '$200.00' ] ] ) );
-        $this->assertSame( 'Updated: 2027 NJILGA Membership Dues Invoice — Alpha LLP', $m['subject'] );
+        $this->assertSame( 'Updated Invoice: 2027 NJILGA Membership Dues Invoice — Alpha LLP', $m['subject'] );
         $notice = 'This is an updated invoice. It replaces invoice NJILGA-2290 ($200.00), which has been voided. Please disregard the earlier invoice and its payment link, and pay this one.';
         $this->assertTrue( strpos( $m['body'], $notice ) !== false, 'the notice is in the body' );
         $this->assertSame(
@@ -317,7 +317,7 @@ class InvoiceUpdateTest extends NJILGA_TestCase {
             'replaces' => [ 'number' => 'NJILGA-2290', 'total' => '' ],
             'subject_tpl' => 'Your {year} dues — {firm}', 'intro_tpl' => 'Hello {first_name}.', 'closing_tpl' => 'Regards',
         ] ) );
-        $this->assertSame( 'Updated: Your 2027 dues — Alpha LLP', $m['subject'], 'custom subjects are marked too' );
+        $this->assertSame( 'Updated Invoice: Your 2027 dues — Alpha LLP', $m['subject'], 'custom subjects are marked too' );
         $this->assertTrue( strpos( $m['body'], 'It replaces invoice NJILGA-2290, which has been voided.' ) !== false );
         $this->assertTrue( strpos( $m['body'], '(' ) === false || strpos( $m['body'], 'NJILGA-2290 (' ) === false, 'no empty total in brackets' );
     }
@@ -353,6 +353,6 @@ class InvoiceUpdateTest extends NJILGA_TestCase {
         $html = MyNJILGA_Invoice_Email::build_html( $this->input( [ 'replaces' => [ 'number' => 'NJ<b>-1', 'total' => '$200.00' ] ] ) );
         $this->assertTrue( strpos( $html, '<strong>This is an updated invoice.</strong> It replaces invoice NJ&lt;b&gt;-1 ($200.00), which has been voided.' ) !== false, 'the notice, with its number escaped' );
         $this->assertFalse( strpos( $html, 'NJ<b>-1' ) !== false, 'nothing typed becomes markup' );
-        $this->assertTrue( strpos( $html, 'Updated: Alpha LLP 2027 invoice: $290.00' ) !== false, 'the preheader says it is an update' );
+        $this->assertTrue( strpos( $html, 'Updated Invoice: Alpha LLP 2027 invoice: $290.00' ) !== false, 'the preheader says it is an update' );
     }
 }
