@@ -770,6 +770,28 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
+     * Delete a member's own draft invoices (MyNJILGA_Individual_Invoicing) — exactly these rows,
+     * and only while each is still such a draft: one approved or created between the caller's read
+     * and this delete is left alone.
+     *
+     * @param array<int,int> $ids
+     * @return int Rows deleted.
+     */
+    public static function delete_individual_drafts( array $ids, int $duesYear, bool $livemode ): int {
+        global $wpdb;
+        $ids = array_values( array_filter( array_map( 'intval', $ids ) ) );
+        if ( ! $ids ) {
+            return 0;
+        }
+        $table = self::table_name();
+        $sql   = "DELETE FROM $table WHERE dues_year = %d AND livemode = %d AND fluentcrm_company_id = %d AND billing_mode = %s AND invoice_kind = %s"
+            . ' AND status IN (%s, %s)'
+            . ' AND id IN (' . implode( ',', array_fill( 0, count( $ids ), '%d' ) ) . ')';
+        $args  = array_merge( [ $duesYear, $livemode ? 1 : 0, 0, MyNJILGA_Dues_Settings::MODE_INDIVIDUAL, MyNJILGA_Dues_Snapshot::KIND_COMBINED, self::STATUS_DRAFT, self::STATUS_EXCLUDED ], $ids );
+        return (int) $wpdb->query( $wpdb->prepare( $sql, $args ) ); // phpcs:ignore
+    }
+
+    /**
      * Delete rows for MyNJILGA_Year_Wipe. Belt and braces on top of the
      * ids: only that year, only that mode, never an online join, and only
      * in a status with nothing collectable behind it — a row voided in

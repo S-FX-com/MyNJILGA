@@ -74,6 +74,8 @@ class MyNJILGA_Dues_Settings {
                 'send_cc_mode'             => self::CC_OWNER_ONLY,
                 'send_cc_emails'           => '',
                 'send_reply_to'            => '',
+                // How fast invoice emails go out, per second. See MyNJILGA_Mail_Pacer.
+                'email_per_second'         => 1,
                 // Invoice email wording. '' = the built-in text. See MyNJILGA_Invoice_Email.
                 'email_subject'            => '',
                 'email_intro'              => '',

@@ -244,6 +244,8 @@ MyNJILGA_Admin_UI::company_link( $companyId, $firm );
 MyNJILGA_Admin_UI::company_icon_link( $companyId, $firm ); // icon only, for when the name itself
                                                            // already does something (Invoicing's
                                                            // name expands the row)
+MyNJILGA_Admin_UI::contact_icon_link( $contactId, $name ); // the same, for a person (a member's own
+                                                           // invoice row, which has no firm)
 ```
 
 The bare URLs are `crm_contact_url()` / `crm_company_url()`.

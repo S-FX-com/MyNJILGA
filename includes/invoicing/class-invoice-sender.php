@@ -12,6 +12,9 @@ class MyNJILGA_Invoice_Sender {
     /** compose() / send_for_row() $variant: the invoice emailed again as a reminder. */
     const KIND_REMINDER = 'reminder';
 
+    /** How many times an email the mail system refused is tried: the first, and one more after a pause. */
+    const SEND_ATTEMPTS = 2;
+
     /**
      * Build the email for an invoice row WITHOUT sending it: who it goes to,
      * the subject, the body and the headers (CC / Reply-To per Settings) — or
@@ -68,6 +71,11 @@ class MyNJILGA_Invoice_Sender {
         $kind     = (string) ( $snapshot['invoice_kind'] ?? MyNJILGA_Dues_Snapshot::KIND_COMBINED );
         $members  = $snapshot['members'];
         $firm     = (string) ( $snapshot['company']['name'] ?? '' );
+        // A member's own invoice has no firm (its "company" name is the person's, for the screens):
+        // the email says "Your 2027 … invoice", not "Jane Doe's … invoice" addressed to Jane Doe.
+        if ( MyNJILGA_Individual_Invoicing::is_self_billed( $invoiceRow ) ) {
+            $firm = '';
+        }
         $total    = MyNJILGA_Invoicing::money( (int) $invoiceRow->total_amount_cents );
         $isAssess = $kind === MyNJILGA_Dues_Snapshot::KIND_ASSESSMENT;
 
@@ -172,20 +180,37 @@ class MyNJILGA_Invoice_Sender {
         //    included): it went. Kept, with a warning naming the problem.
         //  - an exception AFTER the message was handed off (a
         //    wp_mail_succeeded listener, a replacement wp_mail()): it went.
-        $failure  = null;
-        $listener = static function ( $error ) use ( &$failure ): void { $failure = $error; };
-        add_action( 'wp_mail_failed', $listener );
-        $handedOffBefore = function_exists( 'did_action' ) ? did_action( 'wp_mail_succeeded' ) : 0;
-        $thrown          = null;
-        try {
-            $mailed = self::deliver( (string) $m['to'], (string) $m['subject'], $m, (array) $m['headers'] );
-        } catch ( \Throwable $e ) {
-            $mailed = false;
-            $thrown = $e;
-        }
-        remove_action( 'wp_mail_failed', $listener );
-        $handedOff = function_exists( 'did_action' ) && did_action( 'wp_mail_succeeded' ) > $handedOffBefore;
-        $failText  = is_object( $failure ) && method_exists( $failure, 'get_error_message' ) ? (string) $failure->get_error_message() : '';
+        //
+        // Pacing and the one retry. Mail services cap how fast they accept messages (Emailit: 2 a
+        // second, answered with "Too many requests"), and WordPress sees that as wp_mail() failing.
+        // Each attempt first takes a slot from the shared pacer (MyNJILGA_Mail_Pacer), so the
+        // emails of a scheduled batch, of background email runs and of a hand-send are spaced
+        // out together. An email refused anyway, with nothing to suggest it was delivered, is
+        // tried once more after a pause: a refusal like that sent nothing, and a second try is
+        // exactly what the person would otherwise do by hand.
+        $attempt = 0;
+        do {
+            $attempt++;
+            MyNJILGA_Mail_Pacer::wait();
+            $failure  = null;
+            $listener = static function ( $error ) use ( &$failure ): void { $failure = $error; };
+            add_action( 'wp_mail_failed', $listener );
+            $handedOffBefore = function_exists( 'did_action' ) ? did_action( 'wp_mail_succeeded' ) : 0;
+            $thrown          = null;
+            try {
+                $mailed = self::deliver( (string) $m['to'], (string) $m['subject'], $m, (array) $m['headers'] );
+            } catch ( \Throwable $e ) {
+                $mailed = false;
+                $thrown = $e;
+            }
+            remove_action( 'wp_mail_failed', $listener );
+            $handedOff = function_exists( 'did_action' ) && did_action( 'wp_mail_succeeded' ) > $handedOffBefore;
+            $failText  = is_object( $failure ) && method_exists( $failure, 'get_error_message' ) ? (string) $failure->get_error_message() : '';
+            $retry     = ! $mailed && $thrown === null && ! $handedOff && ! self::partly_delivered( $failText, (string) $m['to'] ) && $attempt < self::SEND_ATTEMPTS;
+            if ( $retry ) {
+                MyNJILGA_Mail_Pacer::pause_before_retry();
+            }
+        } while ( $retry );
 
         $warning = '';
         if ( ! $mailed ) {

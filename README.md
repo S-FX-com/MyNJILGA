@@ -157,6 +157,15 @@ CI runs them on PHP 7.4 and 8.3 on every push (`.github/workflows/tests.yml`).
 
 A member with no email can't be billed individually; their invoice is addressed to the Owner and the card says so.
 
+### Members without a firm
+
+A firm's invoice is built from the firm's roster, so a member who is on **no firm's roster** is on no invoice at all. **Invoicing → Members without a firm** lists them — the same people the Dashboard counts as "no firm" (a contact with a dues signal who is on no Company's roster; a contact with no membership tag at all isn't a member on record and isn't listed) — and bills each one **individually**:
+
+- Each person is priced as a first member of their category (their dues, plus any assessment their tags carry) and billed to **their own email**. The list says, for everyone, what they would be billed and why not when they wouldn't: *already paid for this year*, *inactive*, *no category tag*, *no email address*, or the plain $0 of a free category.
+- **Adding** a member (tick them → *Add selected to Invoicing*, or *Add all*) only makes a **draft** under **No Invoice**, in the same table as the firms, marked **no firm**. Nothing reaches Stripe or an inbox until you click **Create Invoice** there and then email it, exactly as for a firm. Adding someone again refreshes their draft to today's tags and price; a draft that now comes to $0 becomes "nothing to bill".
+- It is an ordinary invoice row filed under no firm (`fluentcrm_company_id` 0, `individual` billing, `combined` kind), so create, email, reminders, **Update & resend**, void, issue again, the Payments ledger, the downgrade sweep and the year wipe all work on it unchanged. The Stripe customer is found or created by email; there is no firm, so no Company note is written. The email reads *"Your 2027 NJILGA membership dues invoice totals …"* with no firm in the subject.
+- **One invoice per person**: someone who is on a firm's roster is never offered one (the firm's invoice bills them), and someone who already has an invoice past draft isn't offered another. If a member **joins a firm after** they were invoiced, the list warns that the firm's invoice bills them too, so you can void one; **Refresh Firms** drops their individual *draft* (never a created invoice) once a firm invoice bills them, and **Update & resend** on their own invoice refuses and says so.
+
 ### Exceptions (never silently skipped)
 
 The preview flags, separately from normal rows: firms with **no members**, firms with **no Owner** (roster shown so you can see what would be billed), firms where **nothing is billable**, and members with **no category tag** (badge on the card). Rows that hit an error on create/send show under **Needs attention** with the error text and stay selectable for a retry.
@@ -191,6 +200,16 @@ The invoice email is edited on **Settings → Invoice Email** — recipients (Cc
 What stays system-generated and **cannot be edited away**: the list of who the invoice covers and what each is charged, the payment link, and the mail-a-check address (Settings → Payments). Saving refuses a typo like `{frim}` — it would otherwise be emailed to firms as literal text — keeps the previous wording for that field, and says which tag it didn't recognise. The same wording is used for every invoice email, including a separate assessment invoice if you bill assessments separately, so use `{invoice}` to name which one it is. 
 
 **Preview and Send test.** The tab's one form has three buttons: **Save changes**, **Preview** and **Send test email**. Preview and the test both use what is in the boxes *right now* — saved or not — and are built by `MyNJILGA_Invoice_Sender::compose()` (with the unsaved settings passed as an override), i.e. through the same code a real send uses, so what you test is what firms get. Pick an **example firm** (made-up roster and a placeholder payment link) or any of the year's real invoices — even one not created yet — and type any address to send the test to (blank = yours). The address is used **exactly as typed** — one that isn't a single valid address is refused, never quietly "repaired" into a different one. A test goes **only** to that address: it is marked `[TEST]`, opens with a banner saying nobody else received it, has no Cc, and changes nothing on any invoice. Your unsaved edits survive the redirect after a preview, a test or a refused save in a short-lived per-user draft (30 minutes), so testing never costs you your typing; **Save** refuses a typo'd merge tag and sends nothing to anyone. Only the **Save changes** button saves: pressing Enter in a field (or any form post without a button) just previews, so wording can't go live by accident. The Launch Wizard's step 5 still previews each firm's email and sends a `[SAMPLE]` copy.
+
+### Sending speed (mail service limits)
+
+Mail services limit how fast they accept messages — **Emailit allows 2 per second** and answers anything faster with "Too many requests", which WordPress reports as `wp_mail() failed`. Nothing used to pause between invoice emails, so a scheduled batch (25 by default) or a background email run sent back to back: after the first couple in a second every email was refused, each counted as a mail failure, five in a row halted the schedule, and a firm's invoice was given up on after two tries.
+
+Every invoice email now takes a **slot** first, from one shared record (`MyNJILGA_Mail_Pacer`): at least one gap after the previous email's slot, **whoever sent it** — so a scheduled batch, several background jobs running at once and a hand-sent invoice all draw on the same budget. The gap is **Settings → Invoice Email → Sending speed** (emails per second, default **1**: half Emailit's limit, leaving room for the site's other mail, which counts against the same allowance; 0.1–10). At 1 per second, 100 invoices take under two minutes; a Launch Wizard batch is cut at its 20-second time budget and the rest goes in the next batch, as before.
+
+An email the mail system refuses anyway, with nothing to suggest it was delivered, is **tried once more after a 2-second pause**. A failure that is not a refusal (an exception, a message that partly delivered) is never retried — it may have gone. Developers can override the gap and the pause with the `my_njilga_mail_interval` and `my_njilga_mail_retry_pause` filters.
+
+**Invoices that already failed** stay created and unsent, with the error on their row; nothing was emailed to those firms. After installing this version, tick them on the Invoicing page, click **Generate emails** and send them — they now go out at the set pace. (A schedule gives each invoice two tries and then sets it aside, so use Generate emails for these rather than resuming the schedule, and cancel a halted schedule you no longer need.)
 
 ### Resend Updated Invoice
 
@@ -604,6 +623,7 @@ my-njilga/
 │   │   ├── class-invoice-email.php       ← PURE: the editable email wording — merge tags, cleaning, build() (unit-tested)
 │   │   ├── class-invoice-sender.php      ← Email + CC policy + Company Note
 │   │   ├── class-invoice-update.php      ← Resend Updated Invoice: pure refusal/diff/fingerprint (unit-tested) + the guarded void → re-price → create → email run
+│   │   ├── class-individual-invoicing.php ← Members without a firm: who is offered an individual invoice (pure, unit-tested), the draft candidate, add/refresh, the "joined a firm since" guards
 │   │   ├── class-payment-listener.php    ← Paid → tags + role (via role sync)
 │   │   ├── class-role-sync.php           ← Paid member's WP role follows their category
 │   │   ├── class-invoice-stats.php       ← Dashboard invoice figures: one GROUP BY, mode-scoped, parity-tested against the Payments ledger

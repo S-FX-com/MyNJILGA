@@ -230,6 +230,7 @@ class MyNJILGA_Page_Payments {
             'id'        => (int) $row->id,
             'firm'      => MyNJILGA_Dues_Snapshot::company_name( $row ),
             'companyId' => (int) $row->fluentcrm_company_id,
+            'billToId'  => (int) ( MyNJILGA_Dues_Snapshot::bill_to( $row )['contact_id'] ?: ( $row->bill_to_contact_id ?? 0 ) ),
             'year'      => (int) $row->dues_year,
             'status'    => $status,
             'method'    => (string) ( $row->primary_method ?? '' ),
@@ -262,9 +263,12 @@ class MyNJILGA_Page_Payments {
     public static function group_by_firm( array $lines ): array {
         $firms = [];
         foreach ( $lines as $l ) {
-            $cid = $l['companyId'];
+            $company = (int) $l['companyId'];
+            // Invoices filed under no firm (a member's own, an online join) belong to nobody's firm:
+            // each person is their own group, not all of them one "firm" named for whoever came first.
+            $cid = $company > 0 ? $company : 'p' . (int) ( $l['billToId'] ?? 0 );
             if ( ! isset( $firms[ $cid ] ) ) {
-                $firms[ $cid ] = [ 'companyId' => $cid, 'name' => $l['firm'], 'years' => [], 'outstandingCents' => 0 ];
+                $firms[ $cid ] = [ 'companyId' => $company, 'name' => $l['firm'], 'years' => [], 'outstandingCents' => 0 ];
             }
             $y = $l['year'];
             if ( ! isset( $firms[ $cid ]['years'][ $y ] ) ) {
