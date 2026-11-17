@@ -1340,7 +1340,7 @@ class MyNJILGA_Page_Invoicing {
 </script>
 JS;
 
-        self::render_email_schedule( $duesYear, $token, $show, $unsent, $resent );
+        self::render_email_schedule( $duesYear, $token, $show, $unsent, $resent, $as );
     }
 
     /**
@@ -1354,7 +1354,7 @@ JS;
      * @param array<int,object> $unsent
      * @param array<int,object> $resent
      */
-    private static function render_email_schedule( int $duesYear, string $token, int $show, array $unsent, array $resent ): void {
+    private static function render_email_schedule( int $duesYear, string $token, int $show, array $unsent, array $resent, string $as = 'reminder' ): void {
         echo '<div id="njilga-schedule">';
         MyNJILGA_Admin_UI::section( '5. Or schedule them for later', 'Start at a time you choose and send in paced batches, so firms (and your inbox) aren\'t hit all at once. You can pause, resume or cancel it at any time, and nothing is emailed twice.' );
 
@@ -1386,12 +1386,13 @@ JS;
         // The timing — a GET back to this screen, so previewing it schedules nothing.
         echo '<div class="njilga-card njilga-card-pad">';
         printf(
-            '<form method="get" action="%s"><input type="hidden" name="page" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="view" value="email"><input type="hidden" name="batch" value="%s"><input type="hidden" name="firm" value="%d"><input type="hidden" name="timing" value="1">',
+            '<form method="get" action="%s"><input type="hidden" name="page" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="view" value="email"><input type="hidden" name="batch" value="%s"><input type="hidden" name="firm" value="%d"><input type="hidden" name="as" value="%s"><input type="hidden" name="timing" value="1">',
             esc_url( admin_url( 'admin.php' ) . '#njilga-schedule' ),
             esc_attr( MyNJILGA_Admin_Menu::SLUG_INVOICING ),
             $duesYear,
             esc_attr( $token ),
-            $show
+            $show,
+            esc_attr( $as )
         );
         echo '<div class="njilga-inline-fields">';
         printf( '<div class="njilga-field"><label for="njilga-sched-start"><strong>Start</strong> (site time, %s)</label><input type="datetime-local" id="njilga-sched-start" name="start" value="%s" required></div>', esc_html( $tz->getName() ), esc_attr( $in['start'] ) );
@@ -1441,6 +1442,7 @@ JS;
         foreach ( $unsent as $r ) {
             $fields .= sprintf( '<input type="hidden" name="send_ids[]" value="%d">', (int) $r->id );
         }
+        $fields .= sprintf( '<input type="hidden" name="as" value="%s">', esc_attr( $as ) );
         printf(
             '<div class="njilga-card njilga-card-pad"><form method="post" action="%s" class="njilga-confirm-form">
                 <input type="hidden" name="action" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="batch" value="%s">%s%s
@@ -2583,8 +2585,10 @@ JS;
         $token    = isset( $_POST['batch'] ) ? sanitize_key( wp_unslash( (string) $_POST['batch'] ) ) : '';
         $batch    = self::email_batch( $token );
         $rowId    = isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0;
-        $back     = static function ( array $args ) use ( $duesYear, $token, $rowId ): void {
-            wp_safe_redirect( self::email_review_url( $duesYear, $token, $args + [ 'firm' => $rowId ] ) );
+        // How already-emailed invoices go out: carried back to the review, so what was just tested is what Send posts.
+        $as       = self::resend_as( isset( $_POST['as'] ) ? (string) wp_unslash( $_POST['as'] ) : '' );
+        $back     = static function ( array $args ) use ( $duesYear, $token, $rowId, $as ): void {
+            wp_safe_redirect( self::email_review_url( $duesYear, $token, $args + [ 'firm' => $rowId, 'as' => $as ] ) );
             exit;
         };
 
@@ -2597,7 +2601,7 @@ JS;
         if ( ! $batch || ! $row || ! in_array( $rowId, array_map( 'intval', $batch['ids'] ), true ) || MyNJILGA_Email_Run::refusal( $row, $duesYear, $live ) !== '' ) {
             $back( [ 'msg' => 'error', 'detail' => 'That invoice isn\'t part of this selection any more — go back and generate the emails again.' ] );
         }
-        $asReminder = self::resend_as( isset( $_POST['as'] ) ? (string) wp_unslash( $_POST['as'] ) : '' ) === 'reminder' && (string) $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_SENT;
+        $asReminder = $as === 'reminder' && (string) $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_SENT;
         $m = MyNJILGA_Invoice_Sender::compose( $row, false, null, $asReminder ? MyNJILGA_Invoice_Sender::KIND_REMINDER : '' );
         if ( empty( $m['ok'] ) ) {
             $back( [ 'msg' => 'error', 'detail' => (string) $m['error'] ] );
@@ -2626,9 +2630,10 @@ JS;
         $token    = isset( $_POST['batch'] ) ? sanitize_key( wp_unslash( (string) $_POST['batch'] ) ) : '';
         $batch    = self::email_batch( $token );
         $live     = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
+        $as       = self::resend_as( isset( $_POST['resend_as'] ) ? (string) wp_unslash( $_POST['resend_as'] ) : '' );
 
-        $fail = static function ( string $why ) use ( $duesYear, $token ): void {
-            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => $why ] ) );
+        $fail = static function ( string $why ) use ( $duesYear, $token, $as ): void {
+            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => $why, 'as' => $as ] ) );
             exit;
         };
         if ( empty( $_POST['confirm'] ) ) {
@@ -2667,7 +2672,7 @@ JS;
         if ( ! $sendIds && ! $resend ) {
             $fail( 'Nothing to send — every invoice here was left out, or already emailed and not ticked to send again.' );
         }
-        $kind   = self::resend_as( isset( $_POST['resend_as'] ) ? (string) wp_unslash( $_POST['resend_as'] ) : '' ) === 'reminder' ? MyNJILGA_Invoice_Sender::KIND_REMINDER : '';
+        $kind   = $as === 'reminder' ? MyNJILGA_Invoice_Sender::KIND_REMINDER : '';
         $result = MyNJILGA_Email_Run::queue( array_merge( $sendIds, $resend ), $resend, $duesYear, $live, $kind );
         if ( ! $result['ok'] ) {
             $fail( $result['error'] );
@@ -2687,9 +2692,10 @@ JS;
         $token    = isset( $_POST['batch'] ) ? sanitize_key( wp_unslash( (string) $_POST['batch'] ) ) : '';
         $batch    = self::email_batch( $token );
         $live     = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
+        $as       = self::resend_as( isset( $_POST['as'] ) ? (string) wp_unslash( $_POST['as'] ) : '' );
 
-        $fail = static function ( string $why ) use ( $duesYear, $token ): void {
-            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => rawurlencode( $why ) ] ) );
+        $fail = static function ( string $why ) use ( $duesYear, $token, $as ): void {
+            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => rawurlencode( $why ), 'as' => $as ] ) );
             exit;
         };
         if ( empty( $_POST['confirm'] ) ) {
