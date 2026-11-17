@@ -326,19 +326,12 @@ class MyNJILGA_Page_Invoicing {
             '<div class="njilga-search">%s<input type="text" id="njilga-search" placeholder="Search law firms…" autocomplete="off"></div>',
             self::icon( 'search' )
         );
-        echo '<select id="njilga-status" class="njilga-select">
-                <option value="all">All statuses</option>
-                <option value="ready">Ready</option>
-                <option value="created">Invoice Created</option>
-                <option value="sent">Sent</option>
-                <option value="processing">Processing (ACH)</option>
-                <option value="paid">Paid</option>
-                <option value="blocked">Blocked</option>
-                <option value="error">Error</option>
-                <option value="downgraded">Downgraded</option>
-                <option value="voided">Voided</option>
-                <option value="uncollectible">Uncollectible</option>
-              </select>';
+        // The options are built in the page's script from the tab being looked at (see buildStatusOptions()): each tab
+        // is the preliminary filter, and this narrows within it. Only the labels and their order come from here.
+        printf(
+            '<select id="njilga-status" class="njilga-select" aria-label="Filter this tab by status" data-labels="%s"><option value="all">All statuses</option></select>',
+            esc_attr( (string) wp_json_encode( self::status_labels() ) )
+        );
         echo '<div class="njilga-toolbar-spacer"></div>';
         self::render_generate_form( $duesYear, 'Refresh Firms', 'outline' );
         echo '</div>';
@@ -503,7 +496,7 @@ class MyNJILGA_Page_Invoicing {
 
         $duesCell = $cents > 0 ? esc_html( MyNJILGA_Invoicing::money( $cents ) ) : '<span class="njilga-dim">—</span>';
 
-        echo '<tr class="njilga-row" data-id="' . $rowId . '" data-name="' . esc_attr( strtolower( $name ) ) . '" data-bucket="' . esc_attr( $c['bucket'] ) . '" data-status="' . esc_attr( $c['status'] ) . '" data-createable="' . ( $createable ? '1' : '0' ) . '">';
+        echo '<tr class="njilga-row" data-id="' . $rowId . '" data-name="' . esc_attr( strtolower( $name ) ) . '" data-bucket="' . esc_attr( $c['bucket'] ) . '" data-status="' . esc_attr( $c['status'] ) . '" data-skey="' . esc_attr( self::status_key( $c ) ) . '" data-createable="' . ( $createable ? '1' : '0' ) . '" data-unemailed="' . ( MyNJILGA_Dues_Invoice_Table::is_unemailed( $row ) ? '1' : '0' ) . '" data-emailfailed="' . ( MyNJILGA_Dues_Invoice_Table::email_failed( $row ) ? '1' : '0' ) . '">';
         echo '<td class="njilga-col-check">' . $checkCell . '</td>';
         printf(
             '<td class="njilga-firmcell"><button type="button" class="njilga-firmname njilga-expand" data-id="%d"><span class="njilga-firm-label">%s</span>%s</button>%s%s</td>',
@@ -842,6 +835,47 @@ class MyNJILGA_Page_Invoicing {
     /**
      * @return array{bucket:string,status:string,badge:array{0:string,1:string},validation:array{0:string,1:bool},createable:bool}
      */
+    /**
+     * The status a row is filtered by: its own, except an online join — paid at Checkout, so it sits on the Paid tab
+     * (or, unpaid, under Needs Attention) beside invoices but is not one, and the filter says which is which.
+     *
+     * @param array<string,mixed> $c classify()'s verdict
+     */
+    public static function status_key( array $c ): string {
+        if ( ! empty( $c['join'] ) ) {
+            return (string) $c['status'] === 'paid' ? 'paid-online' : 'join-pending';
+        }
+        return (string) $c['status'];
+    }
+
+    /**
+     * Every status key and its words, in the order the filter lists them (the order a firm moves through the stages,
+     * then the exceptions). The filter shows only those the current tab has.
+     *
+     * @return array<string,string>
+     */
+    public static function status_labels(): array {
+        return [
+            'ready'         => 'Ready',
+            'creating'      => 'Creating…',
+            'created'       => 'Invoice Created',
+            'scheduled'     => 'Email scheduled',
+            'emailing'      => 'Emailing…',
+            'sent'          => 'Email Sent',
+            'processing'    => 'Processing (ACH)',
+            'paid'          => 'Paid',
+            'paid-online'   => 'Paid online (join)',
+            'blocked'       => 'Blocked',
+            'no-members'    => 'No members',
+            'zero'          => 'Nothing to bill',
+            'error'         => 'Error',
+            'downgraded'    => 'Downgraded',
+            'voided'        => 'Voided',
+            'uncollectible' => 'Uncollectible',
+            'join-pending'  => 'Online join (not paid)',
+        ];
+    }
+
     private static function classify( object $row ): array {
         $T        = MyNJILGA_Dues_Invoice_Table::class;
         $status   = (string) $row->status;
@@ -998,7 +1032,8 @@ class MyNJILGA_Page_Invoicing {
                 $t['joins']++;
                 continue;
             }
-            $companyId = (int) $v['row']->fluentcrm_company_id;
+            // An invoice filed under no firm is a member's own: each person counts once, not all as one "firm" 0.
+            $companyId = (int) $v['row']->fluentcrm_company_id > 0 ? (int) $v['row']->fluentcrm_company_id : 'p' . (int) $v['row']->bill_to_contact_id;
             $firms[ $companyId ] = true;
             $t[ $bucket ] = (int) ( $t[ $bucket ] ?? 0 ) + 1;
 
@@ -2425,19 +2460,59 @@ JS;
   });
 
   var state={tab:'all',q:'',status:'all',page:1,per:10};
+  var statusSel=document.getElementById('njilga-status');
+  var labels={};
+  try{ labels=JSON.parse(statusSel?(statusSel.getAttribute('data-labels')||'{}'):'{}'); }catch(e){ labels={}; }
+  // "Not emailed yet" / "Email failed" cut across statuses; they apply where an invoice can be waiting to be emailed.
+  var SPECIAL_TABS={all:1,created:1};
 
   function money(c){
     var n=(c/100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
     return '$'+n;
   }
+  function inTab(r){ return state.tab==='all'||r.dataset.bucket===state.tab; }
+  // The tab is the preliminary filter; the status narrows within it; the search narrows that.
   function matches(r){
-    if(state.tab!=='all'&&r.dataset.bucket!==state.tab) return false;
-    if(state.status!=='all'&&r.dataset.status!==state.status) return false;
+    if(!inTab(r)) return false;
+    if(state.status==='unemailed'){ if(r.dataset.unemailed!=='1') return false; }
+    else if(state.status==='emailfailed'){ if(r.dataset.emailfailed!=='1') return false; }
+    else if(state.status!=='all'&&r.dataset.skey!==state.status) return false;
     if(state.q&&r.dataset.name.indexOf(state.q)===-1) return false;
     return true;
   }
+  // The status list is the tab's own: only statuses that tab has, with how many.
+  function buildStatusOptions(){
+    if(!statusSel) return;
+    var counts={}, un=0, ef=0;
+    rows.forEach(function(r){
+      if(!inTab(r)) return;
+      var k=r.dataset.skey; counts[k]=(counts[k]||0)+1;
+      if(r.dataset.unemailed==='1') un++;
+      if(r.dataset.emailfailed==='1') ef++;
+    });
+    function opt(v,t){ var o=document.createElement('option'); o.value=v; o.textContent=t; statusSel.appendChild(o); }
+    statusSel.innerHTML='';
+    opt('all','All statuses');
+    Object.keys(labels).forEach(function(k){ if(counts[k]) opt(k,labels[k]+' ('+counts[k]+')'); });
+    Object.keys(counts).forEach(function(k){ if(!(k in labels)) opt(k,k+' ('+counts[k]+')'); });
+    if(SPECIAL_TABS[state.tab]){
+      if(un) opt('unemailed','Not emailed yet ('+un+')');
+      if(ef) opt('emailfailed','Email failed ('+ef+')');
+    }
+    statusSel.value=state.status; // a tab always starts at "All statuses"; only a link's ?filter= sets another
+  }
+  // A tick belongs to the view it was made in: whatever a filter now hides is un-ticked, so "Select all", the
+  // count, the total and what Create / Generate emails post can only ever be the rows in front of you.
+  function pruneSelection(){
+    rows.forEach(function(r){
+      if(matches(r)) return;
+      var cb=r.querySelector('.njilga-check');
+      if(cb&&cb.checked) cb.checked=false;
+    });
+  }
 
   function apply(){
+    pruneSelection();
     var filtered=rows.filter(matches);
     var total=filtered.length;
     var pages=Math.max(1,Math.ceil(total/state.per));
@@ -2514,6 +2589,10 @@ JS;
   }
   function syncSelectAll(filtered){
     var boxes=checkable(filtered);
+    ['njilga-all','njilga-all-head'].forEach(function(id){
+      var el=document.getElementById(id);
+      if(el){ var t='Select all '+boxes.length+' in this view'; el.title=t; el.setAttribute('aria-label',t); }
+    });
     var all=boxes.length>0&&boxes.every(function(cb){return cb.checked;});
     ['njilga-all','njilga-all-head'].forEach(function(id){
       var el=document.getElementById(id);
@@ -2532,7 +2611,7 @@ JS;
     tab.addEventListener('click',function(){
       root.querySelectorAll('.njilga-tab').forEach(function(t){t.classList.remove('active');});
       tab.classList.add('active');
-      state.tab=tab.dataset.tab; state.page=1;
+      state.tab=tab.dataset.tab; state.page=1; state.status='all'; buildStatusOptions();
       // A selection belongs to the stage it was made in.
       table.querySelectorAll('.njilga-check:checked').forEach(function(cb){ cb.checked=false; });
       showStage(); apply();
@@ -2546,7 +2625,6 @@ JS;
     search.addEventListener('input',function(){ state.q=search.value.trim().toLowerCase(); state.page=1; apply(); });
     search.addEventListener('keydown',function(e){ if(e.key==='Enter') e.preventDefault(); });
   }
-  var statusSel=document.getElementById('njilga-status');
   if(statusSel) statusSel.addEventListener('change',function(){ state.status=statusSel.value; state.page=1; apply(); });
   var perSel=document.getElementById('njilga-per');
   if(perSel) perSel.addEventListener('change',function(){ state.per=parseInt(perSel.value,10)||10; state.page=1; apply(); });
@@ -2600,6 +2678,15 @@ JS;
     var b=e.target.closest('[data-send]'); if(!b) return;
     pick([b.dataset.send]);
   });
+
+  // A link can open the table already filtered (?filter=emailfailed — the scheduled send's failure list does).
+  buildStatusOptions();
+  var want=(new URLSearchParams(window.location.search)).get('filter');
+  if(want&&statusSel){
+    for(var oi=0;oi<statusSel.options.length;oi++){
+      if(statusSel.options[oi].value===want){ statusSel.value=want; state.status=want; break; }
+    }
+  }
 
   showStage();
   apply();

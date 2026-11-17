@@ -907,4 +907,111 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         $waiting = MyNJILGA_Launch_Schedule::waiting_ids( $r, true );
         $this->assertTrue( isset( $waiting[31] ) && ! isset( $waiting[9] ) );
     }
+
+    // ======================================================================
+    // The status as it stands now: failures staff have since cleared
+    // ======================================================================
+
+    /** A finished send, as the user reported it: 167 confirmed, some failed at send time, some then emailed by hand. */
+    private function finished( array $over = [] ): array {
+        return array_merge( [
+            'status' => 'complete', 'unsent_at_schedule' => 6, 'sent' => 3, 'failed' => 9,
+            'row_ids'  => [ 1, 2, 3, 4, 5, 6 ],
+            'failures' => [ 4 => 'wp_mail() failed', 5 => 'wp_mail() failed', 6 => 'wp_mail() failed' ],
+            'attempts' => [ 4 => 2, 5 => 2, 6 => 2 ],
+        ], $over );
+    }
+
+    private function inv( string $status, string $sentAt = '' ): array {
+        return [ 'status' => $status, 'sent_at' => $sentAt === '' ? null : $sentAt ];
+    }
+
+    public function testAFailureThatWasEmailedByHandIsNoLongerAFailure(): void {
+        $rows = [
+            1 => $this->inv( 'sent', '2026-11-16 05:00:00' ), 2 => $this->inv( 'sent', '2026-11-16 05:00:00' ), 3 => $this->inv( 'sent', '2026-11-16 05:00:00' ),
+            4 => $this->inv( 'sent', '2026-11-17 09:00:00' ), // failed, then re-sent by hand
+            5 => $this->inv( 'created' ),                     // still not sent
+            6 => $this->inv( 'sent', '2026-11-17 09:01:00' ),
+        ];
+        $r = MyNJILGA_Launch_Schedule::reconcile( $this->finished(), $rows );
+        $this->assertSame( [ 5 => 'wp_mail() failed' ], $r['unresolved'], 'only the one still waiting is listed' );
+        $this->assertSame( 2, $r['resolved'] );
+        $this->assertSame( 5, $r['sent'], 'the hand-sent ones count as sent: 5 of 6, not the 3 the schedule sent' );
+        $this->assertSame( 6, $r['total'] );
+    }
+
+    public function testWhenEverythingIsSentNothingIsListed(): void {
+        $rows = [];
+        foreach ( [ 1, 2, 3, 4, 5, 6 ] as $id ) {
+            $rows[ $id ] = $this->inv( 'sent', '2026-11-17 09:00:00' );
+        }
+        $r = MyNJILGA_Launch_Schedule::reconcile( $this->finished(), $rows );
+        $this->assertSame( [], $r['unresolved'] );
+        $this->assertSame( 3, $r['resolved'] );
+        $this->assertSame( 6, $r['sent'] );
+    }
+
+    /** Paid, voided, replaced (a different row now) or deleted: nothing is left to send either. */
+    public function testAnInvoiceThatLeftTheCreatedStateIsSettledWhateverBecameOfIt(): void {
+        $rows = [ 4 => $this->inv( 'paid', '2026-11-17 09:00:00' ), 5 => $this->inv( 'voided' ) ]; // 6: no row any more
+        $r    = MyNJILGA_Launch_Schedule::reconcile( $this->finished(), $rows );
+        $this->assertSame( [], $r['unresolved'] );
+        $this->assertSame( 3, $r['resolved'] );
+    }
+
+    public function testAnInvoiceStillCreatedStaysListedWithItsReason(): void {
+        $rows = [ 4 => $this->inv( 'created' ), 5 => $this->inv( 'created' ), 6 => $this->inv( 'created' ) ];
+        $rec  = $this->finished( [ 'failures' => [ 6 => 'No email on the Owner', 4 => 'wp_mail() failed', 5 => 'wp_mail() failed' ] ] );
+        $r    = MyNJILGA_Launch_Schedule::reconcile( $rec, $rows );
+        $this->assertSame( [ 4, 5, 6 ], array_keys( $r['unresolved'] ), 'in invoice order' );
+        $this->assertSame( 'No email on the Owner', $r['unresolved'][6] );
+        $this->assertSame( 0, $r['resolved'] );
+    }
+
+    /** The record's own `failed` adds up attempts (an invoice tried twice counts twice): the figure shown is the invoices. */
+    public function testTheCountIsInvoicesNotAttempts(): void {
+        $rows = [ 4 => $this->inv( 'created' ), 5 => $this->inv( 'created' ), 6 => $this->inv( 'created' ) ];
+        $r    = MyNJILGA_Launch_Schedule::reconcile( $this->finished( [ 'failed' => 9 ] ), $rows );
+        $this->assertSame( 3, count( $r['unresolved'] ), 'three invoices, though the record says nine failed tries' );
+    }
+
+    public function testARecordWithoutAConfirmedListKeepsItsOwnSentCount(): void {
+        $r = MyNJILGA_Launch_Schedule::reconcile( [ 'status' => 'complete', 'unsent_at_schedule' => 10, 'sent' => 7, 'failures' => [] ], [] );
+        $this->assertSame( 7, $r['sent'] );
+        $this->assertSame( [], $r['unresolved'] );
+        $r = MyNJILGA_Launch_Schedule::reconcile( [], [] );
+        $this->assertSame( [ 0, 0, [], 0 ], [ $r['sent'], $r['total'], $r['unresolved'], $r['resolved'] ] );
+    }
+
+    public function testObjectRowsReadTheSameAsArrays(): void {
+        $r = MyNJILGA_Launch_Schedule::reconcile( $this->finished(), [ 4 => (object) $this->inv( 'created' ), 5 => (object) $this->inv( 'sent', '2026-11-17 09:00:00' ) ] );
+        $this->assertSame( [ 4 ], array_keys( $r['unresolved'] ) );
+    }
+
+    public function testDismissingClearsOnlyTheList(): void {
+        $rec  = $this->finished( [ 'notes' => [ [ 'ts' => 1, 'msg' => 'Batch: 3 sent, 3 failed.' ] ] ] );
+        $next = MyNJILGA_Launch_Schedule::without_failures( $rec, self::NOW, 'Shane' );
+        $this->assertSame( [], $next['failures'] );
+        $this->assertSame( $rec['row_ids'], $next['row_ids'], 'the confirmed list stays' );
+        $this->assertSame( $rec['sent'], $next['sent'] );
+        $this->assertSame( 'complete', $next['status'] );
+        $this->assertSame( 'The list of 3 invoices that could not be sent was dismissed by Shane.', end( $next['notes'] )['msg'] );
+        $this->assertSame( 2, count( $next['notes'] ), 'the log keeps what it had, and says what happened' );
+        $one = MyNJILGA_Launch_Schedule::without_failures( $this->finished( [ 'failures' => [ 4 => 'x' ] ] ), self::NOW );
+        $this->assertSame( 'The list of 1 invoice that could not be sent was dismissed.', end( $one['notes'] )['msg'] );
+    }
+
+    /** The log says what the screen listed: the record also holds failures emailed since, which staff never saw. */
+    public function testTheLogCountsWhatWasListed(): void {
+        $two = MyNJILGA_Launch_Schedule::without_failures( $this->finished(), self::NOW, 'Shane', 2 );
+        $this->assertSame( [], $two['failures'], 'all of it goes, listed or not' );
+        $this->assertSame( 'The list of 2 invoices that could not be sent was dismissed by Shane.', end( $two['notes'] )['msg'] );
+        $none = MyNJILGA_Launch_Schedule::without_failures( $this->finished(), self::NOW, '', 0 );
+        $this->assertSame( 'The record of earlier send failures was cleared; every one had since been settled.', end( $none['notes'] )['msg'] );
+    }
+
+    public function testThereIsNothingToDismissWithoutAList(): void {
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::without_failures( $this->finished( [ 'failures' => [] ] ), self::NOW ) );
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::without_failures( [], self::NOW ) );
+    }
 }

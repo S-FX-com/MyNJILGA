@@ -397,6 +397,103 @@ class MyNJILGA_Launch_Schedule {
         return true;
     }
 
+    /**
+     * PURE: the scheduled send as it stands NOW, from the invoice rows as they are now.
+     *
+     * The record keeps what happened at send time. An invoice that failed and was then emailed by
+     * hand (or voided, or replaced) is still in its `failures` and `failed` count, so read as it
+     * stands the record keeps reporting problems nobody can do anything about. Here a failure
+     * counts only while its invoice is still created and not emailed; and "sent" is how many of
+     * the invoices the schedule was confirmed for have been emailed, by the schedule or by hand.
+     * (`failed` is not used: it adds up attempts, so one invoice tried twice counts twice.)
+     *
+     * @param array<string,mixed>                   $rec
+     * @param array<int,object|array<string,mixed>> $rows current invoice rows by id — those in row_ids and failures
+     * @return array{sent:int,total:int,unresolved:array<int,string>,resolved:int}
+     */
+    public static function reconcile( array $rec, array $rows ): array {
+        $row = static function ( int $id ) use ( $rows ): ?array {
+            return isset( $rows[ $id ] ) ? (array) $rows[ $id ] : null;
+        };
+
+        if ( isset( $rec['row_ids'] ) && is_array( $rec['row_ids'] ) ) {
+            $sent = 0;
+            foreach ( array_unique( array_map( 'intval', $rec['row_ids'] ) ) as $id ) {
+                $r = $row( $id );
+                if ( $r !== null && ( (string) ( $r['status'] ?? '' ) === 'sent' || (string) ( $r['sent_at'] ?? '' ) !== '' ) ) {
+                    $sent++;
+                }
+            }
+        } else {
+            $sent = (int) ( $rec['sent'] ?? 0 ); // a record from before the confirmed list: all there is
+        }
+
+        $unresolved = [];
+        $resolved   = 0;
+        $failures   = (array) ( $rec['failures'] ?? [] );
+        ksort( $failures );
+        foreach ( $failures as $id => $message ) {
+            $r = $row( (int) $id );
+            if ( $r !== null && (string) ( $r['status'] ?? '' ) === 'created' ) {
+                $unresolved[ (int) $id ] = (string) $message;
+            } else {
+                $resolved++; // emailed since, paid, voided, replaced or deleted: nothing left to do
+            }
+        }
+
+        return [ 'sent' => $sent, 'total' => (int) ( $rec['unsent_at_schedule'] ?? 0 ), 'unresolved' => $unresolved, 'resolved' => $resolved ];
+    }
+
+    /**
+     * PURE: the record with its failure list dismissed — staff have decided to leave those invoices
+     * (to phone the firm, say) and do not want them listed. Null when there is no list. Only the
+     * list goes: the invoices themselves, the counts of what was sent and the log stay. $listed is
+     * how many invoices the screen listed (those still unsent), for the log; the record can hold
+     * more, because it never forgets one that was emailed since.
+     *
+     * @param array<string,mixed> $rec
+     * @return array<string,mixed>|null
+     */
+    public static function without_failures( array $rec, int $now, string $who = '', ?int $listed = null ): ?array {
+        $held = count( (array) ( $rec['failures'] ?? [] ) );
+        if ( $held === 0 ) {
+            return null;
+        }
+        $rec['failures'] = [];
+        $by = $who !== '' ? ' by ' . $who : '';
+        if ( $listed === 0 ) {
+            // Every one had been emailed since: the list staff saw was already empty.
+            return self::note( $rec, $now, sprintf( 'The record of earlier send failures was cleared%s; every one had since been settled.', $by ) );
+        }
+        $n = $listed ?? $held;
+        return self::note( $rec, $now, sprintf( 'The list of %d invoice%s that could not be sent was dismissed%s.', $n, $n === 1 ? '' : 's', $by ) );
+    }
+
+    /**
+     * Dismiss a year's failure list. Under the send lock a batch also holds, and a batch re-reads its
+     * record under that lock, so this can never overwrite a batch that is writing its result.
+     *
+     * @return array{ok:bool,error:string}
+     */
+    public static function dismiss_failures( int $year, string $who = '' ): array {
+        $lock = self::acquire_lock();
+        if ( $lock === '' ) {
+            return [ 'ok' => false, 'error' => 'An email batch is running right now. Try again in a minute.' ];
+        }
+        try {
+            $rec    = self::get( $year );
+            $listed = $rec ? count( self::reconcile( $rec, MyNJILGA_Dues_Invoice_Table::get_many( array_keys( (array) ( $rec['failures'] ?? [] ) ) ) )['unresolved'] ) : 0;
+            $next   = $rec ? self::without_failures( $rec, time(), $who, $listed ) : null;
+            if ( $next === null ) {
+                return [ 'ok' => false, 'error' => 'There is no failure list to dismiss.' ];
+            }
+            self::put( $year, $next );
+            return [ 'ok' => true, 'error' => '' ];
+        } finally {
+            self::release_lock( $lock );
+        }
+    }
+
     /** @param array<string,mixed> $record */
     public static function put( int $year, array $record ): void {
         $all          = self::all();

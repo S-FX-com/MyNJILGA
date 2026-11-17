@@ -770,6 +770,29 @@ class MyNJILGA_Dues_Invoice_Table {
     }
 
     /**
+     * PURE: whether an invoice exists in the payment system and has not been emailed — created, and
+     * not an online join (those are paid at Checkout and have nothing to send). It includes one that
+     * is waiting in a scheduled send or an email run: it has not been emailed yet.
+     *
+     * @param object|array<string,mixed> $row
+     */
+    public static function is_unemailed( $row ): bool {
+        $row = (array) $row;
+        return (string) ( $row['status'] ?? '' ) === self::STATUS_CREATED
+            && (string) ( $row['invoice_kind'] ?? '' ) !== MyNJILGA_Dues_Snapshot::KIND_JOIN;
+    }
+
+    /**
+     * PURE: whether an invoice's email was tried and failed — not emailed, with the error the failed
+     * attempt left on the row (a send that succeeds clears it).
+     *
+     * @param object|array<string,mixed> $row
+     */
+    public static function email_failed( $row ): bool {
+        return self::is_unemailed( $row ) && trim( (string) ( ( (array) $row )['last_error'] ?? '' ) ) !== '';
+    }
+
+    /**
      * Delete a member's own draft invoices (MyNJILGA_Individual_Invoicing) — exactly these rows,
      * and only while each is still such a draft: one approved or created between the caller's read
      * and this delete is left alone.
