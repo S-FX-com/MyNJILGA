@@ -7,6 +7,7 @@
 declare( strict_types=1 );
 
 require_once dirname( __DIR__ ) . '/includes/launch/class-launch-checks.php';
+require_once dirname( __DIR__ ) . '/includes/invoicing/class-dues-preview.php';
 
 class LaunchChecksTest extends NJILGA_TestCase {
 
@@ -355,5 +356,91 @@ class LaunchChecksTest extends NJILGA_TestCase {
         $checks = MyNJILGA_Launch_Checks::review_checks( MyNJILGA_Launch_Checks::review( $rows ), 2027 );
         $n      = MyNJILGA_Launch_Checks::summarize( $checks );
         $this->assertSame( 0, $n['fail'] + $n['warn'] );
+    }
+
+    // ======================================================================
+    // Officers owe the assessment: those who come out without one are flagged
+    // ======================================================================
+
+    private function member( int $id, string $name, array $tags, int $assessment, array $over = [] ): array {
+        return array_merge( [ 'contact_id' => $id, 'name' => $name, 'tags' => $tags, 'dues_cents' => 12500, 'assessment_cents' => $assessment, 'unbilled_reason' => '', 'dues_note' => '' ], $over );
+    }
+
+    private function officerRow( int $id, string $status, array $members, array $snapshot = [], array $over = [] ): object {
+        return $this->invoiceRow( $id, $status, array_merge( [ 'members' => $members ], $snapshot ), $over );
+    }
+
+    public function testAnOfficerWithTheAssessmentIsNotFlagged(): void {
+        $rows = [ $this->officerRow( 1, 'draft', [ $this->member( 5, 'Ann Officer', [ 'professional', 'officer' ], 20000 ) ] ) ];
+        $this->assertSame( [], MyNJILGA_Launch_Checks::officers_without_assessment( $rows ) );
+        $this->assertSame( [], MyNJILGA_Launch_Checks::review( $rows )['officers_unassessed'] );
+        $ids = array_column( MyNJILGA_Launch_Checks::review_checks( MyNJILGA_Launch_Checks::review( $rows ), 2027 ), 'id' );
+        $this->assertFalse( in_array( 'officers', $ids, true ), 'no warning when every officer is billed it' );
+    }
+
+    public function testAnOfficerWithoutItIsFlaggedWithTheReason(): void {
+        $rows = [ $this->officerRow( 1, 'draft', [
+            $this->member( 5, 'Ann Paid', [ 'professional', 'officer' ], 0, [ 'dues_cents' => 0, 'dues_note' => 'already paid' ] ),
+            $this->member( 6, 'Bob Idle', [ 'professional', 'officer' ], 0, [ 'dues_cents' => 0, 'unbilled_reason' => 'inactive', 'dues_note' => 'inactive' ] ),
+            $this->member( 7, 'Cy Nocat', [ 'officer' ], 0, [ 'dues_cents' => 0, 'unbilled_reason' => 'no category tag' ] ),
+            $this->member( 8, 'Di Stale', [ 'professional', 'officer' ], 0 ),
+            $this->member( 9, 'Ed Plain', [ 'professional' ], 0 ), // not an officer: nothing owed, nothing said
+        ] ) ];
+        $out = MyNJILGA_Launch_Checks::officers_without_assessment( $rows );
+        $this->assertSame( [ 5, 6, 7, 8 ], array_keys( $out ), 'in name order, the non-officer left out' );
+        $this->assertSame( 'dues already marked paid for the year', $out[5]['reason'] );
+        $this->assertSame( 'marked inactive', $out[6]['reason'] );
+        $this->assertSame( 'no category tag', $out[7]['reason'] );
+        $this->assertTrue( strpos( $out[8]['reason'], 'generated before they were tagged' ) !== false );
+        $this->assertSame( 'Firm 1', $out[5]['firm'] );
+    }
+
+    public function testTheChecklistSaysSoAsAWarning(): void {
+        $rows   = [ $this->officerRow( 1, 'draft', [ $this->member( 5, 'Ann Paid', [ 'officer' ], 0, [ 'dues_note' => 'already paid' ] ) ] ) ];
+        $checks = MyNJILGA_Launch_Checks::review_checks( MyNJILGA_Launch_Checks::review( $rows ), 2027, 'I' );
+        $by     = [];
+        foreach ( $checks as $c ) {
+            $by[ $c['id'] ] = $c;
+        }
+        $this->assertSame( 'warn', $by['officers']['status'] );
+        $this->assertSame( '1 officer has no assessment on their invoice', $by['officers']['title'] );
+        $this->assertTrue( strpos( $by['officers']['detail'], 'Ann Paid (Firm 1): dues already marked paid for the year' ) !== false );
+        $this->assertSame( 'I', $by['officers']['fix']['url'] );
+    }
+
+    public function testTheWarningListsFiveAndCountsTheRest(): void {
+        $members = [];
+        for ( $i = 1; $i <= 7; $i++ ) {
+            $members[] = $this->member( $i, 'Off ' . $i, [ 'officer' ], 0, [ 'dues_note' => 'already paid' ] );
+        }
+        $checks = MyNJILGA_Launch_Checks::review_checks( MyNJILGA_Launch_Checks::review( [ $this->officerRow( 1, 'draft', $members ) ] ), 2027 );
+        $c      = array_values( array_filter( $checks, static function ( $x ) { return $x['id'] === 'officers'; } ) )[0];
+        $this->assertSame( '7 officers have no assessment on their invoice', $c['title'] );
+        $this->assertTrue( strpos( $c['detail'], 'and 2 more' ) !== false && strpos( $c['detail'], 'Off 5' ) !== false && strpos( $c['detail'], 'Off 6' ) === false );
+    }
+
+    /** Under split-assessment billing the dues invoice carries no assessment; the officer's own assessment invoice does. */
+    public function testAnOfficerWhoseAssessmentIsOnAnotherInvoiceIsCovered(): void {
+        $rows = [
+            $this->officerRow( 1, 'created', [ $this->member( 5, 'Ann Officer', [ 'officer' ], 0 ) ], [ 'invoice_kind' => 'dues' ], [ 'invoice_kind' => 'dues' ] ),
+            $this->officerRow( 2, 'created', [ $this->member( 5, 'Ann Officer', [ 'officer' ], 20000 ) ], [ 'invoice_kind' => 'assessment' ], [ 'invoice_kind' => 'assessment' ] ),
+        ];
+        $this->assertSame( [], MyNJILGA_Launch_Checks::officers_without_assessment( $rows ) );
+        $this->assertSame( [ 5 ], array_keys( MyNJILGA_Launch_Checks::officers_without_assessment( [ $rows[0] ] ) ), 'without the assessment invoice they are not' );
+    }
+
+    public function testInvoicesThatBillNobodyAndOnlineJoinsAreIgnored(): void {
+        $m = [ $this->member( 5, 'Ann Officer', [ 'officer' ], 0 ) ];
+        foreach ( [ 'voided', 'excluded', 'downgraded', 'uncollectible' ] as $status ) {
+            $this->assertSame( [], MyNJILGA_Launch_Checks::officers_without_assessment( [ $this->officerRow( 1, $status, $m ) ] ), $status );
+        }
+        $this->assertSame( [], MyNJILGA_Launch_Checks::officers_without_assessment( [ $this->officerRow( 1, 'paid', $m, [], [ 'invoice_kind' => 'join' ] ) ] ), 'an online join is not a firm invoice' );
+        $this->assertSame( [ 5 ], array_keys( MyNJILGA_Launch_Checks::officers_without_assessment( [ $this->officerRow( 1, 'paid', $m ) ] ) ), 'a paid invoice counts: it was billed without one' );
+    }
+
+    public function testAnOfficerOnTwoInvoicesIsReportedOnce(): void {
+        $m    = [ $this->member( 5, 'Ann Officer', [ 'officer' ], 0 ) ];
+        $rows = [ $this->officerRow( 1, 'draft', $m ), $this->officerRow( 2, 'draft', $m ) ];
+        $this->assertCount( 1, MyNJILGA_Launch_Checks::officers_without_assessment( $rows ) );
     }
 }

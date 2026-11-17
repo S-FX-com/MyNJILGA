@@ -824,7 +824,7 @@ class MyNJILGA_Page_Settings {
         $a = $s['assessment'];
         MyNJILGA_Admin_UI::section(
             'Assessment',
-            'One flat charge per qualifying ACTIVE contact, on top of their dues (an exempt Senior Trustee still owes it). Qualifying tags are matched in order; the first one a contact carries labels their line. Capped at one per person.'
+            'One flat charge per qualifying ACTIVE contact, on top of their dues (an exempt Senior Trustee still owes it). Qualifying tags are matched in order; the first one a contact carries labels their line. Capped at one per person. The Officer tag always qualifies: it can be moved in the order but not removed.'
         );
 
         echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
@@ -842,7 +842,9 @@ class MyNJILGA_Page_Settings {
             printf( '<td><input type="number" name="%s[order]" value="%d" min="0" class="njilga-input-sm" style="width:64px"></td>', $n, $isNew ? 999 : $i + 1 );
             printf( '<td><input type="text" list="njilga-tags" name="%s[tag]" value="%s" class="njilga-full" placeholder="%s">%s</td>', $n, esc_attr( $q['tag'] ), $isNew ? 'Add a qualifying tag…' : '', self::tag_check( $q['tag'] ) );
             printf( '<td><input type="text" name="%s[label]" value="%s" class="njilga-full"></td>', $n, esc_attr( $q['label'] ) );
-            printf( '<td class="njilga-col-center">%s</td>', $isNew ? '' : sprintf( '<input type="checkbox" name="%s[delete]" value="1">', $n ) );
+            // Officer is built in: an officer always owes the assessment, so there is nothing to delete.
+            $always = $q['tag'] === MyNJILGA_Dues_Settings::OFFICER_TAG;
+            printf( '<td class="njilga-col-center">%s</td>', $isNew ? '' : ( $always ? '<span class="njilga-dim">always</span>' : sprintf( '<input type="checkbox" name="%s[delete]" value="1">', $n ) ) );
             echo '</tr>';
         }
         echo '</tbody></table></div></div>';

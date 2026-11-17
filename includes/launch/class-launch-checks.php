@@ -395,7 +395,55 @@ class MyNJILGA_Launch_Checks {
             }
         }
         usort( $s['attention'], static function ( $a, $b ) { return strcasecmp( $a['name'], $b['name'] ); } );
+        $s['officers_unassessed'] = self::officers_without_assessment( $rows );
         return $s;
+    }
+
+    /**
+     * PURE: officers on the preview's invoices who have no assessment on any of them, and why. Every officer
+     * owes the assessment on top of their dues, so one with none is something staff should see rather than
+     * discover: dues already marked paid for the year (the engine bills a paid-up member nothing), inactive,
+     * no category tag — or an invoice generated before they were tagged an officer. An invoice that is
+     * voided, excluded, downgraded or written off bills nobody, and online joins are not firm invoices; an
+     * officer whose assessment is on another invoice (split-assessment billing) is covered.
+     *
+     * @param array<int,object> $rows
+     * @return array<int,array{id:int,name:string,firm:string,reason:string}> by contact id, in name order
+     */
+    public static function officers_without_assessment( array $rows ): array {
+        $covered = [];
+        $found   = [];
+        foreach ( $rows as $r ) {
+            if ( (string) ( $r->invoice_kind ?? '' ) === 'join' || in_array( (string) ( $r->status ?? '' ), [ 'voided', 'excluded', 'downgraded', 'uncollectible' ], true ) ) {
+                continue;
+            }
+            foreach ( MyNJILGA_Dues_Snapshot::members( $r ) as $m ) {
+                if ( ! in_array( MyNJILGA_Dues_Settings::OFFICER_TAG, array_map( 'strval', (array) ( $m['tags'] ?? [] ) ), true ) ) {
+                    continue;
+                }
+                $id = (int) ( $m['contact_id'] ?? 0 );
+                if ( (int) ( $m['assessment_cents'] ?? 0 ) > 0 ) {
+                    $covered[ $id ] = true;
+                    continue;
+                }
+                if ( isset( $found[ $id ] ) ) {
+                    continue;
+                }
+                if ( (string) ( $m['unbilled_reason'] ?? '' ) === MyNJILGA_Pricing_Engine::UNBILLED_INACTIVE ) {
+                    $why = 'marked inactive';
+                } elseif ( (string) ( $m['unbilled_reason'] ?? '' ) === MyNJILGA_Pricing_Engine::UNBILLED_NO_CATEGORY ) {
+                    $why = 'no category tag';
+                } elseif ( (string) ( $m['dues_note'] ?? '' ) === MyNJILGA_Dues_Preview::NOTE_YEAR_PAID ) {
+                    $why = 'dues already marked paid for the year';
+                } else {
+                    $why = 'none on the invoice (it may have been generated before they were tagged an officer)';
+                }
+                $found[ $id ] = [ 'id' => $id, 'name' => (string) ( $m['name'] ?? ( 'Contact #' . $id ) ), 'firm' => MyNJILGA_Dues_Snapshot::company_name( $r ), 'reason' => $why ];
+            }
+        }
+        $out = array_diff_key( $found, $covered );
+        uasort( $out, static function ( $a, $b ) { return strcasecmp( $a['name'], $b['name'] ); } );
+        return $out;
     }
 
     /**
@@ -436,6 +484,21 @@ class MyNJILGA_Launch_Checks {
         }
         if ( (int) $review['no_bill_to_email'] > 0 ) {
             $add( 'bill_to', self::WARN, sprintf( '%d invoice%s no bill-to email in the preview', (int) $review['no_bill_to_email'], (int) $review['no_bill_to_email'] === 1 ? ' has' : 's have' ), 'The email falls back to the contact\'s current address when it sends; check these firms have a reachable Owner.', $fix );
+        }
+        $officers = (array) ( $review['officers_unassessed'] ?? [] );
+        if ( $officers ) {
+            $list = [];
+            foreach ( array_slice( $officers, 0, 5 ) as $o ) {
+                $list[] = sprintf( '%s (%s): %s', $o['name'], $o['firm'], $o['reason'] );
+            }
+            $more = count( $officers ) - count( $list );
+            $add(
+                'officers',
+                self::WARN,
+                sprintf( '%d officer%s no assessment on their invoice', count( $officers ), count( $officers ) === 1 ? ' has' : 's have' ),
+                'Every officer owes the assessment on top of their dues, but not these — ' . implode( '; ', $list ) . ( $more > 0 ? sprintf( '; and %d more', $more ) : '' ) . '. If they were tagged after the preview was made, Refresh Firms adds it (Update &amp; resend for an invoice already created). Dues marked paid for the year carry no assessment: bill that one separately.',
+                $fix
+            );
         }
         if ( (int) $review['ready'] === 0 && (int) $review['creating'] === 0 && (int) $review['created_unsent'] === 0 && (int) $review['sent'] === 0 && (int) $review['paid'] === 0 ) {
             $add( 'nothing_ready', self::WARN, 'No invoice is ready to create', 'Everything was excluded. Check the lists above.', $fix );
