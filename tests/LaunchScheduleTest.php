@@ -1014,4 +1014,103 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         $this->assertSame( null, MyNJILGA_Launch_Schedule::without_failures( $this->finished( [ 'failures' => [] ] ), self::NOW ) );
         $this->assertSame( null, MyNJILGA_Launch_Schedule::without_failures( [], self::NOW ) );
     }
+
+    // ======================================================================
+    // Dismissing the log, and a finished send
+    // ======================================================================
+
+    private function logged( array $over = [] ): array {
+        return array_merge( [
+            'status' => 'complete',
+            'notes'  => [
+                [ 'ts' => 100, 'msg' => 'Scheduled: 6 invoices.' ], [ 'ts' => 200, 'msg' => 'Batch: 3 sent, 3 failed.' ], [ 'ts' => 300, 'msg' => 'Complete: every sendable invoice has been emailed.' ],
+            ],
+        ], $over );
+    }
+
+    public function testTheLogShowsNewestFirst(): void {
+        $n = MyNJILGA_Launch_Schedule::visible_notes( $this->logged() );
+        $this->assertSame( [ 300, 200, 100 ], array_column( $n, 'ts' ) );
+        $this->assertSame( 'Complete: every sendable invoice has been emailed.', $n[0]['msg'] );
+    }
+
+    public function testTheLogIsCappedAtTheNewestTen(): void {
+        $notes = [];
+        for ( $i = 1; $i <= 15; $i++ ) {
+            $notes[] = [ 'ts' => $i * 10, 'msg' => "n$i" ];
+        }
+        $n = MyNJILGA_Launch_Schedule::visible_notes( [ 'notes' => $notes ] );
+        $this->assertCount( 10, $n );
+        $this->assertSame( [ 'n15', 'n6' ], [ $n[0]['msg'], $n[9]['msg'] ] );
+        $this->assertCount( 3, MyNJILGA_Launch_Schedule::visible_notes( [ 'notes' => $notes ], 3 ) );
+    }
+
+    public function testDismissingTheLogHidesWhatIsThereAndNotWhatComesAfter(): void {
+        $rec = MyNJILGA_Launch_Schedule::with_log_cleared( $this->logged() );
+        $this->assertSame( [], MyNJILGA_Launch_Schedule::visible_notes( $rec ), 'everything written so far is hidden' );
+        $this->assertCount( 3, $rec['notes'], 'nothing is deleted from the record' );
+        $rec['notes'][] = [ 'ts' => 400, 'msg' => 'Resumed.' ];
+        $this->assertSame( [ 'Resumed.' ], array_column( MyNJILGA_Launch_Schedule::visible_notes( $rec ), 'msg' ), 'a later entry shows' );
+    }
+
+    /** The cut-off is the entry's number, not the clock: an entry written in the very same second still shows. */
+    public function testAnEntryWrittenTheSameSecondAsTheDismissalStillShows(): void {
+        $rec = MyNJILGA_Launch_Schedule::with_log_cleared( $this->logged() );
+        $rec['notes'][] = [ 'ts' => 300, 'msg' => 'Resumed.', 'n' => 4 ]; // the same timestamp as the last entry hidden
+        $this->assertSame( [ 'Resumed.' ], array_column( MyNJILGA_Launch_Schedule::visible_notes( $rec ), 'msg' ) );
+    }
+
+    public function testEntriesKeepCountingAfterTheLogIsTrimmed(): void {
+        $ref  = new ReflectionMethod( 'MyNJILGA_Launch_Schedule', 'note' );
+        $ref->setAccessible( true );
+        $rec  = [ 'notes' => [] ];
+        for ( $i = 1; $i <= 45; $i++ ) {
+            $rec = $ref->invoke( null, $rec, 1000 + $i, "m$i" );
+        }
+        $this->assertCount( MyNJILGA_Launch_Schedule::NOTES_KEPT, $rec['notes'] );
+        $this->assertSame( 45, $rec['note_seq'] );
+        $this->assertSame( [ 45, 6 ], [ end( $rec['notes'] )['n'], $rec['notes'][0]['n'] ], 'numbers survive the trimming' );
+        $cleared = MyNJILGA_Launch_Schedule::with_log_cleared( $rec );
+        $this->assertSame( [], MyNJILGA_Launch_Schedule::visible_notes( $cleared ) );
+        $cleared = $ref->invoke( null, $cleared, 2000, 'after' );
+        $this->assertSame( [ 'after' ], array_column( MyNJILGA_Launch_Schedule::visible_notes( $cleared ), 'msg' ), 'and the next entry is the only one showing' );
+    }
+
+    public function testThereIsNothingToDismissWithoutALog(): void {
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::with_log_cleared( [ 'notes' => [] ] ) );
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::with_log_cleared( [] ) );
+        $dismissed = MyNJILGA_Launch_Schedule::with_log_cleared( $this->logged() );
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::with_log_cleared( $dismissed ), 'already dismissed: nothing showing' );
+    }
+
+    public function testMalformedEntriesAreSkippedNotFatal(): void {
+        $n = MyNJILGA_Launch_Schedule::visible_notes( [ 'notes' => [ [ 'msg' => 'no time' ], [ 'ts' => 50, 'msg' => 'ok' ] ] ] );
+        $this->assertSame( [ 'ok' ], array_column( $n, 'msg' ) );
+    }
+
+    public function testOnlyAFinishedSendCanBeDismissed(): void {
+        foreach ( [ 'complete', 'cancelled' ] as $status ) {
+            $r = MyNJILGA_Launch_Schedule::with_send_dismissed( $this->logged( [ 'status' => $status ] ), 700 );
+            $this->assertSame( 700, $r['dismissed_ts'], $status );
+            $this->assertTrue( MyNJILGA_Launch_Schedule::is_dismissed( $r ), $status );
+        }
+        foreach ( [ 'scheduled', 'running', 'paused', 'halted' ] as $status ) {
+            $this->assertSame( null, MyNJILGA_Launch_Schedule::with_send_dismissed( $this->logged( [ 'status' => $status ] ), 700 ), "$status is still doing something" );
+        }
+    }
+
+    public function testDismissingTwiceIsRefusedAndAnOpenSendIsNeverReportedDismissed(): void {
+        $r = MyNJILGA_Launch_Schedule::with_send_dismissed( $this->logged(), 700 );
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::with_send_dismissed( $r, 800 ) );
+        $this->assertFalse( MyNJILGA_Launch_Schedule::is_dismissed( $this->logged() ), 'not dismissed unless it was' );
+        // A record dismissed once, then something reopened it: it is live again, so it shows.
+        $this->assertFalse( MyNJILGA_Launch_Schedule::is_dismissed( array_merge( $r, [ 'status' => 'paused' ] ) ) );
+    }
+
+    public function testDismissingTheSendLeavesTheRecordIntact(): void {
+        $rec = $this->logged( [ 'sent' => 5, 'failures' => [ 4 => 'x' ], 'row_ids' => [ 1, 2 ] ] );
+        $r   = MyNJILGA_Launch_Schedule::with_send_dismissed( $rec, 700 );
+        unset( $r['dismissed_ts'] );
+        $this->assertSame( $rec, $r, 'only the flag is added' );
+    }
 }
