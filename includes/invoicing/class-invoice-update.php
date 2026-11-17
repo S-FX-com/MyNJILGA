@@ -438,7 +438,7 @@ class MyNJILGA_Invoice_Update {
         $name = trim( (string) ( $candidate['bill_to']['name'] ?? '' ) );
         $name = $name !== '' ? $name : 'The firm\'s new contact';
         if ( $status === MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED ) {
-            return sprintf( '%s was invoiced for %d earlier, and that invoice was voided; it still holds this firm\'s place for the year, so this invoice can\'t move to them in one step. Click Issue again on that voided invoice, then Void this one.', $name, (int) $row->dues_year );
+            return sprintf( '%s was invoiced for %d earlier, and that invoice was voided; it still holds this firm\'s place for the year, so this invoice can\'t move to them in one step. Void this invoice first, then click Issue again on %s\'s voided one (it can\'t be issued again while this one stands), then Refresh Firms and Create.', $name, (int) $row->dues_year, $name );
         }
         return sprintf( '%s already has a %d invoice for this firm (%s), so replacing this one would bill the firm twice. Void or settle one of them first.', $name, (int) $row->dues_year, $status );
     }
@@ -631,6 +631,11 @@ class MyNJILGA_Invoice_Update {
         // ---- Email it — unless it should not be (Test mode; an invoice the firm never received) ----
         $plan = (array) $rev['plan'];
         if ( empty( $plan['will_email'] ) ) {
+            if ( $readdressed && $rowId !== (int) $row->id ) {
+                // It moved to a new row. If the old row was waiting in a scheduled send, the new one
+                // takes its place there — the schedule sends only the rows it was confirmed with.
+                MyNJILGA_Launch_Schedule::transfer_row( $year, (int) $row->id, $rowId );
+            }
             return $out( true, '', '', $number, true, (string) ( $plan['why_not'] ?: 'unsent' ) );
         }
         try {

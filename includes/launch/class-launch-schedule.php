@@ -348,6 +348,55 @@ class MyNJILGA_Launch_Schedule {
         return isset( $all[ $year ] ) && is_array( $all[ $year ] ) ? $all[ $year ] : null;
     }
 
+    /**
+     * PURE: a schedule's record with one invoice row swapped for another, in place — for an invoice
+     * waiting in the schedule that moved to a new row (a firm's owner changed, so its invoice is
+     * re-addressed: MyNJILGA_Invoice_Update). The schedule sends only the rows it was confirmed with,
+     * so without this the moved invoice would be skipped and the schedule would finish without
+     * emailing that firm. Null when there is nothing to change: the schedule is no longer open, or
+     * it never listed the old row.
+     *
+     * @param array<string,mixed> $rec
+     * @return array<string,mixed>|null
+     */
+    public static function with_row_replaced( array $rec, int $old, int $new, int $now ): ?array {
+        if ( $old <= 0 || $new <= 0 || $old === $new || ! self::is_open( (string) ( $rec['status'] ?? '' ) ) ) {
+            return null;
+        }
+        $ids = array_map( 'intval', (array) ( $rec['row_ids'] ?? [] ) );
+        $pos = array_search( $old, $ids, true );
+        if ( $pos === false ) {
+            return null;
+        }
+        if ( in_array( $new, $ids, true ) ) {
+            unset( $ids[ $pos ] ); // already listed: just drop the old one
+        } else {
+            $ids[ $pos ] = $new;
+        }
+        $rec['row_ids'] = array_values( $ids );
+        foreach ( [ 'attempts', 'failures' ] as $k ) { // what was tried or failed belongs to the old row
+            $keyed = (array) ( $rec[ $k ] ?? [] );
+            unset( $keyed[ $old ] );
+            $rec[ $k ] = $keyed;
+        }
+        return self::note( $rec, $now, sprintf( 'Invoice row %d was replaced by row %d (the firm\'s invoice moved to a new contact) and stays in this send.', $old, $new ) );
+    }
+
+    /**
+     * Keep a moved invoice in the open schedule that lists it. True when the schedule was changed.
+     * Called under the send lock a batch also holds, and a batch re-reads its record under that
+     * lock, so the two cannot interleave.
+     */
+    public static function transfer_row( int $year, int $old, int $new ): bool {
+        $rec  = self::get( $year );
+        $next = $rec ? self::with_row_replaced( $rec, $old, $new, time() ) : null;
+        if ( $next === null ) {
+            return false;
+        }
+        self::put( $year, $next );
+        return true;
+    }
+
     /** @param array<string,mixed> $record */
     public static function put( int $year, array $record ): void {
         $all          = self::all();
