@@ -29,7 +29,7 @@ class MyNJILGA_Page_Invoice_Email {
     const ACTION_SUBMIT = 'my_njilga_email_submit';
 
     /** The `general` settings this tab owns (tests/SettingsTabsTest.php checks every setting has exactly one home). */
-    const KEYS = [ 'send_cc_mode', 'send_cc_emails', 'send_reply_to', 'email_subject', 'email_intro', 'email_closing', 'email_heading', 'email_button', 'email_logo_url' ];
+    const KEYS = [ 'send_cc_mode', 'send_cc_emails', 'send_reply_to', 'email_per_second', 'email_subject', 'email_intro', 'email_closing', 'email_heading', 'email_button', 'email_logo_url' ];
 
     /** The longest an email address can be (RFC 5321). A longer one is rejected, never truncated. */
     const MAX_ADDRESS = 254;
@@ -105,6 +105,7 @@ class MyNJILGA_Page_Invoice_Email {
             'cc_mode'   => (string) $g['send_cc_mode'],
             'cc_emails' => (string) $g['send_cc_emails'],
             'reply_to'  => (string) $g['send_reply_to'],
+            'per_second' => MyNJILGA_Mail_Pacer::format( MyNJILGA_Mail_Pacer::per_second( $g['email_per_second'] ?? MyNJILGA_Mail_Pacer::DEFAULT_PER_SECOND ) ),
             'subject'   => (string) $g['email_subject'],
             'intro'     => (string) $g['email_intro'],
             'closing'   => (string) $g['email_closing'],
@@ -225,7 +226,7 @@ class MyNJILGA_Page_Invoice_Email {
 
     /** @param array<string,string> $v */
     private static function render_recipients( array $v ): void {
-        MyNJILGA_Admin_UI::section( 'Who receives it', 'The invoice email always goes to the firm\'s bill-to contact (its Owner). This adds copies and decides where replies go.' );
+        MyNJILGA_Admin_UI::section( 'Who receives it', 'The invoice email always goes to the firm\'s bill-to contact (its Owner). This adds copies, decides where replies go, and sets how fast the emails are sent.' );
         echo '<div class="njilga-card njilga-card-pad"><table class="njilga-formtable"><tbody>';
         echo '<tr><th scope="row">Copies (Cc)</th><td><div class="njilga-radio-list">';
         foreach ( MyNJILGA_Dues_Settings::cc_mode_labels() as $val => $label ) {
@@ -237,6 +238,14 @@ class MyNJILGA_Page_Invoice_Email {
         echo '<tr><th scope="row"><label for="em-replyto">Reply-To</label></th><td>';
         printf( '<input type="email" id="em-replyto" name="reply_to" value="%s" class="regular-text" placeholder="dues@njilga.org">', esc_attr( $v['reply_to'] ) );
         echo '<p class="njilga-help">Where a firm\'s reply lands. Blank = the site\'s From address, which may not be monitored.</p></td></tr>';
+        echo '<tr><th scope="row"><label for="em-pace">Sending speed</label></th><td>';
+        printf(
+            '<input type="number" id="em-pace" name="per_second" value="%s" min="%s" max="%s" step="0.1" class="njilga-input-sm"> emails per second',
+            esc_attr( $v['per_second'] ),
+            esc_attr( MyNJILGA_Mail_Pacer::format( MyNJILGA_Mail_Pacer::MIN_PER_SECOND ) ),
+            esc_attr( MyNJILGA_Mail_Pacer::format( MyNJILGA_Mail_Pacer::MAX_PER_SECOND ) )
+        );
+        echo '<p class="njilga-help">How fast invoice emails go out, one after another. Mail services refuse anything faster than their limit (Emailit allows 2 per second), so keep this at or below yours; the default of 1 leaves room for the site\'s other mail, which counts against the same limit. A refused email is tried once more after a short pause. At 1 per second, 100 invoices take under two minutes.</p></td></tr>';
         echo '</tbody></table></div>';
     }
 
@@ -368,6 +377,7 @@ class MyNJILGA_Page_Invoice_Email {
         $s['general']['send_cc_mode']   = $v['cc_mode'];
         $s['general']['send_cc_emails'] = $v['cc_emails'];
         $s['general']['send_reply_to']  = $v['reply_to'];
+        $s['general']['email_per_second'] = (float) $v['per_second'];
         $s['general']['email_subject']  = $v['subject'];
         $s['general']['email_intro']    = $v['intro'];
         $s['general']['email_closing']  = $v['closing'];
@@ -398,6 +408,7 @@ class MyNJILGA_Page_Invoice_Email {
             'cc_mode'   => array_key_exists( $mode, MyNJILGA_Dues_Settings::cc_mode_labels() ) ? $mode : MyNJILGA_Dues_Settings::CC_OWNER_ONLY,
             'cc_emails' => sanitize_text_field( (string) ( $in['cc_emails'] ?? '' ) ),
             'reply_to'  => sanitize_email( (string) ( $in['reply_to'] ?? '' ) ),
+            'per_second' => MyNJILGA_Mail_Pacer::format( MyNJILGA_Mail_Pacer::per_second( $in['per_second'] ?? '' ) ),
             'subject'   => MyNJILGA_Invoice_Email::clean( 'subject', (string) ( $in['subject'] ?? '' ) ),
             'intro'     => MyNJILGA_Invoice_Email::clean( 'intro', (string) ( $in['intro'] ?? '' ) ),
             'closing'   => MyNJILGA_Invoice_Email::clean( 'closing', (string) ( $in['closing'] ?? '' ) ),
