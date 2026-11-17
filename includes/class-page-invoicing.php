@@ -422,7 +422,7 @@ class MyNJILGA_Page_Invoicing {
             'none'      => 'Firms with no invoice yet. Tick the ones to bill (or Select all) and <strong>Create</strong>: that freezes each firm\'s roster and price and issues its invoice in Stripe, in the background. Nothing is emailed yet. ' . $checks . ' first if this is the start of the year.',
             'attention' => 'Firms that won\'t be invoiced, or need a decision, as they stand: no Owner on the firm, nothing to bill, an error from Stripe, or an invoice voided, written off or swept as unpaid. Fix the cause in FluentCRM, then <strong>Refresh Firms</strong>.',
             'created'   => 'Created in Stripe, not emailed yet. Tick firms (or Select all) and <strong>Generate emails</strong>: you\'ll read the exact email each firm gets, can send yourself a test, then send them all in the background.',
-            'sent'      => 'Emailed and awaiting payment. Payments arrive from Stripe on their own. To remind a firm, tick it and <strong>Generate emails</strong> to send its invoice again.',
+            'sent'      => 'Emailed and awaiting payment. Payments arrive from Stripe on their own. To remind a firm, tick it and <strong>Generate emails</strong>, then send it as a reminder.',
             'paid'      => 'Paid in full, including people who joined online.',
         ];
 
@@ -1157,12 +1157,16 @@ class MyNJILGA_Page_Invoicing {
         // still be sent now.
         $sel = MyNJILGA_Email_Run::hold_back_scheduled( $sel, $live ? MyNJILGA_Launch_Schedule::waiting_ids( MyNJILGA_Launch_Schedule::get( $duesYear ), true ) : [] );
 
+        // How an invoice that was ALREADY emailed goes out again: as a reminder (the default), or as the
+        // invoice itself. One that has not been emailed yet always goes out as the invoice.
+        $as = self::resend_as( isset( $_GET['as'] ) ? (string) wp_unslash( $_GET['as'] ) : '' ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+
         // Emails that can't be built (no address for the bill-to) are found
         // now, not halfway through the send.
         $built   = [];
         $cantBuild = [];
         foreach ( array_merge( $sel['unsent'], $sel['sent'] ) as $row ) {
-            $m = MyNJILGA_Invoice_Sender::compose( $row );
+            $m = MyNJILGA_Invoice_Sender::compose( $row, false, null, ( (string) $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_SENT && $as === 'reminder' ) ? MyNJILGA_Invoice_Sender::KIND_REMINDER : '' );
             if ( empty( $m['ok'] ) ) {
                 $cantBuild[] = [ 'row' => $row, 'reason' => (string) ( $m['error'] ?? 'The email could not be built.' ) ];
             } else {
@@ -1213,7 +1217,15 @@ class MyNJILGA_Page_Invoicing {
                 printf( '<option value="%d"%s>%s</option>', (int) $r->id, (int) $r->id === $show ? ' selected' : '', esc_html( MyNJILGA_Dues_Snapshot::company_name( $r ) ) );
             }
         }
-        echo '</select></div><noscript><button type="submit" class="njilga-btn njilga-btn-outline">Show</button></noscript></form>';
+        echo '</select></div>';
+        if ( $resent ) {
+            printf(
+                '<div class="njilga-field"><label for="njilga-email-as"><strong>Invoices already emailed go out as</strong></label><select id="njilga-email-as" name="as" onchange="this.form.submit()"><option value="reminder"%s>A reminder</option><option value="invoice"%s>The invoice again</option></select></div>',
+                $as === 'reminder' ? ' selected' : '',
+                $as === 'invoice' ? ' selected' : ''
+            );
+        }
+        echo '<noscript><button type="submit" class="njilga-btn njilga-btn-outline">Show</button></noscript></form>';
         echo '<div class="njilga-card njilga-card-pad">';
         MyNJILGA_Page_Launch::render_message( $built[ $show ] );
         echo '</div>';
@@ -1232,7 +1244,7 @@ class MyNJILGA_Page_Invoicing {
             $duesYear,
             esc_attr( $token ),
             $show,
-            wp_nonce_field( self::ACTION_EMAIL_TEST, '_wpnonce', true, false ),
+            wp_nonce_field( self::ACTION_EMAIL_TEST, '_wpnonce', true, false ) . sprintf( '<input type="hidden" name="as" value="%s">', esc_attr( $as ) ),
             esc_attr( (string) $user->user_email )
         );
 
@@ -1287,6 +1299,7 @@ class MyNJILGA_Page_Invoicing {
         foreach ( $resent as $r ) {
             $idFields .= sprintf( '<input type="hidden" name="resend_at[%d]" value="%s">', (int) $r->id, esc_attr( (string) ( $r->sent_at ?? '' ) ) );
         }
+        $idFields .= sprintf( '<input type="hidden" name="resend_as" value="%s">', esc_attr( $as ) );
         printf(
             '<div class="njilga-card njilga-card-pad"><form method="post" action="%s" class="njilga-confirm-form">
                 <input type="hidden" name="action" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="batch" value="%s">%s%s
@@ -1302,7 +1315,7 @@ class MyNJILGA_Page_Invoicing {
             wp_nonce_field( self::ACTION_EMAIL_SEND, '_wpnonce', true, false ),
             $idFields,
             $resent
-                ? sprintf( '<p><label class="njilga-check-label"><input type="checkbox" name="resend" value="1"%s> Also email the %d invoice%s already emailed, again</label></p>', $defaultResend ? ' checked' : '', count( $resent ), count( $resent ) === 1 ? '' : 's' )
+                ? sprintf( '<p><label class="njilga-check-label"><input type="checkbox" name="resend" value="1"%s> Also email the %d invoice%s already emailed, again — as %s</label></p>', $defaultResend ? ' checked' : '', count( $resent ), count( $resent ) === 1 ? '' : 's', $as === 'reminder' ? 'a reminder' : 'the invoice again' )
                 : '',
             count( $unsent ),
             count( $resent ),
@@ -1327,7 +1340,7 @@ class MyNJILGA_Page_Invoicing {
 </script>
 JS;
 
-        self::render_email_schedule( $duesYear, $token, $show, $unsent, $resent );
+        self::render_email_schedule( $duesYear, $token, $show, $unsent, $resent, $as );
     }
 
     /**
@@ -1341,7 +1354,7 @@ JS;
      * @param array<int,object> $unsent
      * @param array<int,object> $resent
      */
-    private static function render_email_schedule( int $duesYear, string $token, int $show, array $unsent, array $resent ): void {
+    private static function render_email_schedule( int $duesYear, string $token, int $show, array $unsent, array $resent, string $as = 'reminder' ): void {
         echo '<div id="njilga-schedule">';
         MyNJILGA_Admin_UI::section( '5. Or schedule them for later', 'Start at a time you choose and send in paced batches, so firms (and your inbox) aren\'t hit all at once. You can pause, resume or cancel it at any time, and nothing is emailed twice.' );
 
@@ -1373,12 +1386,13 @@ JS;
         // The timing — a GET back to this screen, so previewing it schedules nothing.
         echo '<div class="njilga-card njilga-card-pad">';
         printf(
-            '<form method="get" action="%s"><input type="hidden" name="page" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="view" value="email"><input type="hidden" name="batch" value="%s"><input type="hidden" name="firm" value="%d"><input type="hidden" name="timing" value="1">',
+            '<form method="get" action="%s"><input type="hidden" name="page" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="view" value="email"><input type="hidden" name="batch" value="%s"><input type="hidden" name="firm" value="%d"><input type="hidden" name="as" value="%s"><input type="hidden" name="timing" value="1">',
             esc_url( admin_url( 'admin.php' ) . '#njilga-schedule' ),
             esc_attr( MyNJILGA_Admin_Menu::SLUG_INVOICING ),
             $duesYear,
             esc_attr( $token ),
-            $show
+            $show,
+            esc_attr( $as )
         );
         echo '<div class="njilga-inline-fields">';
         printf( '<div class="njilga-field"><label for="njilga-sched-start"><strong>Start</strong> (site time, %s)</label><input type="datetime-local" id="njilga-sched-start" name="start" value="%s" required></div>', esc_html( $tz->getName() ), esc_attr( $in['start'] ) );
@@ -1428,6 +1442,7 @@ JS;
         foreach ( $unsent as $r ) {
             $fields .= sprintf( '<input type="hidden" name="send_ids[]" value="%d">', (int) $r->id );
         }
+        $fields .= sprintf( '<input type="hidden" name="as" value="%s">', esc_attr( $as ) );
         printf(
             '<div class="njilga-card njilga-card-pad"><form method="post" action="%s" class="njilga-confirm-form">
                 <input type="hidden" name="action" value="%s"><input type="hidden" name="dues_year" value="%d"><input type="hidden" name="batch" value="%s">%s%s
@@ -1568,11 +1583,12 @@ JS;
         $money = static function ( int $c ): string { return MyNJILGA_Invoicing::money( $c ); };
 
         printf(
-            '<p class="njilga-subtitle"><strong>%s</strong> &mdash; the %d invoice%s as it %s, against today\'s roster and prices.</p>',
+            '<p class="njilga-subtitle"><strong>%s</strong> &mdash; the %d invoice%s as it %s, against today\'s roster and prices. Changed something in the CRM since you opened this? <a href="%s">Regenerate update</a> to rebuild it from the current roster.</p>',
             esc_html( $firm ),
             (int) $row->dues_year,
             $old !== '' ? ' ' . esc_html( $old ) : '',
-            $plan['was_emailed'] ? 'went out' : 'stands'
+            $plan['was_emailed'] ? 'went out' : 'stands',
+            esc_url( self::page_url( $duesYear, [ 'view' => 'update', 'row' => (int) $row->id ] ) )
         );
 
         MyNJILGA_Admin_UI::stat_cards( [
@@ -1631,7 +1647,7 @@ JS;
         printf( '<li>Stripe is asked about invoice %s first. If it has been paid or a payment is clearing, <strong>nothing happens</strong>.</li>', esc_html( $old !== '' ? $old : 'on file' ) );
         printf( '<li>The old invoice is <strong>voided</strong> in Stripe. Its payment link stops working, and it can\'t be brought back.</li>' );
         if ( $plan['will_email'] ) {
-            printf( '<li>A new invoice for <strong>%s</strong> is created and emailed to <strong>%s</strong>.</li>', esc_html( $money( $diff['new_total'] ) ), esc_html( $to ) );
+            printf( '<li>A new invoice for <strong>%s</strong> is created and emailed to <strong>%s</strong>, with the subject <strong>%s</strong>.</li>', esc_html( $money( $diff['new_total'] ) ), esc_html( $to ), esc_html( (string) $email['subject'] ) );
         } else {
             printf( '<li>A new invoice for <strong>%s</strong> is created. It is <strong>not emailed now</strong>: %s.</li>', esc_html( $money( $diff['new_total'] ) ), esc_html( $why ) );
         }
@@ -1649,6 +1665,7 @@ JS;
                 ? sprintf( 'Void invoice %s and email %s an updated invoice for %s? The old payment link stops working.', $old !== '' ? $old : '', $to, $money( $diff['new_total'] ) )
                 : sprintf( 'Void invoice %s and create an updated invoice for %s? Nothing is emailed now. The old payment link stops working.', $old !== '' ? $old : '', $money( $diff['new_total'] ) )
         );
+        printf( '<a class="njilga-btn njilga-btn-outline" href="%s" title="Rebuild this review from the current roster in the CRM">Regenerate update</a>', esc_url( self::page_url( $duesYear, [ 'view' => 'update', 'row' => (int) $row->id ] ) ) );
         printf( '<a class="njilga-btn njilga-btn-outline" href="%s">Cancel</a>', esc_url( self::page_url( $duesYear ) ) );
         echo '</div>';
     }
@@ -2568,8 +2585,10 @@ JS;
         $token    = isset( $_POST['batch'] ) ? sanitize_key( wp_unslash( (string) $_POST['batch'] ) ) : '';
         $batch    = self::email_batch( $token );
         $rowId    = isset( $_POST['row_id'] ) ? (int) $_POST['row_id'] : 0;
-        $back     = static function ( array $args ) use ( $duesYear, $token, $rowId ): void {
-            wp_safe_redirect( self::email_review_url( $duesYear, $token, $args + [ 'firm' => $rowId ] ) );
+        // How already-emailed invoices go out: carried back to the review, so what was just tested is what Send posts.
+        $as       = self::resend_as( isset( $_POST['as'] ) ? (string) wp_unslash( $_POST['as'] ) : '' );
+        $back     = static function ( array $args ) use ( $duesYear, $token, $rowId, $as ): void {
+            wp_safe_redirect( self::email_review_url( $duesYear, $token, $args + [ 'firm' => $rowId, 'as' => $as ] ) );
             exit;
         };
 
@@ -2582,7 +2601,8 @@ JS;
         if ( ! $batch || ! $row || ! in_array( $rowId, array_map( 'intval', $batch['ids'] ), true ) || MyNJILGA_Email_Run::refusal( $row, $duesYear, $live ) !== '' ) {
             $back( [ 'msg' => 'error', 'detail' => 'That invoice isn\'t part of this selection any more — go back and generate the emails again.' ] );
         }
-        $m = MyNJILGA_Invoice_Sender::compose( $row );
+        $asReminder = $as === 'reminder' && (string) $row->status === MyNJILGA_Dues_Invoice_Table::STATUS_SENT;
+        $m = MyNJILGA_Invoice_Sender::compose( $row, false, null, $asReminder ? MyNJILGA_Invoice_Sender::KIND_REMINDER : '' );
         if ( empty( $m['ok'] ) ) {
             $back( [ 'msg' => 'error', 'detail' => (string) $m['error'] ] );
         }
@@ -2610,9 +2630,10 @@ JS;
         $token    = isset( $_POST['batch'] ) ? sanitize_key( wp_unslash( (string) $_POST['batch'] ) ) : '';
         $batch    = self::email_batch( $token );
         $live     = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
+        $as       = self::resend_as( isset( $_POST['resend_as'] ) ? (string) wp_unslash( $_POST['resend_as'] ) : '' );
 
-        $fail = static function ( string $why ) use ( $duesYear, $token ): void {
-            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => $why ] ) );
+        $fail = static function ( string $why ) use ( $duesYear, $token, $as ): void {
+            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => $why, 'as' => $as ] ) );
             exit;
         };
         if ( empty( $_POST['confirm'] ) ) {
@@ -2651,7 +2672,8 @@ JS;
         if ( ! $sendIds && ! $resend ) {
             $fail( 'Nothing to send — every invoice here was left out, or already emailed and not ticked to send again.' );
         }
-        $result = MyNJILGA_Email_Run::queue( array_merge( $sendIds, $resend ), $resend, $duesYear, $live );
+        $kind   = $as === 'reminder' ? MyNJILGA_Invoice_Sender::KIND_REMINDER : '';
+        $result = MyNJILGA_Email_Run::queue( array_merge( $sendIds, $resend ), $resend, $duesYear, $live, $kind );
         if ( ! $result['ok'] ) {
             $fail( $result['error'] );
         }
@@ -2670,9 +2692,10 @@ JS;
         $token    = isset( $_POST['batch'] ) ? sanitize_key( wp_unslash( (string) $_POST['batch'] ) ) : '';
         $batch    = self::email_batch( $token );
         $live     = MyNJILGA_Stripe_Connection::active_mode() === MyNJILGA_Stripe_Connection::MODE_LIVE;
+        $as       = self::resend_as( isset( $_POST['as'] ) ? (string) wp_unslash( $_POST['as'] ) : '' );
 
-        $fail = static function ( string $why ) use ( $duesYear, $token ): void {
-            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => rawurlencode( $why ) ] ) );
+        $fail = static function ( string $why ) use ( $duesYear, $token, $as ): void {
+            wp_safe_redirect( self::email_review_url( $duesYear, $token, [ 'msg' => 'error', 'detail' => rawurlencode( $why ), 'as' => $as ] ) );
             exit;
         };
         if ( empty( $_POST['confirm'] ) ) {
@@ -2901,6 +2924,11 @@ JS;
             wp_die( 'Access denied.' );
         }
         check_admin_referer( $action );
+    }
+
+    /** How an invoice already emailed goes out again: 'reminder' (the default) or 'invoice'. Anything else is the default. */
+    private static function resend_as( string $raw ): string {
+        return sanitize_key( $raw ) === 'invoice' ? 'invoice' : 'reminder';
     }
 
     private static function post_year(): int {

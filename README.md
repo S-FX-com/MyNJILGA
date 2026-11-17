@@ -196,14 +196,14 @@ What stays system-generated and **cannot be edited away**: the list of who the i
 
 When what a firm owes changes after its invoice went out — a member added or removed, a category or a price changed — **Update & resend** on the firm's row (shown on invoices that are created, emailed or waiting in a scheduled send) replaces it in one guarded step, for **one firm at a time**. It used to take five steps in the right order (Void, Issue again, Refresh Firms, Create, Generate emails).
 
-Clicking it opens a **review** that changes nothing: the invoice as sent against today's roster and prices — who was added, removed or re-categorised, and the old and new totals — and the exact email the firm will receive. Confirming then:
+Make the changes in the CRM first. Clicking the button opens a **review** that rebuilds the invoice from the CRM as it is right now; **Regenerate update** on that screen rebuilds it again if you change the CRM while it is open. The review changes nothing: the invoice as sent against today's roster and prices — who was added, removed or re-categorised, and the old and new totals — and the exact email the firm will receive. Confirming then:
 
 1. prices the firm from today's data (before touching anything, so a firm that can't be priced is never voided);
 2. asks **Stripe** whether the old invoice is still open and unpaid — never this site's own copy, since a firm may have paid a minute ago. Paid, partly paid or clearing (ACH) → nothing happens;
 3. **voids** the old invoice in Stripe (Stripe itself also refuses a paid one);
 4. puts the same row back to a draft with the "Issue again" machinery (the old invoice id is retired, so a late Stripe event about it can't touch the new one) and stores the new price on it;
 5. approves and **creates** the new Stripe invoice;
-6. **emails** it — but only if the firm was emailed the old one and Stripe is in **Live** mode (see below). The subject starts `Updated:` and the email says *"This is an updated invoice. It replaces invoice NJILGA-2290 ($275.00), which has been voided. Please disregard the earlier invoice and its payment link, and pay this one."* — in the plain-text and HTML versions, and, like the list of who the invoice covers, it can't be edited away. The notice lives in the invoice's frozen snapshot, so **Email again** and the Launch Wizard's scheduled sends carry it too.
+6. **emails** it — but only if the firm was emailed the old one and Stripe is in **Live** mode (see below). The subject starts `Updated Invoice:` and the email says *"This is an updated invoice. It replaces invoice NJILGA-2290 ($275.00), which has been voided. Please disregard the earlier invoice and its payment link, and pay this one."* — in the plain-text and HTML versions, and, like the list of who the invoice covers, it can't be edited away. The notice lives in the invoice's frozen snapshot, so **Email again** and the Launch Wizard's scheduled sends carry it too.
 
 What keeps it safe:
 
@@ -215,6 +215,10 @@ What keeps it safe:
 - **An invoice the firm never received is replaced quietly.** If the invoice was created but never emailed (for instance it is waiting for a scheduled send), there is nothing to "resend" and no earlier invoice for the notice to name, so the button reads **Update invoice**, the new invoice carries no "updated" wording, and it is **not emailed now** — it goes out when you email it, or with its scheduled send.
 - **A rename counts.** The review lists everything the invoice prints about a person — name, amount, category and tier, why a $0 is $0, the assessment's wording — so correcting a typo in a name is a change like any other.
 - A note is added to the firm's Company record at each step, and the row carries an **updated** badge.
+
+### Reminders
+
+An invoice already emailed can be sent again **as a reminder**. Tick it and click **Generate emails** (or **Email again** on its row), and on the review screen choose how invoices already emailed go out: **A reminder** (the default) or **The invoice again** (exactly the original email). A reminder has the subject `Reminder: …` and says *"This is a friendly reminder. Our records show that invoice NJILGA-2290 ($275.00) has not been paid yet. If you have already paid it, thank you — please disregard this message."* The preview, the test email and the real send all use the choice you made, so what you read is what goes out. A reminder is only ever for an invoice emailed before and sent again on purpose; one a firm hasn't received yet always goes out as the invoice itself. A reminder of an updated invoice is a reminder first (the body still says which invoice it replaces). The Company note reads "Dues invoice reminder sent".
 
 ### Frozen snapshot (spec §5)
 

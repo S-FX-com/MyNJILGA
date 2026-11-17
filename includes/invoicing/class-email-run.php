@@ -40,7 +40,7 @@ class MyNJILGA_Email_Run {
     const ERROR_PREFIX = 'Email not sent:';
 
     public static function register(): void {
-        add_action( self::HOOK, [ __CLASS__, 'run_chunk' ], 10, 4 );
+        add_action( self::HOOK, [ __CLASS__, 'run_chunk' ], 10, 5 );
         add_action( 'wp_ajax_' . self::AJAX, [ __CLASS__, 'ajax' ] );
     }
 
@@ -186,7 +186,7 @@ class MyNJILGA_Email_Run {
      * @param array<int,int> $resendIds
      * @return array{ok:bool,error:string,queued:int}
      */
-    public static function queue( array $ids, array $resendIds, int $year, bool $live ): array {
+    public static function queue( array $ids, array $resendIds, int $year, bool $live, string $kind = '' ): array {
         $out = [ 'ok' => false, 'error' => '', 'queued' => 0 ];
         $resendIds = array_values( array_map( 'intval', $resendIds ) );
 
@@ -216,13 +216,13 @@ class MyNJILGA_Email_Run {
         if ( function_exists( 'as_enqueue_async_action' ) ) {
             foreach ( array_chunk( $eligible, self::CHUNK ) as $chunk ) {
                 $resend = array_values( array_intersect( $chunk, $resendIds ) );
-                if ( ! as_enqueue_async_action( self::HOOK, [ 'row_ids' => $chunk, 'dues_year' => $year, 'resend_ids' => $resend, 'since' => $since ], MyNJILGA_Invoice_Creator::AS_GROUP ) ) {
+                if ( ! as_enqueue_async_action( self::HOOK, [ 'row_ids' => $chunk, 'dues_year' => $year, 'resend_ids' => $resend, 'since' => $since, 'kind' => $kind ], MyNJILGA_Invoice_Creator::AS_GROUP ) ) {
                     // The scheduler refused — send this chunk right here rather than lose it.
-                    self::run_chunk( $chunk, $year, $resend, $since );
+                    self::run_chunk( $chunk, $year, $resend, $since, $kind );
                 }
             }
         } else {
-            self::run_chunk( $eligible, $year, $resendIds, $since );
+            self::run_chunk( $eligible, $year, $resendIds, $since, $kind );
         }
 
         self::record( $year, $live, $eligible, $since );
@@ -239,7 +239,7 @@ class MyNJILGA_Email_Run {
      * @param array<int,int>|mixed $resendIds
      * @return array{sent:int,failed:int,skipped:int}
      */
-    public static function run_chunk( $rowIds, $duesYear = 0, $resendIds = [], $since = '' ): array {
+    public static function run_chunk( $rowIds, $duesYear = 0, $resendIds = [], $since = '', $kind = '' ): array {
         $out   = [ 'sent' => 0, 'failed' => 0, 'skipped' => 0 ];
         $since = (string) $since !== '' ? (string) $since : current_time( 'mysql' );
         foreach ( (array) $rowIds as $id ) {
@@ -252,8 +252,13 @@ class MyNJILGA_Email_Run {
                 $out['skipped']++;
                 continue;
             }
+            // A reminder is only ever for an invoice emailed before and sent again on purpose (it is in
+            // $resendIds): one the firm has not received yet always goes out as the invoice itself.
+            $asKind = ( (string) $kind === MyNJILGA_Invoice_Sender::KIND_REMINDER && in_array( (int) $row->id, array_map( 'intval', (array) $resendIds ), true ) )
+                ? MyNJILGA_Invoice_Sender::KIND_REMINDER
+                : '';
             try {
-                $r = MyNJILGA_Invoice_Sender::send_for_row( $row );
+                $r = MyNJILGA_Invoice_Sender::send_for_row( $row, $asKind );
             } catch ( \Throwable $e ) {
                 $r = [ 'ok' => false, 'error' => $e->getMessage() ];
             }

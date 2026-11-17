@@ -60,7 +60,10 @@ class MyNJILGA_Invoice_Email {
     const PLACEHOLDER_LINK = '[the payment link appears here once the invoice is created]';
 
     /** Put on the subject of an invoice that replaces an earlier one. */
-    const UPDATED_PREFIX = 'Updated: ';
+    const UPDATED_PREFIX = 'Updated Invoice: ';
+
+    /** Put on the subject of an invoice emailed again as a reminder that it is unpaid. */
+    const REMINDER_PREFIX = 'Reminder: ';
 
     // -------------------------------------------------------------------------
     // An invoice that replaces an earlier one
@@ -106,6 +109,57 @@ class MyNJILGA_Invoice_Email {
             return $subject;
         }
         return self::UPDATED_PREFIX . $subject;
+    }
+
+    // -------------------------------------------------------------------------
+    // An invoice emailed again as a reminder
+    // -------------------------------------------------------------------------
+
+    /**
+     * The two sentences a REMINDER carries (null when this is not a reminder). Like the updated
+     * notice they are not editable wording: a firm must be told, in the email itself, that this is
+     * a reminder about an invoice it already has.
+     *
+     * Input: 'reminder' => [ 'number' => the invoice's number ('' = unknown), 'total' => its total, formatted ('' = unknown) ].
+     *
+     * @param array<string,mixed> $in build()'s input
+     * @return array{lead:string,rest:string}|null
+     */
+    public static function reminder_parts( array $in ): ?array {
+        $r = $in['reminder'] ?? null;
+        if ( ! is_array( $r ) || ! $r ) {
+            return null;
+        }
+        $number = trim( (string) ( $r['number'] ?? '' ) );
+        $total  = trim( (string) ( $r['total'] ?? '' ) );
+        $which  = $number !== '' ? 'invoice ' . $number : 'this invoice';
+        if ( $total !== '' ) {
+            $which .= ' (' . $total . ')';
+        }
+        return [
+            'lead' => 'This is a friendly reminder.',
+            'rest' => 'Our records show that ' . $which . ' has not been paid yet. If you have already paid it, thank you — please disregard this message.',
+        ];
+    }
+
+    /** The reminder notice as one plain-text paragraph ('' when this is not a reminder). @param array<string,mixed> $in */
+    public static function reminder_notice( array $in ): string {
+        $p = self::reminder_parts( $in );
+        return $p === null ? '' : $p['lead'] . ' ' . $p['rest'];
+    }
+
+    /**
+     * The subject as it goes out: marked "Reminder:" for a reminder, else "Updated Invoice:" for an
+     * invoice that replaces an earlier one (a reminder of an updated invoice is a reminder first —
+     * the body still says it replaces the earlier one). Never marked twice.
+     *
+     * @param array<string,mixed> $in
+     */
+    public static function marked_subject( string $subject, array $in ): string {
+        if ( self::reminder_parts( $in ) !== null ) {
+            return stripos( ltrim( $subject ), 'reminder' ) === 0 ? $subject : self::REMINDER_PREFIX . $subject;
+        }
+        return self::updated_subject( $subject, $in );
     }
 
     // -------------------------------------------------------------------------
@@ -263,6 +317,10 @@ class MyNJILGA_Invoice_Email {
                 $blocks[] = sprintf( '%s %d NJILGA membership dues invoice totals %s.', $firm !== '' ? $firm . "'s" : 'Your', $year, $total );
             }
         }
+        $reminder = self::reminder_notice( $in );
+        if ( $reminder !== '' ) {
+            $blocks[] = $reminder;
+        }
         $updated = self::updated_notice( $in );
         if ( $updated !== '' ) {
             $blocks[] = $updated;
@@ -289,7 +347,7 @@ class MyNJILGA_Invoice_Email {
                 : sprintf( '%d NJILGA Membership Dues Invoice%s', $year, $firm !== '' ? ' — ' . $firm : '' );
         }
 
-        return [ 'subject' => self::updated_subject( $subject, $in ), 'body' => implode( "\n\n", $blocks ) ];
+        return [ 'subject' => self::marked_subject( $subject, $in ), 'body' => implode( "\n\n", $blocks ) ];
     }
 
     // -------------------------------------------------------------------------
@@ -423,8 +481,10 @@ class MyNJILGA_Invoice_Email {
         $h .= '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="x-apple-disable-message-reformatting"><title>' . $e( $heading ) . '</title></head>';
         $h .= '<body style="margin:0;padding:0;background:#f4f4f5;' . $font . '">';
         // Preheader: the line mail apps show beside the subject.
-        $updated = self::updated_parts( $in );
-        $h .= '<div style="display:none;max-height:0;overflow:hidden;opacity:0;">' . $e( sprintf( '%s%s %d invoice: %s', $updated !== null ? self::UPDATED_PREFIX : '', $firm !== '' ? $firm : 'Your', $year, $total ) ) . '</div>';
+        $updated  = self::updated_parts( $in );
+        $reminder = self::reminder_parts( $in );
+        $marker   = $reminder !== null ? self::REMINDER_PREFIX : ( $updated !== null ? self::UPDATED_PREFIX : '' );
+        $h .= '<div style="display:none;max-height:0;overflow:hidden;opacity:0;">' . $e( sprintf( '%s%s %d invoice: %s', $marker, $firm !== '' ? $firm : 'Your', $year, $total ) ) . '</div>';
         $h .= '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f5;"><tr><td align="center" style="padding:24px 12px;">';
         $h .= '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#ffffff;border-radius:8px;">';
 
@@ -452,9 +512,11 @@ class MyNJILGA_Invoice_Email {
         // Opening.
         $h .= '<tr><td style="padding:24px 32px 0 32px;' . $font . '">' . self::text_to_html( $intro ) . '</td></tr>';
 
-        // An updated invoice says so, and which invoice it replaces.
-        if ( $updated !== null ) {
-            $h .= '<tr><td style="padding:0 32px 8px 32px;' . $font . '"><div style="padding:14px 16px;background:' . self::COLOR_CARD . ';border-left:4px solid ' . self::COLOR_ACCENT . ';border-radius:4px;font-size:15px;line-height:1.5;color:' . self::COLOR_TEXT . ';"><strong>' . $e( $updated['lead'] ) . '</strong> ' . $e( $updated['rest'] ) . '</div></td></tr>';
+        // A reminder says so; an updated invoice says so, and which invoice it replaces.
+        foreach ( [ $reminder, $updated ] as $notice ) {
+            if ( $notice !== null ) {
+                $h .= '<tr><td style="padding:0 32px 8px 32px;' . $font . '"><div style="padding:14px 16px;background:' . self::COLOR_CARD . ';border-left:4px solid ' . self::COLOR_ACCENT . ';border-radius:4px;font-size:15px;line-height:1.5;color:' . self::COLOR_TEXT . ';"><strong>' . $e( $notice['lead'] ) . '</strong> ' . $e( $notice['rest'] ) . '</div></td></tr>';
+            }
         }
 
         // The invoice, summarised.

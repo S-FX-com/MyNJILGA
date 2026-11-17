@@ -9,6 +9,9 @@
  */
 class MyNJILGA_Invoice_Sender {
 
+    /** compose() / send_for_row() $variant: the invoice emailed again as a reminder. */
+    const KIND_REMINDER = 'reminder';
+
     /**
      * Build the email for an invoice row WITHOUT sending it: who it goes to,
      * the subject, the body and the headers (CC / Reply-To per Settings) — or
@@ -25,10 +28,13 @@ class MyNJILGA_Invoice_Sender {
      * the rest come from Settings): the Invoice Email tab uses it so "Send
      * test" and "Preview" show unsaved edits through this very code path.
      *
+     * $variant 'reminder' builds the invoice as a reminder that it is unpaid ("Reminder:" subject and
+     * a line saying so) — for an invoice already emailed, sent again. Anything else is the invoice itself.
+     *
      * @param array<string,string>|null $override
-     * @return array{ok:bool,error?:string,to?:string,subject?:string,body?:string,headers?:array<int,string>,bill_to?:array<string,mixed>,dues_year?:int,assessment?:bool,total?:string,placeholder?:bool}
+     * @return array{ok:bool,error?:string,to?:string,subject?:string,body?:string,headers?:array<int,string>,bill_to?:array<string,mixed>,dues_year?:int,assessment?:bool,total?:string,placeholder?:bool,reminder?:bool}
      */
-    public static function compose( object $invoiceRow, bool $preview = false, ?array $override = null ): array {
+    public static function compose( object $invoiceRow, bool $preview = false, ?array $override = null, string $variant = '' ): array {
         $placeholder = false;
         if ( empty( $invoiceRow->hosted_invoice_url ) ) {
             if ( ! $preview ) {
@@ -92,6 +98,9 @@ class MyNJILGA_Invoice_Sender {
                 'total'  => isset( $replaces['total_cents'] ) ? MyNJILGA_Invoicing::money( (int) $replaces['total_cents'] ) : '',
             ];
         }
+        if ( $variant === self::KIND_REMINDER ) {
+            $in['reminder'] = [ 'number' => (string) ( $invoiceRow->gateway_invoice_number ?? '' ), 'total' => $total ];
+        }
         $msg = MyNJILGA_Invoice_Email::build( $in );
 
         // The HTML version: the same content, plus the invoice's lines as a
@@ -123,6 +132,7 @@ class MyNJILGA_Invoice_Sender {
             'assessment' => $isAssess,
             'total'      => $total,
             'placeholder' => $placeholder,
+            'reminder'    => $variant === self::KIND_REMINDER,
         ];
     }
 
@@ -138,8 +148,8 @@ class MyNJILGA_Invoice_Sender {
      *   claimed=false: another sender had it — nothing sent, not an error of this invoice's.
      *   transport=true: the mail system failed — nothing went; the claim was handed back.
      */
-    public static function send_for_row( object $invoiceRow ): array {
-        $m = self::compose( $invoiceRow );
+    public static function send_for_row( object $invoiceRow, string $variant = '' ): array {
+        $m = self::compose( $invoiceRow, false, null, $variant );
         if ( empty( $m['ok'] ) ) {
             return [ 'ok' => false, 'error' => (string) $m['error'] ];
         }
@@ -213,11 +223,12 @@ class MyNJILGA_Invoice_Sender {
         $billTo = $m['bill_to'];
         MyNJILGA_Invoicing_Notes::log(
             (int) $invoiceRow->fluentcrm_company_id,
-            'Dues invoice sent',
+            $variant === self::KIND_REMINDER ? 'Dues invoice reminder sent' : 'Dues invoice sent',
             sprintf(
-                '%d %s invoice sent to %s (%s)%s — total %s.',
+                '%d %s invoice%s sent to %s (%s)%s — total %s.',
                 (int) $m['dues_year'],
                 $m['assessment'] ? 'assessment' : 'dues',
+                $variant === self::KIND_REMINDER ? ' reminder' : '',
                 $billTo['name'],
                 $billTo['email'],
                 $ccCount > 0 ? sprintf( ' with %d CC', $ccCount ) : '',
