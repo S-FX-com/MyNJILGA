@@ -130,6 +130,17 @@ class MyNJILGA_Dues_Snapshot {
         return self::person( self::decode( $rowOrJson )['owner'] ?? [] );
     }
 
+    /**
+     * PURE: whether an invoice of this billing mode and kind is the firm's ONE invoice for the year
+     * (firm billing's combined invoice, or split-assessment billing's dues invoice) — as opposed to
+     * one of several per-person invoices (individual billing, or an assessment invoice). Only such
+     * an invoice can be re-addressed to a new owner: there is exactly one it can become.
+     */
+    public static function is_firm_wide( string $billingMode, string $kind ): bool {
+        return ( $billingMode === MyNJILGA_Dues_Settings::MODE_FIRM && $kind === self::KIND_COMBINED )
+            || ( $billingMode === MyNJILGA_Dues_Settings::MODE_SPLIT_ASSESSMENT && $kind === self::KIND_DUES );
+    }
+
     public static function invoice_kind( $rowOrJson ): string {
         return (string) ( self::decode( $rowOrJson )['invoice_kind'] ?? self::KIND_COMBINED );
     }

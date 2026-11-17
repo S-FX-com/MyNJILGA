@@ -53,6 +53,14 @@ class MyNJILGA_Invoice_Reissue {
             return [ 'ok' => false, 'error' => MyNJILGA_Invoicing::closed_year_message( $year, MyNJILGA_Year_Wipe::was_wiped( $year, $live ) ), 'year' => $year ];
         }
 
+        // The firm's one invoice, with another already standing for it (an owner change moved it to a
+        // new row; a Refresh Firms made a draft): a second would bill the firm twice.
+        $other = MyNJILGA_Dues_Invoice_Table::firm_sibling_invoice( $row );
+        if ( $other ) {
+            $num = (string) ( $other->gateway_invoice_number ?? '' );
+            return [ 'ok' => false, 'error' => sprintf( 'This firm already has a %d invoice%s (%s), so issuing this voided one again would bill the firm twice. Void that one first if this is the right one.', $year, $num !== '' ? ' ' . $num : '', (string) $other->status ), 'year' => $year ];
+        }
+
         $oldId     = (string) ( $row->gateway_invoice_id ?? '' );
         $oldNumber = (string) ( $row->gateway_invoice_number ?? '' );
         if ( ! MyNJILGA_Dues_Invoice_Table::reopen_voided( $rowId ) ) {

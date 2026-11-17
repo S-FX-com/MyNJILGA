@@ -41,6 +41,22 @@ class InvoiceReissueTest extends NJILGA_TestCase {
         }
     }
 
+    /** Issuing a voided firm-wide invoice again while another stands for the firm would bill it twice: the lookup that stops that. */
+    public function testTheSiblingLookupOnlyAppliesToAFirmsSingleInvoice(): void {
+        global $wpdb;
+        $wpdb->reset();
+        $firm = $this->row( [ 'billing_mode' => 'firm', 'fluentcrm_company_id' => 12, 'livemode' => 1 ] );
+        MyNJILGA_Dues_Invoice_Table::firm_sibling_invoice( $firm );
+        $sql = $wpdb->last_query();
+        foreach ( [ 'fluentcrm_company_id = 12', 'dues_year = 2027', "invoice_kind = 'combined'", 'livemode = 1', 'id <> 7', "status NOT IN ('voided', 'excluded')" ] as $needle ) {
+            $this->assertTrue( strpos( $sql, $needle ) !== false, "Expected \"$needle\" in: $sql" );
+        }
+        $wpdb->reset();
+        $this->assertSame( null, MyNJILGA_Dues_Invoice_Table::firm_sibling_invoice( $this->row( [ 'billing_mode' => 'individual', 'fluentcrm_company_id' => 12 ] ) ), 'per-person invoices: several are normal' );
+        $this->assertSame( '', $wpdb->last_query(), '…and no query is made for them' );
+        $this->assertSame( null, MyNJILGA_Dues_Invoice_Table::firm_sibling_invoice( $this->row( [ 'billing_mode' => 'split_assessment', 'invoice_kind' => 'assessment' ] ) ), 'an assessment invoice is per person' );
+    }
+
     /** A retired invoice's id AND number both lead to its entry; the map keeps only the newest. */
     public function testTheRetiredInvoiceMapTracesBothIdAndNumber(): void {
         $entry = MyNJILGA_Dues_Invoice_Table::retired_entry( $this->row( [ 'id' => 41, 'fluentcrm_company_id' => 12, 'livemode' => 1, 'bill_to_contact_id' => 5, 'billing_mode' => 'firm' ] ), '2026-11-14 09:00:00' );

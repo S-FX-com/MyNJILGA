@@ -541,10 +541,12 @@ class MyNJILGA_Dues_Preview {
      * candidates (what compute() would make for it), narrowed to the one
      * for this row's invoice kind and bill-to contact. No writes.
      *
-     * @return array{ok:bool,error:string,candidate:?array<string,mixed>}
+     * 'readdressed' is true when the firm's single invoice has a different bill-to now (the owner changed).
+     *
+     * @return array{ok:bool,error:string,candidate:?array<string,mixed>,readdressed:bool}
      */
     public static function candidate_for_row( object $row ): array {
-        $fail = static function ( string $why ): array { return [ 'ok' => false, 'error' => $why, 'candidate' => null ]; };
+        $fail = static function ( string $why ): array { return [ 'ok' => false, 'error' => $why, 'candidate' => null, 'readdressed' => false ]; };
         if ( ! MyNJILGA_Members_Data::companies_module_active() ) {
             return $fail( 'The FluentCRM Companies module is not active.' );
         }
@@ -568,6 +570,20 @@ class MyNJILGA_Dues_Preview {
                 break;
             }
         }
+        // The firm's ONE invoice follows its owner. When the owner (so the bill-to) has changed, the
+        // firm's single invoice of this kind and mode is still the one to replace — it is re-addressed,
+        // and goes on a new row for the new person. (Never for per-person invoices: individual billing
+        // and assessment invoices belong to a person, and someone who has left has no successor.)
+        $readdressed = false;
+        if ( $match === null && MyNJILGA_Dues_Snapshot::is_firm_wide( $mode, $kind ) ) {
+            $same = array_values( array_filter( $candidates, static function ( $c ) use ( $kind, $mode ) {
+                return (string) $c['invoice_kind'] === $kind && (string) $c['billing_mode'] === $mode;
+            } ) );
+            if ( count( $same ) === 1 ) {
+                $match       = $same[0];
+                $readdressed = (int) $match['bill_to']['contact_id'] !== $billTo;
+            }
+        }
 
         // A firm that would not be invoiced at all (no members, no owner,
         // nothing owed) is told so — whether or not a candidate matched.
@@ -588,7 +604,7 @@ class MyNJILGA_Dues_Preview {
         if ( $match === null ) {
             return $fail( 'Priced from today\'s data, there is no longer an invoice like this one for this firm — it would go to a different person, or not exist (the owner, the billing mode or who owes an assessment changed). That can\'t replace this invoice in a single step: Void it, click Refresh Firms, then Create whatever new invoice is due.' );
         }
-        return [ 'ok' => true, 'error' => '', 'candidate' => $match ];
+        return [ 'ok' => true, 'error' => '', 'candidate' => $match, 'readdressed' => $readdressed ];
     }
 
     /**

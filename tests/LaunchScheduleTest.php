@@ -860,4 +860,51 @@ class LaunchScheduleTest extends NJILGA_TestCase {
         $this->assertTrue( strpos( $m['body'], 'Invoicing (2027)' ) !== false, $m['body'] );
         $this->assertTrue( strpos( $m['body'], 'Launch Wizard' ) === false, $m['body'] );
     }
+
+    // ======================================================================
+    // An invoice that moved to a new row stays in its scheduled send
+    // ======================================================================
+
+    /** @return array<string,mixed> */
+    private function record( array $over = [] ): array {
+        return $over + [ 'year' => 2027, 'status' => 'scheduled', 'row_ids' => [ 4, 9, 12 ], 'attempts' => [ 9 => 2, 12 => 1 ], 'failures' => [ 9 => 'wp_mail() failed' ], 'notes' => [] ];
+    }
+
+    public function testAMovedInvoiceTakesItsPlaceInTheScheduleInPlace(): void {
+        $r = MyNJILGA_Launch_Schedule::with_row_replaced( $this->record(), 9, 31, self::NOW );
+        $this->assertSame( [ 4, 31, 12 ], $r['row_ids'], 'swapped where it stood, the rest untouched' );
+        $this->assertSame( [ 12 => 1 ], $r['attempts'], 'what had been tried belongs to the old row' );
+        $this->assertSame( [], $r['failures'] );
+        $this->assertCount( 1, $r['notes'], 'the schedule says what happened' );
+        $this->assertTrue( strpos( json_encode( $r['notes'] ), 'row 9 was replaced by row 31' ) !== false );
+    }
+
+    public function testEveryOpenStatusFollowsTheMove(): void {
+        foreach ( [ 'scheduled', 'running', 'paused', 'halted' ] as $status ) {
+            $this->assertTrue( MyNJILGA_Launch_Schedule::with_row_replaced( $this->record( [ 'status' => $status ] ), 4, 31, self::NOW ) !== null, $status );
+        }
+    }
+
+    public function testNothingChangesWhenThereIsNothingToMove(): void {
+        foreach ( [ 'complete', 'cancelled' ] as $status ) {
+            $this->assertSame( null, MyNJILGA_Launch_Schedule::with_row_replaced( $this->record( [ 'status' => $status ] ), 4, 31, self::NOW ), "a $status schedule is left alone" );
+        }
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::with_row_replaced( $this->record(), 77, 31, self::NOW ), 'a row the schedule never listed' );
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::with_row_replaced( $this->record(), 4, 4, self::NOW ), 'the same row' );
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::with_row_replaced( $this->record(), 0, 31, self::NOW ), 'no old row' );
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::with_row_replaced( $this->record(), 4, 0, self::NOW ), 'no new row' );
+        $this->assertSame( null, MyNJILGA_Launch_Schedule::with_row_replaced( [ 'status' => 'scheduled' ], 4, 31, self::NOW ), 'a record with no list' );
+    }
+
+    public function testARowAlreadyListedIsNotListedTwice(): void {
+        $r = MyNJILGA_Launch_Schedule::with_row_replaced( $this->record(), 9, 12, self::NOW );
+        $this->assertSame( [ 4, 12 ], $r['row_ids'], 'the old one is dropped, the new one stays once' );
+    }
+
+    /** The schedule then waits on the new row, not the old. */
+    public function testTheScheduleWaitsOnTheNewRowAfterTheMove(): void {
+        $r = MyNJILGA_Launch_Schedule::with_row_replaced( $this->record( [ 'livemode' => true, 'attempts' => [] ] ), 9, 31, self::NOW );
+        $waiting = MyNJILGA_Launch_Schedule::waiting_ids( $r, true );
+        $this->assertTrue( isset( $waiting[31] ) && ! isset( $waiting[9] ) );
+    }
 }
