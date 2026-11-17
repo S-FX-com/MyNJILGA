@@ -1605,6 +1605,9 @@ JS;
         if ( $diff['bill_to']['changed'] ) {
             MyNJILGA_Admin_UI::callout( sprintf( 'The invoice will go to a different person: <strong>%s</strong> &rarr; <strong>%s</strong>.', esc_html( $diff['bill_to']['old'] ), esc_html( $diff['bill_to']['new'] ) ), 'info' );
         }
+        if ( ! empty( $rev['readdressed'] ) ) {
+            MyNJILGA_Admin_UI::callout( 'The firm\'s contact has changed, so the updated invoice goes on <strong>a new row</strong> for them. The old invoice stays on its own row, <strong>voided</strong>, as a record. The new contact has not seen the old invoice; the email says it replaces it.', 'info' );
+        }
         if ( $diff['changes'] ) {
             echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table">';
             echo '<thead><tr><th>Member</th><th></th><th>Was</th><th>Now</th><th class="njilga-col-num">Amount</th></tr></thead><tbody>';

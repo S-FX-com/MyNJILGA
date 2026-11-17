@@ -1012,6 +1012,33 @@ class MyNJILGA_Dues_Invoice_Table {
      *
      * @return bool Whether the row was reopened.
      */
+    /**
+     * Another invoice that already stands for this firm's ONE invoice for the year: a row of the
+     * same firm, year, kind and mode that is not voided or excluded (so a draft, an approved, a
+     * created, an emailed, a paid one…). Null for an invoice that is not the firm's single one —
+     * individual billing and assessment invoices are per person, so several are normal.
+     *
+     * Issuing a voided firm-wide invoice again while another stands would bill the firm twice.
+     */
+    public static function firm_sibling_invoice( object $row ): ?object {
+        if ( ! MyNJILGA_Dues_Snapshot::is_firm_wide( (string) ( $row->billing_mode ?? '' ), (string) ( $row->invoice_kind ?? '' ) ) ) {
+            return null;
+        }
+        global $wpdb;
+        $table = self::table_name();
+        $found = $wpdb->get_row( $wpdb->prepare( // phpcs:ignore
+            "SELECT * FROM $table WHERE fluentcrm_company_id = %d AND dues_year = %d AND invoice_kind = %s AND livemode = %d AND id <> %d AND status NOT IN (%s, %s) LIMIT 1",
+            (int) $row->fluentcrm_company_id,
+            (int) $row->dues_year,
+            (string) $row->invoice_kind,
+            ! empty( $row->livemode ) ? 1 : 0,
+            (int) $row->id,
+            self::STATUS_VOIDED,
+            self::STATUS_EXCLUDED
+        ) );
+        return $found ? $found : null;
+    }
+
     public static function reopen_voided( int $id ): bool {
         global $wpdb;
         $table = self::table_name();

@@ -250,6 +250,27 @@ class InvoiceUpdateTest extends NJILGA_TestCase {
         }
     }
 
+    // ---- an owner change ------------------------------------------------------------
+
+    /** Only a firm's ONE invoice follows its owner; per-person invoices belong to the person. */
+    public function testOnlyAFirmsSingleInvoiceFollowsItsOwner(): void {
+        $this->assertTrue( MyNJILGA_Dues_Snapshot::is_firm_wide( 'firm', 'combined' ), 'firm billing: the combined invoice' );
+        $this->assertTrue( MyNJILGA_Dues_Snapshot::is_firm_wide( 'split_assessment', 'dues' ), 'split billing: the firm\'s dues invoice' );
+        foreach ( [
+            'individual billing'              => [ 'individual', 'combined' ],
+            'individual billing, dues kind'   => [ 'individual', 'dues' ],
+            'a split-billing assessment'      => [ 'split_assessment', 'assessment' ],
+            'split billing, combined kind'    => [ 'split_assessment', 'combined' ],
+            'firm billing, dues kind'         => [ 'firm', 'dues' ],
+            'firm billing, assessment kind'   => [ 'firm', 'assessment' ],
+            'an online join'                  => [ 'firm', 'join' ],
+            'no mode recorded (legacy)'       => [ '', 'combined' ],
+            'no kind'                         => [ 'firm', '' ],
+        ] as $name => [ $mode, $kind ] ) {
+            $this->assertFalse( MyNJILGA_Dues_Snapshot::is_firm_wide( $mode, $kind ), $name );
+        }
+    }
+
     // ---- what Stripe says about the old invoice ------------------------------
 
     public function testOnlyAnOpenUnpaidInvoiceIsVoided(): void {

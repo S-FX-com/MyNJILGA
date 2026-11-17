@@ -327,11 +327,13 @@ class MyNJILGA_Invoice_Update {
      * is voided.
      *
      * 'plan' says whether the new invoice will be emailed, and if not, why (email_plan()).
+     * 'readdressed' is true when the firm's owner changed, so the new invoice goes to someone else
+     * and on a new row (the old invoice stays on its own row, voided, as a record).
      *
      * @return array{ok:bool,error:string,row:?object,candidate:?array<string,mixed>,snapshot:?array<string,mixed>,preview_row:?object,email:?array<string,mixed>,plan:?array<string,mixed>,diff:?array<string,mixed>,fingerprint:string}
      */
     public static function review( int $rowId ): array {
-        $none = [ 'ok' => false, 'error' => '', 'row' => null, 'candidate' => null, 'snapshot' => null, 'preview_row' => null, 'email' => null, 'plan' => null, 'diff' => null, 'fingerprint' => '' ];
+        $none = [ 'ok' => false, 'error' => '', 'row' => null, 'candidate' => null, 'snapshot' => null, 'preview_row' => null, 'email' => null, 'plan' => null, 'diff' => null, 'fingerprint' => '', 'readdressed' => false ];
         $row  = $rowId > 0 ? MyNJILGA_Dues_Invoice_Table::get( $rowId ) : null;
         if ( ! $row ) {
             return [ 'error' => 'That invoice wasn\'t found.' ] + $none;
@@ -363,7 +365,14 @@ class MyNJILGA_Invoice_Update {
         if ( ! $priced['ok'] ) {
             return [ 'error' => $priced['error'], 'row' => $row ] + $none;
         }
-        $candidate = $priced['candidate'];
+        $candidate   = $priced['candidate'];
+        $readdressed = ! empty( $priced['readdressed'] );
+        if ( $readdressed ) {
+            $blocker = self::readdress_blocker( $row, $candidate, $live );
+            if ( $blocker !== '' ) {
+                return [ 'error' => $blocker, 'row' => $row ] + $none;
+            }
+        }
         $plan      = self::email_plan( $row, $live );
         $snapshot  = MyNJILGA_Dues_Preview::snapshot_for_candidate( $candidate, self::carry_replaces( $row ) ?: null );
         $diff      = self::diff( MyNJILGA_Dues_Snapshot::decode( $row ), $snapshot );
@@ -379,6 +388,9 @@ class MyNJILGA_Invoice_Update {
         $preview->hosted_invoice_url   = '';
         $preview->gateway_invoice_number = '';
         $preview->due_date             = null;
+        if ( $readdressed ) {
+            $preview->bill_to_contact_id = (int) $candidate['bill_to']['contact_id'];
+        }
 
         $email = MyNJILGA_Invoice_Sender::compose( $preview, true );
         if ( empty( $email['ok'] ) ) {
@@ -396,7 +408,39 @@ class MyNJILGA_Invoice_Update {
             'plan'        => $plan,
             'diff'        => $diff,
             'fingerprint' => self::fingerprint( $row, $snapshot ),
+            'readdressed' => $readdressed,
         ];
+    }
+
+    /**
+     * Whether the firm's invoice can move to the new bill-to: '' when it can, else why not. The new
+     * contact must not already hold an invoice for this firm and year — that would bill the firm
+     * twice — and a voided one still holds the place (the table keeps one row per firm, year, kind
+     * and bill-to). A stale draft for them (a Refresh Firms already made one) is simply refreshed.
+     *
+     * @param array<string,mixed> $candidate
+     */
+    private static function readdress_blocker( object $row, array $candidate, bool $live ): string {
+        $target = MyNJILGA_Dues_Invoice_Table::find_row(
+            (int) $row->fluentcrm_company_id,
+            (int) $row->dues_year,
+            (string) $row->invoice_kind,
+            (int) $candidate['bill_to']['contact_id'],
+            $live
+        );
+        if ( ! $target || (int) $target->id === (int) $row->id ) {
+            return '';
+        }
+        $status = (string) $target->status;
+        if ( in_array( $status, [ MyNJILGA_Dues_Invoice_Table::STATUS_DRAFT, MyNJILGA_Dues_Invoice_Table::STATUS_EXCLUDED ], true ) ) {
+            return '';
+        }
+        $name = trim( (string) ( $candidate['bill_to']['name'] ?? '' ) );
+        $name = $name !== '' ? $name : 'The firm\'s new contact';
+        if ( $status === MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED ) {
+            return sprintf( '%s was invoiced for %d earlier, and that invoice was voided; it still holds this firm\'s place for the year, so this invoice can\'t move to them in one step. Click Issue again on that voided invoice, then Void this one.', $name, (int) $row->dues_year );
+        }
+        return sprintf( '%s already has a %d invoice for this firm (%s), so replacing this one would bill the firm twice. Void or settle one of them first.', $name, (int) $row->dues_year, $status );
     }
 
     // -------------------------------------------------------------------------
@@ -499,31 +543,53 @@ class MyNJILGA_Invoice_Update {
         );
         $stuck = sprintf( 'The old invoice %s IS voided in Stripe. ', $oldLabel );
 
-        // ---- Back to a draft (the "Issue again" mechanics), then the new price on it ----
-        // The old id is retired BEFORE the row is reopened: the reopen clears the row's invoice id,
-        // and until the old id is retired the old invoice's own `invoice.voided` notice from Stripe
-        // would match the (now id-less) row and write "voided" onto the draft. Retiring first is
-        // safe: if the reopen then fails the row is voided already, and the old invoice is void.
-        MyNJILGA_Dues_Invoice_Table::retire_invoice_id( $oldId, $oldNumber, $row );
-        if ( ! MyNJILGA_Dues_Invoice_Table::reopen_voided( $rowId ) ) {
-            return $out( false, $stuck . 'This site then could not put the firm back to ready, because the invoice changed while this ran. Reload the Invoicing page: if the firm shows as voided, click Issue again.', '', '', true );
+        $livemode    = ! empty( $row->livemode );
+        $readdressed = ! empty( $rev['readdressed'] );
+        $newTo       = trim( (string) ( $rev['candidate']['bill_to']['name'] ?? '' ) );
+
+        if ( $readdressed ) {
+            // ---- The owner changed: the old invoice stays on its own row, voided, as a record, and
+            // the new invoice goes on a row for the new bill-to (an existing draft for them is reused).
+            // The old row keeps its invoice id: it is exactly what it was, a voided invoice.
+            $newRowId = MyNJILGA_Dues_Preview::persist_replacement( $rev['candidate'], $livemode, self::carry_replaces( $row ) );
+            if ( ! $newRowId ) {
+                return $out( false, $stuck . 'It stays voided on its row, but the new invoice for ' . ( $newTo !== '' ? $newTo : 'the firm\'s new contact' ) . ' could not be saved. Click Refresh Firms to price it, then Create.', '', '', true );
+            }
+            $rowId = (int) $newRowId;
+            if ( class_exists( 'MyNJILGA_Stripe_Invoice_Gateway' ) ) {
+                MyNJILGA_Stripe_Invoice_Gateway::fresh_attempt( $rowId );
+            }
+            $voidedAdvice = 'The new row shows as voided, so click Issue again on it, then Refresh Firms and Create.';
+        } else {
+            // ---- Back to a draft (the "Issue again" mechanics), then the new price on it ----
+            // The old id is retired BEFORE the row is reopened: the reopen clears the row's invoice id,
+            // and until the old id is retired the old invoice's own `invoice.voided` notice from Stripe
+            // would match the (now id-less) row and write "voided" onto the draft. Retiring first is
+            // safe: if the reopen then fails the row is voided already, and the old invoice is void.
+            MyNJILGA_Dues_Invoice_Table::retire_invoice_id( $oldId, $oldNumber, $row );
+            if ( ! MyNJILGA_Dues_Invoice_Table::reopen_voided( $rowId ) ) {
+                return $out( false, $stuck . 'This site then could not put the firm back to ready, because the invoice changed while this ran. Reload the Invoicing page: if the firm shows as voided, click Issue again.', '', '', true );
+            }
+            if ( class_exists( 'MyNJILGA_Stripe_Invoice_Gateway' ) ) {
+                MyNJILGA_Stripe_Invoice_Gateway::fresh_attempt( $rowId );
+            }
+            // If anything has put the firm back to "voided" since, Refresh Firms and Create can't
+            // help: only Issue again can.
+            $voidedAdvice = 'The firm shows as voided again, so click Issue again on its row, then Refresh Firms and Create.';
+
+            $savedId = MyNJILGA_Dues_Preview::persist_replacement( $rev['candidate'], $livemode, self::carry_replaces( $row ) );
+            if ( $savedId !== $rowId ) {
+                $isVoidedNow = ( function () use ( $rowId ): bool {
+                    $r = MyNJILGA_Dues_Invoice_Table::get( $rowId );
+                    return $r && (string) $r->status === MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED;
+                } )();
+                return $out( false, $stuck . ( $isVoidedNow ? $voidedAdvice : 'The firm is back under No Invoice, but its new price could not be saved. Click Refresh Firms to re-price it, then Create.' ), '', '', true );
+            }
         }
-        if ( class_exists( 'MyNJILGA_Stripe_Invoice_Gateway' ) ) {
-            MyNJILGA_Stripe_Invoice_Gateway::fresh_attempt( $rowId );
-        }
-        // If anything has put the firm back to "voided" since, Refresh Firms and Create can't
-        // help: only Issue again can.
-        $voidedAdvice = 'The firm shows as voided again, so click Issue again on its row, then Refresh Firms and Create.';
-        $isVoided     = static function () use ( $rowId ): bool {
+        $isVoided = static function () use ( $rowId ): bool {
             $r = MyNJILGA_Dues_Invoice_Table::get( $rowId );
             return $r && (string) $r->status === MyNJILGA_Dues_Invoice_Table::STATUS_VOIDED;
         };
-
-        $livemode = ! empty( $row->livemode );
-        $savedId  = MyNJILGA_Dues_Preview::persist_replacement( $rev['candidate'], $livemode, self::carry_replaces( $row ) );
-        if ( $savedId !== $rowId ) {
-            return $out( false, $stuck . ( $isVoided() ? $voidedAdvice : 'The firm is back under No Invoice, but its new price could not be saved. Click Refresh Firms to re-price it, then Create.' ), '', '', true );
-        }
 
         // ---- Approve and create the new invoice ----
         if ( MyNJILGA_Dues_Invoice_Table::mark_approved( [ $rowId ] ) < 1 ) {
@@ -551,12 +617,13 @@ class MyNJILGA_Invoice_Update {
             $company,
             'Updated dues invoice created',
             sprintf(
-                'The %d dues invoice %s (%s) was replaced by %s (%s) after changes to the firm\'s invoicing. Done by %s.',
+                'The %d dues invoice %s (%s) was replaced by %s (%s) after changes to the firm\'s invoicing%s. Done by %s.',
                 $year,
                 $oldLabel,
                 MyNJILGA_Invoicing::money( (int) $row->total_amount_cents ),
                 $number !== '' ? $number : 'a new invoice',
                 MyNJILGA_Invoicing::money( (int) ( $fresh->total_amount_cents ?? 0 ) ),
+                $readdressed ? ', which now bills ' . ( $newTo !== '' ? $newTo : 'the firm\'s new contact' ) . ' because the firm\'s contact changed; the old invoice stays on its own row, voided' : '',
                 $who
             )
         );
