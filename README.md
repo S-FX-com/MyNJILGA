@@ -236,9 +236,17 @@ What keeps it safe:
 - **A rename counts.** The review lists everything the invoice prints about a person — name, amount, category and tier, why a $0 is $0, the assessment's wording — so correcting a typo in a name is a change like any other.
 - A note is added to the firm's Company record at each step, and the row carries an **updated** badge.
 
-### Finding invoices that were not emailed
+### Tabs, filters and Select all
 
-The status filter on the Invoicing table has **Not emailed yet (N)** — every invoice created in Stripe and not emailed, including ones waiting in a scheduled send or an email run — and **Email failed (N)** — those whose email was tried and failed (the error is on the row; a successful send clears it). Online joins are never in either (they were paid at Checkout). Tick the rows and **Generate emails** to send them. `?filter=emailfailed` (or `unemailed`) opens the table already filtered, which is what the scheduled send's failure list links to. The summary above the table counts each member who has no firm as their own invoice, not all of them as one firm.
+The Invoicing table is filtered in three layers, each inside the one before:
+
+1. **The tab** is the preliminary filter: *All*, *No Invoice*, *Needs Attention*, *Invoice Created*, *Email Sent*, *Paid*.
+2. **The status dropdown** narrows within that tab. It lists only the statuses the tab actually has, each with its count (the Paid tab offers *Paid* and, if there are any, *Paid online (join)*; Needs Attention offers *Blocked*, *Voided*, *Error* and so on), and it goes back to *All statuses* whenever you change tab.
+3. **The search box** narrows that.
+
+**Select all** (the box in the table header or in the selection bar) selects exactly the rows those three layers leave — across all pages of that view — and the count, the total and what **Create invoices** and **Generate emails** post are always those rows. A tick on a row a filter then hides is dropped, so nothing you can't see is ever acted on. (The header's **Create Ready Invoices** button is the deliberate exception: it creates every ready invoice of the year, whatever is on screen.)
+
+Two statuses cut across the rest, on the *All* and *Invoice Created* tabs: **Not emailed yet** — every invoice created in Stripe and not emailed, including ones waiting in a scheduled send or an email run — and **Email failed** — those whose email was tried and failed (the error is on the row; a successful send clears it). Online joins are never in either: they were paid at Checkout. Tick the rows and **Generate emails** to send them. `?filter=emailfailed` (or `unemailed`, or any status key such as `voided`) opens the table already filtered, which is what the scheduled send's failure list links to. The summary above the table counts each member who has no firm as their own invoice, not all of them as one firm.
 
 ### Reminders
 
