@@ -34,6 +34,13 @@ class MyNJILGA_Dues_Settings {
 
     const OPTION = 'njilga_dues_settings';
 
+    /**
+     * The Officer tag. An officer always owes the assessment (on top of their dues), so this qualifies whatever
+     * list of qualifying tags has been saved: Settings shows it as always on, and get() puts it back if a saved
+     * list leaves it out.
+     */
+    const OFFICER_TAG = 'officer';
+
     const MODE_FIRM             = 'firm';
     const MODE_INDIVIDUAL       = 'individual';
     const MODE_SPLIT_ASSESSMENT = 'split_assessment';
@@ -239,6 +246,7 @@ class MyNJILGA_Dues_Settings {
                 (array) ( $merged['assessment']['qualifiers'] ?? [] )
             ), static function ( $q ) { return $q['tag'] !== ''; } ) );
         }
+        $merged['assessment']['qualifiers'] = self::with_officer( (array) ( $merged['assessment']['qualifiers'] ?? [] ) );
         if ( isset( $stored['firm_overrides'] ) && is_array( $stored['firm_overrides'] ) ) {
             $overrides = [];
             foreach ( $stored['firm_overrides'] as $companyId => $mode ) {
@@ -251,6 +259,23 @@ class MyNJILGA_Dues_Settings {
 
         self::$cache = $merged;
         return self::$cache;
+    }
+
+    /**
+     * PURE: a list of qualifying tags with Officer in it. Where it already is, its place is kept (the order
+     * decides which label a person with two qualifying tags shows); where it is not, it goes first.
+     *
+     * @param array<int,array<string,mixed>> $qualifiers
+     * @return array<int,array<string,mixed>>
+     */
+    public static function with_officer( array $qualifiers ): array {
+        foreach ( $qualifiers as $q ) {
+            if ( (string) ( $q['tag'] ?? '' ) === self::OFFICER_TAG ) {
+                return array_values( $qualifiers );
+            }
+        }
+        array_unshift( $qualifiers, [ 'tag' => self::OFFICER_TAG, 'label' => 'Officer' ] );
+        return array_values( $qualifiers );
     }
 
     public static function general( string $key, $default = null ) {
