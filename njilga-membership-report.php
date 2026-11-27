@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, a member-facing dues status and membership overview, a public firm renewal lookup, a Dues History tab on FluentCRM contacts and companies, and tools to bring earlier years' dues in from PMPro or a spreadsheet — driven entirely from FluentCRM tags on the local install.
- * Version:     3.35.0
+ * Version:     3.36.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -80,6 +80,7 @@ require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-create-progress.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-email-run.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-reissue.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-update.php';
+require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-invoice-short-link.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-individual-invoicing.php';
 require_once NJILGA_REPORT_DIR . 'includes/invoicing/class-mail-pacer.php';
 require_once NJILGA_REPORT_DIR . 'includes/ai/class-abilities.php';
@@ -204,6 +205,9 @@ MyNJILGA_Launch_Schedule::register();
 // Role sync: a paid member's WordPress role follows their category. Hooks
 // FluentCRM's tag events and its Action Scheduler chunk on every request.
 MyNJILGA_Role_Sync::register();
+
+// Short links to Stripe invoices (?njilga-inv=…), read on every request.
+MyNJILGA_Invoice_Short_Link::register();
 
 // Payment listener: registered once every plugin has loaded, so a site
 // can swap the invoice gateway via the `my_njilga_invoice_gateway` filter
