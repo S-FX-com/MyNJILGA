@@ -3,7 +3,7 @@
  * Plugin Name: My NJILGA
  * Plugin URI:  https://njilga.org
  * Description: NJILGA membership dashboard, member/trustee/company reports, annual dues invoicing (Stripe + FluentCRM), online joining with the firm upsell (Stripe Checkout), membership application gate, a member-facing dues status and membership overview, a public firm renewal lookup, a Dues History tab on FluentCRM contacts and companies, and tools to bring earlier years' dues in from PMPro or a spreadsheet — driven entirely from FluentCRM tags on the local install.
- * Version:     3.35.0
+ * Version:     3.37.0
  * Author:      S-FX.com
  * License:     GPL-2.0+
  */
@@ -39,6 +39,8 @@ if ( class_exists( '\\YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory' ) ) {
 require_once NJILGA_REPORT_DIR . 'includes/class-tags.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-membership-stats.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-members-data.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-report-year.php';
+require_once NJILGA_REPORT_DIR . 'includes/class-report-preview.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-csv.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-xls.php';
 require_once NJILGA_REPORT_DIR . 'includes/class-report-summary.php';

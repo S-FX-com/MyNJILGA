@@ -32,16 +32,17 @@ class MyNJILGA_Report_Summary {
         // is read live: refresh the snapshot first so one file can never quote
         // two different numbers for the same thing — and stop before any output
         // if it can't be read, rather than stream a summary of zeros.
-        $why = MyNJILGA_Members_Data::unavailable_reason( true );
+        $year = MyNJILGA_Report_Year::from_request();
+        $why  = MyNJILGA_Members_Data::unavailable_reason( true, $year );
         if ( $why !== '' ) {
             wp_die( esc_html( $why ) );
         }
 
-        self::stream();
+        self::stream( $year );
     }
 
-    private static function stream(): void {
-        $filename = sprintf( 'MyNJILGA_executive-summary_%s.xls', date( 'Y-m-d' ) );
+    private static function stream( int $year ): void {
+        $filename = sprintf( 'MyNJILGA_executive-summary_%d_%s.xls', $year, date( 'Y-m-d' ) );
 
         nocache_headers();
         header( 'Content-Type: application/vnd.ms-excel; charset=utf-8' );
@@ -54,23 +55,23 @@ class MyNJILGA_Report_Summary {
         echo '<head><meta charset="utf-8"></head><body>';
         echo '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:11pt">';
 
-        echo '<tr><td colspan="' . self::COLS . '" style="font-size:16pt;font-weight:bold">My NJILGA — Executive Summary</td></tr>';
-        echo '<tr><td colspan="' . self::COLS . '" style="color:#888">Generated ' . esc_html( date( 'Y-m-d' ) ) . '</td></tr>';
+        echo '<tr><td colspan="' . self::COLS . '" style="font-size:16pt;font-weight:bold">' . esc_html( sprintf( 'My NJILGA — Executive Summary — %d dues', $year ) ) . '</td></tr>';
+        echo '<tr><td colspan="' . self::COLS . '" style="color:#888">' . esc_html( sprintf( 'Generated %s. Paid = paid through %d or later.', date( 'Y-m-d' ), $year ) ) . '</td></tr>';
 
         self::section( 'Overview' );
-        self::render_overview();
+        self::render_overview( $year );
 
         self::section( 'Active Paid Members' );
-        self::render_members();
+        self::render_members( $year );
 
         self::section( 'Trustees' );
-        self::render_trustees();
+        self::render_trustees( $year );
 
         self::section( 'Companies' );
-        self::render_companies();
+        self::render_companies( $year );
 
         self::section( 'Membership by Firm — All Membership' );
-        MyNJILGA_Report_Xls::render_firm_blocks( MyNJILGA_Members_Data::get_membership_by_firm( 'all' ) );
+        MyNJILGA_Report_Xls::render_firm_blocks( MyNJILGA_Members_Data::get_membership_by_firm( 'all', $year ) );
 
         echo '</table></body></html>';
         exit;
@@ -95,9 +96,9 @@ class MyNJILGA_Report_Summary {
      * distribution buckets — the same figures shown in the report
      * dashboards and the Dashboard page's "Company distribution" list.
      */
-    private static function render_overview(): void {
-        $s        = MyNJILGA_Members_Data::report_stats();
-        $bucketed = MyNJILGA_Members_Data::get_companies_bucketed();
+    private static function render_overview( int $year ): void {
+        $s        = MyNJILGA_Members_Data::report_stats( $year );
+        $bucketed = MyNJILGA_Members_Data::get_companies_bucketed( $year );
 
         $rows = [
             [ 'Paid Members',                              $s['paid_members'] ],
@@ -127,8 +128,8 @@ class MyNJILGA_Report_Summary {
      * including the green PAID column (every row here is an active member
      * by definition: paid through this year or later).
      */
-    private static function render_members(): void {
-        $rows = MyNJILGA_Members_Data::get_active_members();
+    private static function render_members( int $year ): void {
+        $rows = MyNJILGA_Members_Data::get_active_members( $year );
 
         echo '<tr>';
         foreach ( [ 'Member', 'Email', 'Firm', 'Trustee', 'Payment Method', 'Paid' ] as $h ) {
@@ -137,7 +138,7 @@ class MyNJILGA_Report_Summary {
         echo '</tr>';
 
         if ( empty( $rows ) ) {
-            echo '<tr><td colspan="6" style="color:#999">No paid members yet.</td></tr>';
+            echo '<tr><td colspan="6" style="color:#999">No members paid yet for this year.</td></tr>';
             return;
         }
 
@@ -158,8 +159,8 @@ class MyNJILGA_Report_Summary {
      * its Dues label (Paid, Unpaid, Exempt, Inactive or None — the same
      * words the Trustees page and the Overview tiles use).
      */
-    private static function render_trustees(): void {
-        $rows = MyNJILGA_Members_Data::get_trustees();
+    private static function render_trustees( int $year ): void {
+        $rows = MyNJILGA_Members_Data::get_trustees( $year );
 
         echo '<tr>';
         foreach ( [ 'Name', 'Role', 'Firm', 'Dues', 'Payment Method' ] as $h ) {
@@ -190,8 +191,8 @@ class MyNJILGA_Report_Summary {
      * Companies section — bucketed by paid-member count, same grouping as
      * the on-screen Companies report.
      */
-    private static function render_companies(): void {
-        $data         = MyNJILGA_Members_Data::get_companies_bucketed();
+    private static function render_companies( int $year ): void {
+        $data         = MyNJILGA_Members_Data::get_companies_bucketed( $year );
         $bucket_order = [ '1', '2-5', '6+', '0' ];
 
         foreach ( $bucket_order as $key ) {

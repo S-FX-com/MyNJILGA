@@ -13,25 +13,29 @@ class MyNJILGA_Page_Trustees {
             wp_die( 'Access denied.' );
         }
 
+        $year = MyNJILGA_Report_Year::from_request();
+
         MyNJILGA_Admin_UI::styles();
         echo '<div class="wrap njilga-ui">';
-        MyNJILGA_Admin_Menu::render_back_to_reports();
-        MyNJILGA_Admin_UI::page_header( 'Trustees', 'Trustees, Senior Trustees and Past Presidents, with dues status (paid, unpaid or exempt) and payment method.' );
+        MyNJILGA_Admin_Menu::render_back_to_reports( $year );
+        MyNJILGA_Admin_UI::page_header( 'Trustees — ' . $year, sprintf( 'Trustees, Senior Trustees and Past Presidents, with %d dues status (paid, unpaid or exempt) and payment method.', $year ) );
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
             MyNJILGA_Admin_UI::close();
             return;
         }
 
+        MyNJILGA_Report_Year::render_picker( MyNJILGA_Admin_Menu::SLUG_TRUSTEES, $year );
+
         // The list below is always read live; refresh the cached figures first
         // so the tiles above it are computed from the very same contacts.
-        $stats = MyNJILGA_Membership_Stats::snapshot( true );
+        $stats = MyNJILGA_Membership_Stats::snapshot( true, $year );
         if ( empty( $stats['available'] ) ) {
             MyNJILGA_Admin_UI::callout( esc_html( implode( ' ', array_map( 'strval', (array) $stats['warnings'] ) ) ), 'error' );
             MyNJILGA_Admin_UI::close();
             return;
         }
-        MyNJILGA_Admin_Menu::render_stats_panel();
+        MyNJILGA_Admin_Menu::render_stats_panel( $year );
 
         // The list works from any of the three trustee-family tags; only when
         // none exists is there nothing to show.
@@ -48,10 +52,10 @@ class MyNJILGA_Page_Trustees {
             return;
         }
 
-        $rows = MyNJILGA_Members_Data::get_trustees();
+        $rows = MyNJILGA_Members_Data::get_trustees( $year );
 
         MyNJILGA_Admin_UI::section( 'Trustees', '', count( $rows ) );
-        MyNJILGA_Admin_Menu::render_csv_button( 'trustees', 'Download Trustees CSV' );
+        MyNJILGA_Admin_Menu::render_csv_button( 'trustees', sprintf( 'Download %d Trustees CSV', $year ), $year );
 
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
                 <th>Name</th><th>Role</th><th>Firm</th><th>Dues</th><th>Payment Method</th>

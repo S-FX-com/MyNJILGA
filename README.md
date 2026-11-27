@@ -74,6 +74,8 @@ Every membership number — the Dashboard, the Reports KPI tiles, the Members / 
 
 The configured **paid / unpaid / inactive** tags and year-tag pattern in Settings are what is read — not fixed slugs. The provider reads FluentCRM with a constant number of queries (about 18, however many contacts) and caches the result for ten minutes.
 
+**Reports are per dues year.** The Reports pages have a **Dues year** switcher (this year, next year, and any later year that already has a `Dues Paid {year}` tag). "Active" then means *paid through that year or later*, so the 2027 reports list who has paid for 2027, and the 2026 reports still count someone who paid ahead. The chosen year (`?report_year=`) is carried on every link and export form, and named in each file (`MyNJILGA_active-members_2027_…csv`) and its title row. For a **coming** year the undated evergreen `dues-paid` tag is *not* assumed to cover it — those members read as unpaid until they pay — because "paid before invoicing existed" only vouches for the current year. Past years are not offered: tags record the latest year paid through, not every year a person was a member. Everything outside Reports (Dashboard, invoicing, My Membership) stays on the current year. Each year keeps its own ten-minute cache. The Reports page also **previews** the Executive Summary for the chosen year — row counts and the first rows of each sheet — before you download it, and every report page shows its full list above its download button.
+
 ---
 
 ## Dues Invoicing

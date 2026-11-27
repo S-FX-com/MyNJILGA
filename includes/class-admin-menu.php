@@ -139,8 +139,12 @@ class MyNJILGA_Admin_Menu {
      * Renders a "← All Reports" link back to the Reports landing page. Shown
      * at the top of each individual report now that they're not in the menu.
      */
-    public static function render_back_to_reports(): void {
-        MyNJILGA_Admin_UI::back_link( self::url( self::SLUG_REPORTS ), 'All Reports' );
+    public static function render_back_to_reports( ?int $year = null ): void {
+        $url = self::url( self::SLUG_REPORTS );
+        if ( $year !== null ) {
+            $url = add_query_arg( MyNJILGA_Report_Year::PARAM, $year, $url );
+        }
+        MyNJILGA_Admin_UI::back_link( $url, 'All Reports' );
     }
 
     /**
@@ -158,12 +162,12 @@ class MyNJILGA_Admin_Menu {
      * (Past Presidents / Senior Trustees) are tallied separately and never
      * counted under Unpaid. No-op without FluentCRM.
      */
-    public static function render_stats_panel(): void {
+    public static function render_stats_panel( ?int $year = null ): void {
         if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
             return;
         }
 
-        $s = MyNJILGA_Members_Data::report_stats();
+        $s = MyNJILGA_Members_Data::report_stats( $year );
 
         MyNJILGA_Admin_UI::stat_cards( [
             [ 'label' => 'Paid Members',             'value' => $s['paid_members'],       'variant' => 'success',     'icon' => 'check-circle' ],
@@ -174,7 +178,7 @@ class MyNJILGA_Admin_Menu {
             [ 'label' => 'Unpaid Trustees',          'value' => $s['unpaid_trustees'],    'variant' => 'destructive', 'icon' => 'award' ],
             [ 'label' => 'Exempt',                   'value' => $s['exempt'],             'variant' => 'info',        'icon' => 'user' ],
         ] );
-        self::render_definition_note();
+        self::render_definition_note( $year );
     }
 
     /**
@@ -182,8 +186,15 @@ class MyNJILGA_Admin_Menu {
      * an old export can be explained from the page itself. The same
      * definition — MyNJILGA_Membership_Stats — feeds the Dashboard.
      */
-    private static function render_definition_note(): void {
-        echo '<p class="njilga-dim">Paid = paid through this year or later, whatever the contact\'s email-subscription status. Unpaid = lapsed. Past Presidents and Senior Trustees owe no dues and are counted as Exempt. These are the same figures as the Dashboard.</p>';
+    private static function render_definition_note( ?int $year = null ): void {
+        $year = MyNJILGA_Membership_Stats::year_or_current( $year );
+        $same = $year === MyNJILGA_Invoicing::current_dues_year() ? ' These are the same figures as the Dashboard.' : '';
+        printf(
+            '<p class="njilga-dim">%s, whatever the contact\'s email-subscription status. Unpaid = not paid for %d. Past Presidents and Senior Trustees owe no dues and are counted as Exempt.%s</p>',
+            esc_html( MyNJILGA_Report_Year::definition( $year ) ),
+            $year,
+            esc_html( $same )
+        );
     }
 
     /**
@@ -193,12 +204,12 @@ class MyNJILGA_Admin_Menu {
      * Shown at the top of the Membership by Firm report. No-op without
      * FluentCRM.
      */
-    public static function render_firm_overview_panel(): void {
+    public static function render_firm_overview_panel( ?int $year = null ): void {
         if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
             return;
         }
 
-        $s = MyNJILGA_Members_Data::report_stats();
+        $s = MyNJILGA_Members_Data::report_stats( $year );
 
         MyNJILGA_Admin_UI::stat_cards( [
             [ 'label' => 'Paid Members',   'value' => $s['paid_members'],   'variant' => 'success',     'icon' => 'check-circle' ],
@@ -206,7 +217,7 @@ class MyNJILGA_Admin_Menu {
             [ 'label' => 'Paid Trustees',  'value' => $s['paid_trustees'],  'variant' => 'success',     'icon' => 'award' ],
             [ 'label' => 'Exempt',         'value' => $s['exempt'],         'variant' => 'info',        'icon' => 'user' ],
         ] );
-        self::render_definition_note();
+        self::render_definition_note( $year );
     }
 
     /**
@@ -246,9 +257,9 @@ class MyNJILGA_Admin_Menu {
      * given report type ("members", "trustees", or "companies"). Each
      * list page renders one of these above its table.
      */
-    public static function render_csv_button( string $type, string $label = 'Download CSV' ): void {
+    public static function render_csv_button( string $type, string $label = 'Download CSV', ?int $year = null ): void {
         echo '<div class="njilga-actions">'
-            . MyNJILGA_Admin_UI::action_form( 'my_njilga_export_csv', $label, [ 'type' => $type ], 'outline', 'download' )
+            . MyNJILGA_Admin_UI::action_form( 'my_njilga_export_csv', $label, [ 'type' => $type, MyNJILGA_Report_Year::PARAM => MyNJILGA_Membership_Stats::year_or_current( $year ) ], 'outline', 'download' )
             . '</div>';
     }
 
@@ -257,9 +268,9 @@ class MyNJILGA_Admin_Menu {
      * Posts to a dedicated handler that streams a formatted .xls (the CSV
      * exporter can't carry the bold firm headings this report needs).
      */
-    public static function render_firms_export_button( string $scope = 'all', string $label = 'Export to Excel' ): void {
+    public static function render_firms_export_button( string $scope = 'all', string $label = 'Export to Excel', ?int $year = null ): void {
         echo '<div class="njilga-actions">'
-            . MyNJILGA_Admin_UI::action_form( 'my_njilga_export_firms', $label, [ 'scope' => $scope === 'active' ? 'active' : 'all' ], 'primary', 'download' )
+            . MyNJILGA_Admin_UI::action_form( 'my_njilga_export_firms', $label, [ 'scope' => $scope === 'active' ? 'active' : 'all', MyNJILGA_Report_Year::PARAM => MyNJILGA_Membership_Stats::year_or_current( $year ) ], 'primary', 'download' )
             . '</div>';
     }
 
@@ -268,7 +279,7 @@ class MyNJILGA_Admin_Menu {
      * .xls combining every report (Overview, Active Paid Members,
      * Trustees, Companies, Membership by Firm).
      */
-    public static function render_summary_export_button( string $label = 'Download Executive Summary (Excel)' ): void {
-        echo MyNJILGA_Admin_UI::action_form( 'my_njilga_export_summary', $label, [], 'primary', 'download' );
+    public static function render_summary_export_button( string $label = 'Download Executive Summary (Excel)', ?int $year = null ): void {
+        echo MyNJILGA_Admin_UI::action_form( 'my_njilga_export_summary', $label, [ MyNJILGA_Report_Year::PARAM => MyNJILGA_Membership_Stats::year_or_current( $year ) ], 'primary', 'download' );
     }
 }

@@ -11,15 +11,19 @@ class MyNJILGA_Page_Companies {
             wp_die( 'Access denied.' );
         }
 
+        $year = MyNJILGA_Report_Year::from_request();
+
         MyNJILGA_Admin_UI::styles();
         echo '<div class="wrap njilga-ui">';
-        MyNJILGA_Admin_Menu::render_back_to_reports();
-        MyNJILGA_Admin_UI::page_header( 'Companies', 'Firms bucketed by how many of their contacts are active members — paid through this year or later, whatever their email-subscription status.' );
+        MyNJILGA_Admin_Menu::render_back_to_reports( $year );
+        MyNJILGA_Admin_UI::page_header( 'Companies — ' . $year, sprintf( 'Firms bucketed by how many of their contacts are active members — paid through %d or later, whatever their email-subscription status.', $year ) );
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
             MyNJILGA_Admin_UI::close();
             return;
         }
+
+        MyNJILGA_Report_Year::render_picker( MyNJILGA_Admin_Menu::SLUG_COMPANIES, $year );
 
         if ( ! MyNJILGA_Members_Data::companies_module_active() ) {
             MyNJILGA_Admin_UI::callout( 'The FluentCRM <strong>Companies</strong> module is not active on this site. Enable it under FluentCRM → Settings → Modules.', 'warning' );
@@ -29,18 +33,18 @@ class MyNJILGA_Page_Companies {
 
         // The list below is always read live; refresh the cached figures first
         // so the tiles above it are computed from the very same contacts.
-        $stats = MyNJILGA_Membership_Stats::snapshot( true );
+        $stats = MyNJILGA_Membership_Stats::snapshot( true, $year );
         if ( empty( $stats['available'] ) ) {
             MyNJILGA_Admin_UI::callout( esc_html( implode( ' ', array_map( 'strval', (array) $stats['warnings'] ) ) ), 'error' );
             MyNJILGA_Admin_UI::close();
             return;
         }
-        MyNJILGA_Admin_Menu::render_stats_panel();
+        MyNJILGA_Admin_Menu::render_stats_panel( $year );
 
-        $data         = MyNJILGA_Members_Data::get_companies_bucketed();
+        $data         = MyNJILGA_Members_Data::get_companies_bucketed( $year );
         $bucket_order = [ '1', '2-5', '6+', '0' ];
 
-        MyNJILGA_Admin_Menu::render_csv_button( 'companies', 'Download Companies CSV' );
+        MyNJILGA_Admin_Menu::render_csv_button( 'companies', sprintf( 'Download %d Companies CSV', $year ), $year );
 
         foreach ( $bucket_order as $key ) {
             $companies = $data['buckets'][ $key ] ?? [];

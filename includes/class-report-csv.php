@@ -16,24 +16,26 @@ class MyNJILGA_Report_Csv {
      * Entry point: dispatch on the report type.
      */
     public static function stream( string $type ): void {
+        // The dues year the file is for: the one on the form that was posted.
+        $year = MyNJILGA_Report_Year::from_request();
         if ( in_array( $type, [ self::TYPE_MEMBERS, self::TYPE_TRUSTEES, self::TYPE_COMPANIES ], true ) ) {
-            $why = MyNJILGA_Members_Data::unavailable_reason( true );
+            $why = MyNJILGA_Members_Data::unavailable_reason( true, $year );
             if ( $why !== '' ) {
                 wp_die( esc_html( $why ) );
             }
         }
         switch ( $type ) {
-            case self::TYPE_MEMBERS:   self::stream_members();   break;
-            case self::TYPE_TRUSTEES:  self::stream_trustees();  break;
-            case self::TYPE_COMPANIES: self::stream_companies(); break;
+            case self::TYPE_MEMBERS:   self::stream_members( $year );   break;
+            case self::TYPE_TRUSTEES:  self::stream_trustees( $year );  break;
+            case self::TYPE_COMPANIES: self::stream_companies( $year ); break;
             default:
                 wp_die( 'Unknown report type.' );
         }
     }
 
-    private static function stream_members(): void {
-        $rows = MyNJILGA_Members_Data::get_active_members();
-        $fh   = self::open( 'active-members' );
+    private static function stream_members( int $year ): void {
+        $rows = MyNJILGA_Members_Data::get_active_members( $year );
+        $fh   = self::open( 'active-members', $year );
 
         self::put( $fh, [ 'First Name', 'Last Name', 'Email', 'Firm Name', 'Trustee', 'Payment Method', 'CRM ID' ] );
         foreach ( $rows as $r ) {
@@ -51,9 +53,9 @@ class MyNJILGA_Report_Csv {
         exit;
     }
 
-    private static function stream_trustees(): void {
-        $rows = MyNJILGA_Members_Data::get_trustees();
-        $fh   = self::open( 'trustees' );
+    private static function stream_trustees( int $year ): void {
+        $rows = MyNJILGA_Members_Data::get_trustees( $year );
+        $fh   = self::open( 'trustees', $year );
 
         self::put( $fh, [ 'First Name', 'Last Name', 'Email', 'Firm Name', 'Trustee', 'Payment Method', 'CRM ID' ] );
         foreach ( $rows as $r ) {
@@ -75,10 +77,10 @@ class MyNJILGA_Report_Csv {
      * Long-format companies CSV: one row per (company, member). Bucket
      * label is repeated so the file can be filtered / pivoted in Excel.
      */
-    private static function stream_companies(): void {
-        $data         = MyNJILGA_Members_Data::get_companies_bucketed();
+    private static function stream_companies( int $year ): void {
+        $data         = MyNJILGA_Members_Data::get_companies_bucketed( $year );
         $bucket_order = [ '1', '2-5', '6+', '0' ];
-        $fh           = self::open( 'companies' );
+        $fh           = self::open( 'companies', $year );
 
         self::put( $fh, [ 'Bucket', 'Company', 'Paid Members', 'Total Members', 'Member', 'Status' ] );
 
@@ -251,8 +253,11 @@ class MyNJILGA_Report_Csv {
      * Sends the headers + opens php://output. Excel-friendly UTF-8 BOM
      * so accented firm names render correctly when opened directly.
      */
-    private static function open( string $slug ) {
-        $filename = sprintf( 'MyNJILGA_%s_%s.csv', $slug, date( 'Y-m-d' ) );
+    private static function open( string $slug, ?int $year = null ) {
+        // A report file names its dues year: "MyNJILGA_active-members_2027_2026-11-27.csv".
+        $filename = $year !== null
+            ? sprintf( 'MyNJILGA_%s_%d_%s.csv', $slug, $year, date( 'Y-m-d' ) )
+            : sprintf( 'MyNJILGA_%s_%s.csv', $slug, date( 'Y-m-d' ) );
 
         nocache_headers();
         header( 'Content-Type: text/csv; charset=utf-8' );

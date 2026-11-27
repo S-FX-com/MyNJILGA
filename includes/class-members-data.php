@@ -40,13 +40,16 @@ class MyNJILGA_Members_Data {
     // -------------------------------------------------------------------------
 
     /**
+     * Every getter below takes an optional dues $year (this calendar year
+     * when omitted): "active" is paid through that year or later.
+     *
      * Active members — everyone whose standing is 'active', whatever their
      * FluentCRM status. Sorted by firm, then name.
      *
      * @return array<int,array{member:string,member_url:string,first_name:string,last_name:string,email:string,firm:string,is_trustee:bool,trustee_status:string,payment_method:string,subscriber_id:int}>
      */
-    public static function get_active_members(): array {
-        return self::active_member_rows( MyNJILGA_Membership_Stats::data(), self::url_builder(), self::firm_fallback() );
+    public static function get_active_members( ?int $year = null ): array {
+        return self::active_member_rows( MyNJILGA_Membership_Stats::data( $year ), self::url_builder(), self::firm_fallback() );
     }
 
     /**
@@ -62,8 +65,8 @@ class MyNJILGA_Members_Data {
      *
      * @return array<int,array{member:string,member_url:string,first_name:string,last_name:string,email:string,firm:string,is_paid:bool,is_unpaid:bool,is_exempt:bool,state:string,trustee_status:string,payment_method:string,subscriber_id:int}>
      */
-    public static function get_trustees(): array {
-        return self::trustee_rows( MyNJILGA_Membership_Stats::data(), self::url_builder(), self::firm_fallback() );
+    public static function get_trustees( ?int $year = null ): array {
+        return self::trustee_rows( MyNJILGA_Membership_Stats::data( $year ), self::url_builder(), self::firm_fallback() );
     }
 
     /**
@@ -84,11 +87,11 @@ class MyNJILGA_Members_Data {
      *   empty_companies: int
      * }
      */
-    public static function get_companies_bucketed(): array {
+    public static function get_companies_bucketed( ?int $year = null ): array {
         if ( ! self::companies_module_active() ) {
             return self::bucket_companies( [], self::url_builder() );
         }
-        return self::bucket_companies( MyNJILGA_Membership_Stats::data(), self::url_builder() );
+        return self::bucket_companies( MyNJILGA_Membership_Stats::data( $year ), self::url_builder() );
     }
 
     /**
@@ -112,11 +115,11 @@ class MyNJILGA_Members_Data {
      * @param string $scope 'all' (default) or 'active'.
      * @return array<int,array{name:string,contacts:array<int,array{first_name:string,last_name:string,email:string,dues:string,trustees:string,past_president:string,payment:string}>}>
      */
-    public static function get_membership_by_firm( string $scope = 'all' ): array {
+    public static function get_membership_by_firm( string $scope = 'all', ?int $year = null ): array {
         if ( ! self::companies_module_active() ) {
             return [];
         }
-        return self::firm_rows( MyNJILGA_Membership_Stats::data(), $scope );
+        return self::firm_rows( MyNJILGA_Membership_Stats::data( $year ), $scope );
     }
 
     /**
@@ -136,8 +139,8 @@ class MyNJILGA_Members_Data {
      *
      * @return array{paid_members:int,unpaid_members:int,firms_with_paid:int,firms_without_paid:int,paid_trustees:int,unpaid_trustees:int,exempt:int}
      */
-    public static function report_stats(): array {
-        return self::stats_from_snapshot( MyNJILGA_Membership_Stats::snapshot() );
+    public static function report_stats( ?int $year = null ): array {
+        return self::stats_from_snapshot( MyNJILGA_Membership_Stats::snapshot( false, $year ) );
     }
 
     // -------------------------------------------------------------------------
@@ -432,8 +435,8 @@ class MyNJILGA_Members_Data {
      * empty file or a row of zero tiles that look like a valid report.
      * $refresh recomputes instead of trusting the 10-minute cache (exports).
      */
-    public static function unavailable_reason( bool $refresh = false ): string {
-        $s = MyNJILGA_Membership_Stats::snapshot( $refresh );
+    public static function unavailable_reason( bool $refresh = false, ?int $year = null ): string {
+        $s = MyNJILGA_Membership_Stats::snapshot( $refresh, $year );
         if ( ! empty( $s['available'] ) ) {
             return '';
         }

@@ -26,20 +26,21 @@ class MyNJILGA_Report_Xls {
             wp_die( 'FluentCRM is not active.' );
         }
 
-        $why = MyNJILGA_Members_Data::unavailable_reason( true );
+        $year = MyNJILGA_Report_Year::from_request();
+        $why  = MyNJILGA_Members_Data::unavailable_reason( true, $year );
         if ( $why !== '' ) {
             wp_die( esc_html( $why ) );
         }
 
         $scope = ( sanitize_key( $_REQUEST['scope'] ?? '' ) === 'active' ) ? 'active' : 'all';
-        self::stream_firms( $scope );
+        self::stream_firms( $scope, $year );
     }
 
-    private static function stream_firms( string $scope = 'all' ): void {
-        $firms    = MyNJILGA_Members_Data::get_membership_by_firm( $scope );
-        $title    = $scope === 'active' ? 'Membership by Firm — Active Membership Only' : 'Membership by Firm — All Membership';
+    private static function stream_firms( string $scope, int $year ): void {
+        $firms    = MyNJILGA_Members_Data::get_membership_by_firm( $scope, $year );
+        $title    = ( $scope === 'active' ? 'Membership by Firm — Active Membership Only' : 'Membership by Firm — All Membership' ) . ' — ' . $year . ' dues';
         $slug     = $scope === 'active' ? 'active' : 'all';
-        $filename = sprintf( 'MyNJILGA_membership-by-firm_%s_%s.xls', $slug, date( 'Y-m-d' ) );
+        $filename = sprintf( 'MyNJILGA_membership-by-firm_%s_%d_%s.xls', $slug, $year, date( 'Y-m-d' ) );
 
         nocache_headers();
         header( 'Content-Type: application/vnd.ms-excel; charset=utf-8' );

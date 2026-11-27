@@ -12,25 +12,29 @@ class MyNJILGA_Page_Members {
             wp_die( 'Access denied.' );
         }
 
+        $year = MyNJILGA_Report_Year::from_request();
+
         MyNJILGA_Admin_UI::styles();
         echo '<div class="wrap njilga-ui">';
-        MyNJILGA_Admin_Menu::render_back_to_reports();
-        MyNJILGA_Admin_UI::page_header( 'Active Paid Members', 'Every contact paid through this year or later — independent of email-subscription status — with firm, trustee role and payment method.' );
+        MyNJILGA_Admin_Menu::render_back_to_reports( $year );
+        MyNJILGA_Admin_UI::page_header( 'Active Paid Members — ' . $year, sprintf( 'Every contact paid through %d or later — independent of email-subscription status — with firm, trustee role and payment method.', $year ) );
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
             MyNJILGA_Admin_UI::close();
             return;
         }
 
+        MyNJILGA_Report_Year::render_picker( MyNJILGA_Admin_Menu::SLUG_MEMBERS, $year );
+
         // The list below is always read live; refresh the cached figures first
         // so the tiles above it are computed from the very same contacts.
-        $stats = MyNJILGA_Membership_Stats::snapshot( true );
+        $stats = MyNJILGA_Membership_Stats::snapshot( true, $year );
         if ( empty( $stats['available'] ) ) {
             MyNJILGA_Admin_UI::callout( esc_html( implode( ' ', array_map( 'strval', (array) $stats['warnings'] ) ) ), 'error' );
             MyNJILGA_Admin_UI::close();
             return;
         }
-        MyNJILGA_Admin_Menu::render_stats_panel();
+        MyNJILGA_Admin_Menu::render_stats_panel( $year );
 
         // Members are recognised by "Dues Paid {year}" tags and by the paid tag
         // in Dues & Billing settings. A missing paid tag only loses the members
@@ -45,17 +49,17 @@ class MyNJILGA_Page_Members {
             );
         }
 
-        $rows = MyNJILGA_Members_Data::get_active_members();
+        $rows = MyNJILGA_Members_Data::get_active_members( $year );
 
         MyNJILGA_Admin_UI::section( 'Members', '', count( $rows ) );
-        MyNJILGA_Admin_Menu::render_csv_button( 'members', 'Download Active Paid Members CSV' );
+        MyNJILGA_Admin_Menu::render_csv_button( 'members', sprintf( 'Download %d Active Paid Members CSV', $year ), $year );
 
         echo '<div class="njilga-card njilga-table-boxed"><div class="njilga-tablewrap"><table class="njilga-table"><thead><tr>
                 <th>Member</th><th>Email</th><th>Firm</th><th>Trustee</th><th>Payment Method</th><th>Paid</th>
               </tr></thead><tbody>';
 
         if ( empty( $rows ) ) {
-            echo '<tr class="njilga-emptyrow"><td colspan="6">No paid members yet.</td></tr>';
+            echo '<tr class="njilga-emptyrow"><td colspan="6">' . esc_html( sprintf( 'No members are paid through %d yet.', $year ) ) . '</td></tr>';
         }
 
         foreach ( $rows as $r ) {
