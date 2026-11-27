@@ -547,10 +547,11 @@ class MyNJILGA_Page_Invoicing {
 
             case 'created':
                 return sprintf(
-                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d" title="Read the email, then send it">Email</button> %s %s %s %s %s',
+                    '<button type="button" class="njilga-btn njilga-btn-primary njilga-btn-sm" data-send="%d" title="Read the email, then send it">Email</button> %s %s %s %s %s %s',
                     $rowId,
                     self::view_link( $link ),
                     self::pdf_link( $pdf ),
+                    self::copy_link_button( $row ),
                     self::update_button( $row ),
                     self::void_button( $row ),
                     self::sync_button( $rowId )
@@ -558,18 +559,20 @@ class MyNJILGA_Page_Invoicing {
 
             case 'emailing':
                 return sprintf(
-                    '<span class="njilga-dim njilga-inline-status">%s Emailing…</span> %s %s',
+                    '<span class="njilga-dim njilga-inline-status">%s Emailing…</span> %s %s %s',
                     self::icon( 'refresh' ),
                     self::view_link( $link ),
-                    self::pdf_link( $pdf )
+                    self::pdf_link( $pdf ),
+                    self::copy_link_button( $row )
                 );
 
             case 'scheduled':
                 return sprintf(
-                    '<span class="njilga-dim njilga-inline-status">%s Email scheduled</span> %s %s %s %s %s',
+                    '<span class="njilga-dim njilga-inline-status">%s Email scheduled</span> %s %s %s %s %s %s',
                     self::icon( 'calendar' ),
                     self::view_link( $link ),
                     self::pdf_link( $pdf ),
+                    self::copy_link_button( $row ),
                     self::update_button( $row ),
                     self::void_button( $row ),
                     self::sync_button( $rowId )
@@ -577,9 +580,10 @@ class MyNJILGA_Page_Invoicing {
 
             case 'sent':
                 return sprintf(
-                    '%s %s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d" title="Read the email, then send it again">Email again</button> %s %s %s',
+                    '%s %s %s <button type="button" class="njilga-btn njilga-btn-ghost njilga-btn-sm" data-send="%d" title="Read the email, then send it again">Email again</button> %s %s %s',
                     self::view_link( $link ),
                     self::pdf_link( $pdf ),
+                    self::copy_link_button( $row ),
                     $rowId,
                     self::update_button( $row ),
                     self::void_button( $row ),
@@ -588,10 +592,11 @@ class MyNJILGA_Page_Invoicing {
 
             case 'processing':
                 return sprintf(
-                    '<span class="njilga-dim njilga-inline-status">%s Processing (ACH)</span> %s %s %s %s',
+                    '<span class="njilga-dim njilga-inline-status">%s Processing (ACH)</span> %s %s %s %s %s',
                     self::icon( 'refresh' ),
                     self::view_link( $link ),
                     self::pdf_link( $pdf ),
+                    self::copy_link_button( $row ),
                     self::void_button( $row ),
                     self::sync_button( $rowId )
                 );
@@ -616,9 +621,10 @@ class MyNJILGA_Page_Invoicing {
                     return $move !== '' ? ltrim( $move ) : '<span class="njilga-dim">—</span>';
                 }
                 return sprintf(
-                    '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View Invoice</a> %s%s',
+                    '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View Invoice</a> %s %s%s',
                     esc_url( $link ),
                     self::pdf_link( $pdf ),
+                    self::copy_link_button( $row ),
                     $move
                 );
 
@@ -637,6 +643,19 @@ class MyNJILGA_Page_Invoicing {
     private static function view_link( string $url ): string {
         return $url !== ''
             ? sprintf( '<a class="njilga-btn njilga-btn-outline njilga-btn-sm" href="%s" target="_blank" rel="noopener">View</a>', esc_url( $url ) )
+            : '';
+    }
+
+    /**
+     * A small outline "Copy Link" button: one click puts the invoice's short
+     * link (MyNJILGA_Invoice_Short_Link) on the clipboard, ready to paste
+     * into an email or message. Hidden until the page script confirms it
+     * can copy; '' when the invoice has no link yet.
+     */
+    private static function copy_link_button( object $row ): string {
+        $url = MyNJILGA_Invoice_Short_Link::url( $row );
+        return $url !== ''
+            ? sprintf( '<button type="button" class="njilga-btn njilga-btn-outline njilga-btn-sm" data-copy-link="%s" title="Copy a short link to this Stripe invoice" aria-live="polite">Copy Link</button>', esc_attr( $url ) )
             : '';
     }
 
@@ -2677,6 +2696,32 @@ JS;
   root.addEventListener('click',function(e){
     var b=e.target.closest('[data-send]'); if(!b) return;
     pick([b.dataset.send]);
+  });
+
+  // Copy Link: the invoice's short link onto the clipboard, one click.
+  // No clipboard API (a plain-http admin isn't a secure context): the old
+  // copy command, run on a throwaway field.
+  function copyText(text){
+    if(navigator.clipboard&&window.isSecureContext){
+      return navigator.clipboard.writeText(text).then(function(){return true;},function(){return legacyCopy(text);});
+    }
+    return Promise.resolve(legacyCopy(text));
+  }
+  function legacyCopy(text){
+    var ta=document.createElement('textarea');
+    ta.value=text; ta.setAttribute('readonly',''); ta.style.cssText='position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    var ok=false; try{ok=document.execCommand('copy');}catch(err){}
+    document.body.removeChild(ta);
+    return ok;
+  }
+  root.addEventListener('click',function(e){
+    var b=e.target.closest('[data-copy-link]'); if(!b) return;
+    copyText(b.getAttribute('data-copy-link')).then(function(ok){
+      clearTimeout(b._njilgaT);
+      b.textContent=ok?'Copied ✓':'Copy failed';
+      b._njilgaT=setTimeout(function(){ b.textContent='Copy Link'; },2000);
+    });
   });
 
   // A link can open the table already filtered (?filter=emailfailed — the scheduled send's failure list does).
