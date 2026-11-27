@@ -85,8 +85,11 @@ class MyNJILGA_Membership_Stats {
         MyNJILGA_Tags::SLUG_TRUSTEES       => 'Trustee',
     ];
 
-    /** @var array<string,mixed>|null Per-request memo of data(); flush() clears it. */
-    private static $memo = null;
+    /** @var array<int,array<string,mixed>> Per-request memo of data(), by dues year; flush() clears it. */
+    private static $memo = [];
+
+    /** How far ahead of this year a report year (and so a cached snapshot) can reach. */
+    const YEARS_AHEAD = 10;
 
     // =========================================================================
     // Pure logic — no WordPress, no FluentCRM
@@ -104,7 +107,15 @@ class MyNJILGA_Membership_Stats {
      *   role_tags     string[]  MyNJILGA_Tags slugs held: trustees,
      *                           senior-trustee, past-president, officer,
      *                           paid-by-check, paid-by-invoice
-     * $cfg: year (int, required), categories, default_category.
+     * $cfg: year (int, required), categories, default_category,
+     * assume_evergreen (bool, default true — see below).
+     *
+     * assume_evergreen: a contact with the evergreen paid tag and NO year tag
+     * is "assumed" active through the year being looked at. That is right
+     * for this year (they paid before invoicing began) but would wrongly
+     * carry them into every future year, so for a year after the current
+     * one config() turns it off: with no dated payment they read as
+     * not-yet-paid (expired) for that year, never as active.
      *
      * 'defaulted' is true when the category is only the default_category
      * because the contact holds no category tag.
@@ -117,10 +128,17 @@ class MyNJILGA_Membership_Stats {
         $roles  = array_map( 'strval', (array) ( $contact['role_tags'] ?? [] ) );
         $exempt = (bool) array_intersect( MyNJILGA_Tags::EXEMPT_SLUGS, $roles );
 
+        $paidTag   = ! empty( $contact['paid_tag'] );
+        $unpaidTag = ! empty( $contact['unpaid_tag'] );
+        if ( $paidTag && empty( $contact['paid_years'] ) && isset( $cfg['assume_evergreen'] ) && ! $cfg['assume_evergreen'] ) {
+            $paidTag   = false;
+            $unpaidTag = true;
+        }
+
         $standing = MyNJILGA_My_Membership::standing( [
             'paid_years' => (array) ( $contact['paid_years'] ?? [] ),
-            'paid_tag'   => ! empty( $contact['paid_tag'] ),
-            'unpaid_tag' => ! empty( $contact['unpaid_tag'] ),
+            'paid_tag'   => $paidTag,
+            'unpaid_tag' => $unpaidTag,
             'exempt'     => $exempt,
             'inactive'   => ! empty( $contact['inactive'] ),
         ], (int) ( $cfg['year'] ?? 0 ) );
@@ -714,21 +732,30 @@ class MyNJILGA_Membership_Stats {
      * 1 January UTC the first read recomputes rather than reporting last
      * year's members as active for up to ten minutes.
      *
+     * $year is the dues year the figures are for — "paid through $year or
+     * later" is what counts as active. Omitted, it is this calendar year,
+     * which is what the Dashboard, invoicing and the member-facing page
+     * always want; only the Reports pass another. Each year keeps its own
+     * cached copy.
+     *
      * @return array<string,mixed>
      */
-    public static function snapshot( bool $refresh = false ): array {
+    public static function snapshot( bool $refresh = false, ?int $year = null ): array {
         if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
             return [ 'available' => false, 'warnings' => [ 'FluentCRM is not active.' ] ];
         }
 
+        $year = self::year_or_current( $year );
+        $key  = self::transient_key( $year );
+
         if ( ! $refresh ) {
-            $cached = get_transient( self::TRANSIENT );
-            if ( is_array( $cached ) && ! empty( $cached['available'] ) && (int) ( $cached['year'] ?? 0 ) === MyNJILGA_Invoicing::current_dues_year() ) {
+            $cached = get_transient( $key );
+            if ( is_array( $cached ) && ! empty( $cached['available'] ) && (int) ( $cached['year'] ?? 0 ) === $year ) {
                 return $cached;
             }
         }
 
-        $data = self::data();
+        $data = self::data( $year );
         if ( empty( $data['available'] ) ) {
             return [ 'available' => false, 'warnings' => (array) $data['warnings'] ];
         }
@@ -739,8 +766,23 @@ class MyNJILGA_Membership_Stats {
             'generated' => gmdate( 'Y-m-d H:i:s' ),
         ] + self::aggregate( $data['contacts'], $data['firms'], $data['cfg'] );
 
-        set_transient( self::TRANSIENT, $snapshot, self::TTL );
+        set_transient( $key, $snapshot, self::TTL );
         return $snapshot;
+    }
+
+    /** $year, or this calendar year when none was asked for. */
+    public static function year_or_current( ?int $year ): int {
+        return $year !== null && $year > 0 ? $year : MyNJILGA_Invoicing::current_dues_year();
+    }
+
+    /**
+     * PURE: the transient holding a year's snapshot. This year keeps the
+     * original key, so a cached copy written before reports had a year
+     * choice is still the right one.
+     */
+    public static function transient_key( int $year, ?int $currentYear = null ): string {
+        $current = $currentYear ?? MyNJILGA_Invoicing::current_dues_year();
+        return $year === $current ? self::TRANSIENT : self::TRANSIENT . '_' . $year;
     }
 
     /**
@@ -750,13 +792,17 @@ class MyNJILGA_Membership_Stats {
      * approval).
      */
     public static function flush(): void {
-        delete_transient( self::TRANSIENT );
-        self::$memo = null;
+        $current = MyNJILGA_Invoicing::current_dues_year();
+        for ( $y = $current - 2; $y <= $current + self::YEARS_AHEAD; $y++ ) {
+            delete_transient( self::transient_key( $y, $current ) );
+        }
+        self::$memo = [];
     }
 
     /**
      * The contacts and firms the report lists are built from — collected
-     * and classified once per request. Never throws (a failure reads as
+     * and classified once per request (per dues year; $year is as in
+     * snapshot()). Never throws (a failure reads as
      * available => false with the reason in warnings).
      *
      * Shape (assemble()'s return):
@@ -774,23 +820,24 @@ class MyNJILGA_Membership_Stats {
      *
      * @return array<string,mixed>
      */
-    public static function data(): array {
-        if ( self::$memo !== null ) {
-            return self::$memo;
+    public static function data( ?int $year = null ): array {
+        $year = self::year_or_current( $year );
+        if ( isset( self::$memo[ $year ] ) ) {
+            return self::$memo[ $year ];
         }
         if ( ! MyNJILGA_Members_Data::fluentcrm_active() ) {
             return [ 'available' => false, 'warnings' => [ 'FluentCRM is not active.' ], 'cfg' => [], 'contacts' => [], 'firms' => [] ];
         }
         try {
-            self::$memo = self::assemble( self::collect() );
+            self::$memo[ $year ] = self::assemble( self::collect( $year ) );
         } catch ( \Throwable $e ) {
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( '[My NJILGA] Membership stats failed: ' . $e->getMessage() ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
             }
             // Memoised too, so one page does not repeat a failing read per list.
-            self::$memo = [ 'available' => false, 'warnings' => [ 'Membership figures could not be read from FluentCRM. Please try again.' ], 'cfg' => [], 'contacts' => [], 'firms' => [] ];
+            self::$memo[ $year ] = [ 'available' => false, 'warnings' => [ 'Membership figures could not be read from FluentCRM. Please try again.' ], 'cfg' => [], 'contacts' => [], 'firms' => [] ];
         }
-        return self::$memo;
+        return self::$memo[ $year ];
     }
 
     /**
@@ -803,8 +850,8 @@ class MyNJILGA_Membership_Stats {
      *
      * @return array{cfg:array<string,mixed>,warnings:array<int,string>,contacts:array<int,array<string,mixed>>,firms:array<int,array<string,mixed>>}
      */
-    public static function collect(): array {
-        $cfg  = self::config();
+    public static function collect( ?int $year = null ): array {
+        $cfg  = self::config( self::year_or_current( $year ) );
         $plan = self::plan_tags( MyNJILGA_Tags::all_tags(), self::tag_specs( $cfg ), (string) $cfg['pattern'] );
 
         $contacts = [];
@@ -864,14 +911,15 @@ class MyNJILGA_Membership_Stats {
      *
      * @return array<string,mixed>
      */
-    private static function config(): array {
+    private static function config( int $year ): array {
         $engine  = MyNJILGA_Dues_Settings::engine_config();
         $pattern = (string) MyNJILGA_Dues_Settings::general( 'year_paid_tag_pattern', '' );
         if ( $pattern === '' ) {
             $pattern = (string) MyNJILGA_Dues_Settings::defaults()['general']['year_paid_tag_pattern'];
         }
         return [
-            'year'             => MyNJILGA_Invoicing::current_dues_year(),
+            'year'             => $year,
+            'assume_evergreen' => $year <= MyNJILGA_Invoicing::current_dues_year(),
             'categories'       => (array) $engine['categories'],
             'default_category' => (string) $engine['default_category'],
             'pattern'          => $pattern,

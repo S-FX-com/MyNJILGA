@@ -14,10 +14,12 @@ class MyNJILGA_Page_Firms {
             wp_die( 'Access denied.' );
         }
 
+        $year = MyNJILGA_Report_Year::from_request();
+
         MyNJILGA_Admin_UI::styles();
         echo '<div class="wrap njilga-ui">';
-        MyNJILGA_Admin_Menu::render_back_to_reports();
-        MyNJILGA_Admin_UI::page_header( 'Membership by Firm', 'Every firm with its attached contacts, dues status and roles.' );
+        MyNJILGA_Admin_Menu::render_back_to_reports( $year );
+        MyNJILGA_Admin_UI::page_header( 'Membership by Firm — ' . $year, sprintf( 'Every firm with its attached contacts, %d dues status and roles.', $year ) );
 
         if ( MyNJILGA_Admin_Menu::require_fluentcrm() ) {
             MyNJILGA_Admin_UI::close();
@@ -32,27 +34,28 @@ class MyNJILGA_Page_Firms {
 
         // The list below is always read live; refresh the cached figures first
         // so the tiles above it are computed from the very same contacts.
-        $stats = MyNJILGA_Membership_Stats::snapshot( true );
+        $stats = MyNJILGA_Membership_Stats::snapshot( true, $year );
         if ( empty( $stats['available'] ) ) {
             MyNJILGA_Admin_UI::callout( esc_html( implode( ' ', array_map( 'strval', (array) $stats['warnings'] ) ) ), 'error' );
             MyNJILGA_Admin_UI::close();
             return;
         }
-        MyNJILGA_Admin_Menu::render_firm_overview_panel();
+        MyNJILGA_Admin_Menu::render_firm_overview_panel( $year );
 
         $scope = ( ( $_GET['scope'] ?? '' ) === 'active' ) ? 'active' : 'all';
-        self::render_scope_tabs( $scope );
+        MyNJILGA_Report_Year::render_picker( MyNJILGA_Admin_Menu::SLUG_FIRMS, $year, [ 'scope' => $scope ] );
+        self::render_scope_tabs( $scope, $year );
 
-        $firms = MyNJILGA_Members_Data::get_membership_by_firm( $scope );
+        $firms = MyNJILGA_Members_Data::get_membership_by_firm( $scope, $year );
 
         printf(
             '<p class="njilga-section-desc">%s</p>',
             $scope === 'active'
-                ? sprintf( '%d firm%s with at least one active member (paid through this year or later) — only active members are shown.', count( $firms ), count( $firms ) === 1 ? '' : 's' )
+                ? sprintf( '%d firm%s with at least one active member (paid through %d or later) — only active members are shown.', count( $firms ), count( $firms ) === 1 ? '' : 's', $year )
                 : sprintf( '%d firm%s with at least one attached FluentCRM contact, listed alphabetically.', count( $firms ), count( $firms ) === 1 ? '' : 's' )
         );
 
-        MyNJILGA_Admin_Menu::render_firms_export_button( $scope );
+        MyNJILGA_Admin_Menu::render_firms_export_button( $scope, sprintf( 'Export %d to Excel', $year ), $year );
 
         if ( empty( $firms ) ) {
             MyNJILGA_Admin_UI::callout(
@@ -93,13 +96,13 @@ class MyNJILGA_Page_Firms {
     /**
      * Two-variation switcher: "All Membership" vs "Active Membership Only".
      */
-    private static function render_scope_tabs( string $scope ): void {
+    private static function render_scope_tabs( string $scope, int $year ): void {
         $tabs = [];
         foreach ( [ 'all' => 'All Membership', 'active' => 'Active Membership Only' ] as $key => $label ) {
             $tabs[] = [
                 'label'  => $label,
                 'url'    => add_query_arg(
-                    [ 'page' => MyNJILGA_Admin_Menu::SLUG_FIRMS, 'scope' => $key ],
+                    [ 'page' => MyNJILGA_Admin_Menu::SLUG_FIRMS, 'scope' => $key, MyNJILGA_Report_Year::PARAM => $year ],
                     admin_url( 'admin.php' )
                 ),
                 'active' => $scope === $key,
