@@ -24,7 +24,9 @@ class MyNJILGA_Page_Reports {
             return;
         }
 
-        $why = MyNJILGA_Members_Data::unavailable_reason( false, $year );
+        // Refresh the snapshot: the tiles above and the preview below are read
+        // from the same live data, so they can never disagree.
+        $why = MyNJILGA_Members_Data::unavailable_reason( true, $year );
         if ( $why !== '' ) {
             MyNJILGA_Admin_UI::callout( esc_html( $why ), 'error' );
             MyNJILGA_Admin_UI::close();
